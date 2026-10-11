@@ -1,0 +1,148 @@
+# Live-Plan -- lebendes Dokument einer Sitzung (Skill live-plan, Schema v: 1).
+# Aendern Sie einzelne Schluessel per Edit, nie die ganze Datei. Der Browser schreibt nur
+# fragen[].entscheidung. Zeiten traegt der Server selbst nach.
+v: 1
+titel: Titel der Sitzung
+ziel: Was am Ende der Sitzung wahr sein soll
+anforderungen:               # was der Nutzer will; neue hinten anhaengen, nie umnummerieren
+  - id: A1
+    text: Variante steht fest
+    quelle: Nutzer            # Nutzer | Agent | Review
+    erfuellt_mit: [S1]        # erfuellt, wenn alle genannten Schritte fertig sind
+    # beweis: shots/a1.png    # optional: Beweisbild in .live-plan/SLUG/ (png, jpg, jpeg, gif, webp, svg);
+    #                         # ohne beweis gilt das juengste bild aus den Belegen der Schritte
+entscheidungen:              # Architektur- und Wegentscheidungen samt Grund
+  - id: E1
+    titel: Nur die Standardbibliothek
+    grund: Keine Abhaengigkeit zu pflegen
+    quelle: Agent
+    schritte: [S2]
+# branch: change/kennung   # nur unter GitButler: der Branch dieser Sitzung
+stand:                       # mit jeder Antwort fortschreiben; die Seite zeigt nur thema und offen
+  thema: Thema in wenigen Woertern
+  erledigt:                  # was nachweislich laeuft, je Blatt ein Beleg
+    - text: Lage erhoben
+      beleg: 3 Repos gelesen
+  fragen: []                 # was nur der Mensch entscheidet: - text: ...  wer: Mensch
+  offen:                     # gate: jetzt | mensch | spaeter, hoechstens ein Blatt jetzt
+    - text: Variante waehlen
+      gate: jetzt
+      befehl: live-plan open SLUG   # optional, mit Kopierknopf
+    - text: Umsetzen
+      gate: spaeter
+bahnen:
+  - id: plan
+    name: Planung
+  - id: bau
+    name: Umsetzung
+wellen:
+  - id: W1
+    name: Klaeren
+  - id: W2
+    name: Bauen
+    ziel: Tests gruen
+fragen:
+  - id: F1
+    frage: Welche Variante?
+    optionen:
+      - label: Variante A
+        empfohlen: true
+        beispiel: kurz und billig
+      - label: Variante B
+    blockiert: [S2]
+    entscheidung: ""
+    grund: Warum die Frage offen ist
+schritte:
+  - id: S1
+    bahn: plan
+    welle: W1
+    titel: Lage erheben
+    status: laeuft            # offen | laeuft | fertig | verworfen
+    art: bauen                # bauen | mensch | neu
+    agent: haupt
+    plan: Was der Schritt tut
+    fertig_wenn: Woran man sieht, dass er fertig ist
+  - id: S2
+    bahn: bau
+    welle: W2
+    titel: Umsetzen
+    status: offen
+    haengt: [S1, F1]
+    # umsetzung:
+    #   wie: Wie es gebaut wurde
+    #   dateien: [pfad/datei.ts]
+    #   belege:               # je Beleg genau eine Art
+    #     - bild: bild.png    # Datei in .live-plan/SLUG/
+    #     - html: bericht.html
+    #     - test: "12/12 gruen"
+    #     - diff: "+ neue Zeile"
+    #     - code: "export function x() {}"
+    #       ort: src/x.ts:12
+    #     - commit: abc1234
+
+# Dokumentation der Sitzung (optional): Kopftext, Tags und Ueberblick oben auf der Seite, Teil 2 Dokumentation
+# unter den Sitzungsteilen, Quelle und Stand im Fuss; ebenso im Handout (live-plan handout). Zum Einschalten
+# die Zeilen bis zur naechsten Leerzeile ent-kommentieren. Jeder Schluessel ist optional.
+# doku:
+#   untertitel: Ein Dokument je Sitzung.   # fett vor dem Kurztext im Kopf
+#   kurz: Der Agent schreibt fort, Sie entscheiden.   # statt des Ziels unter dem Titel
+#   status: aktiv               # blaue Marke vor den Tags
+#   tags: [Agent, Handout]
+#   stand: 11.10.2026           # im Kopf von Teil 2 und im Fuss
+#   version: v2
+#   quelle: ops-lab             # im Fuss
+#   ueberblick:                 # drei Karten; ein blosser Text wird ein Absatz
+#     problem: Was fehlt ohne die Sitzung
+#     loesung: Was die Sitzung tut
+#     fuer_wen: Wer damit arbeitet
+#   datei:                      # Aufbau der Sitzungsdatei
+#     felder:
+#       - schluessel: fragen
+#         inhalt: Optionen und Entscheidung
+#   ansicht:                    # Was die Seite zeigt: nummerierte Zonen, dazu der Druck
+#     zonen:
+#       - name: Kopf
+#         text: Titel, Kurztext und Tags
+#     druck: A4 quer, hell
+#   register:                   # Aufbau des Registers
+#     text: Schreibt der Agent mit, die Seite liest es
+#     ort: .live-plan/SLUG/register.json
+#     felder:
+#       - schluessel: agenten
+#         inhalt: je Lauf eine Zeile
+#   bausteine:                # rolle: agent | helfer | daten | dienst | mensch
+#     - name: Sitzungsdatei
+#       rolle: daten
+#       text: Einzige Quelle der Ansicht
+#       ort: .live-plan/SLUG.yaml
+#   ablauf:
+#     titel: Von der Anlage zur Antwort
+#     bahnen:
+#       - id: mensch
+#         name: Mensch
+#         rolle: mensch
+#       - id: agent
+#         name: Agent
+#         rolle: agent
+#     schritte:               # status: fertig | laeuft | wartet | offen (ohne Status keine Fortschrittsfaerbung)
+#       - id: n1
+#         bahn: agent
+#         titel: Anlegen
+#         detail: live-plan neu
+#         art: start          # start | ende | frage | daten, sonst eine Aktion
+#         status: fertig
+#       - id: n2
+#         bahn: mensch
+#         titel: Option waehlen
+#         art: frage
+#         status: wartet
+#     kanten:
+#       - von: n1
+#         nach: n2
+#         text: Frage
+#   befehle:
+#     - befehl: live-plan open SLUG
+#       text: Server starten, Browser oeffnen
+#   regeln:                   # art: immer | nie | tipp
+#     - text: Stand mit jeder Antwort fortschreiben
+#       art: immer

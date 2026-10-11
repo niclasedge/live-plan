@@ -1,0 +1,695 @@
+#!/usr/bin/env bun
+// live-plan (#257): Startskript des Skills. Jeder Befehl laesst sich beliebig oft rufen.
+//
+//   live-plan start            Server starten, wenn auf dem Port keiner antwortet
+//   live-plan open [SLUG]      start, URL ausgeben, Browser oeffnen
+//   live-plan neu [SLUG] [--auto]
+//                              Sitzung aus der Vorlage anlegen, .live-plan/ in .gitignore; SLUG fehlt:
+//                              CLAUDE_SESSION_ID. --auto: .live-plan/ in .git/info/exclude, still, wenn
+//                              die Sitzung schon besteht. Ist CLAUDE_SESSION_ID gesetzt, nur mit dieser Id
+//   live-plan warte SLUG [--hoechstens MS]
+//                              auf die naechste Entscheidung warten, Position in .live-plan/SLUG.seit
+//   live-plan frage [SLUG]     Fragen als JSON von stdin an fragen: anhaengen, legt die Sitzung bei
+//                              Bedarf wie neu --auto an; stdout: {"ids":[...],"url":"..."}
+//   live-plan stand [SLUG] --kurz
+//                              Stand als Klartext fuer den System-Prompt (hoechstens 1500 Zeichen);
+//                              ohne Sitzung leer
+//   live-plan handout [SLUG]   die Ansicht ?handout=1 (Kopf, Anforderungen, Entscheidungen, Dokumentation) mit
+//                              Chrome headless als PNG (1600 px, Faktor 2) und eigenstaendiges HTML nach
+//                              REPO/.live-plan/handouts/JJJJ-MM-TT-HHMM-TITEL.png und .html; Chrome aus
+//                              LIVE_PLAN_CHROME, sonst macOS-App, google-chrome, chromium; SLUG fehlt:
+//                              CLAUDE_SESSION_ID
+//   live-plan stop             Server auf dem Port beenden
+//
+// REPO ist der Ordnername der Git-Wurzel des aktuellen Ordners. Port LIVE_PLAN_PORT (4410),
+// Log und PID in LIVE_PLAN_CACHE (~/.cache/live-plan) als server-PORT.log und server-PORT.pid.
+
+import { spawn, spawnSync } from "node:child_process";
+import { chmodSync, closeSync, constants, existsSync, fstatSync, ftruncateSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync, writeSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { CHROME_MAC, chromePfad, fragenEingabe, fuegeFragenAnImText, handoutName, kurzStand, naechsteFrageIds, pruefeAngehaengt, pruefePlan, yamlWert } from "./logik.ts";
+
+const SKILL = import.meta.dir;
+const PORT = Number.parseInt(process.env.LIVE_PLAN_PORT ?? "", 10) || 4410;
+const CACHE = process.env.LIVE_PLAN_CACHE || path.join(os.homedir(), ".cache", "live-plan");
+const BASIS = `http://127.0.0.1:${PORT}`;
+const PID_DATEI = path.join(CACHE, `server-${PORT}.pid`);
+const LOG_DATEI = path.join(CACHE, `server-${PORT}.log`);
+const NAME = /^[A-Za-z0-9._-]+$/;
+
+const schlafe = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+function abbruch(meldung: string): never {
+  console.error(`live-plan: ${meldung}`);
+  process.exit(1);
+}
+
+async function gesund(): Promise<{ pid: number; wurzel: string; wurzeln?: string[] } | null> {
+  try {
+    const r = await fetch(`${BASIS}/api/gesund`, { signal: AbortSignal.timeout(1000) });
+    return r.ok ? ((await r.json()) as { pid: number; wurzel: string; wurzeln?: string[] }) : null;
+  } catch {
+    return null;
+  }
+}
+
+function gitWurzel(): string {
+  const lauf = spawnSync("git", ["rev-parse", "--show-toplevel"], { encoding: "utf8" });
+  if (lauf.status !== 0) abbruch("kein Git-Repo im aktuellen Ordner");
+  return lauf.stdout.trim();
+}
+
+function slugAus(wert: string | undefined): string {
+  if (!wert || !NAME.test(wert) || wert === "." || wert === "..") abbruch(`ungueltiger SLUG ${JSON.stringify(wert ?? "")}, erlaubt a-z A-Z 0-9 . _ -`);
+  return wert;
+}
+
+/** The SLUG of a session file: inside a Claude session only its own id, so no plan exists twice. */
+function sitzungsSlug(befehl: string, rest: string[]): string {
+  const id = process.env.CLAUDE_SESSION_ID?.trim();
+  const name = rest.find((a) => !a.startsWith("--")) ?? id;
+  if (!name) abbruch(`${befehl} braucht einen SLUG oder CLAUDE_SESSION_ID`);
+  if (id && name !== id) abbruch(`${befehl}: in einer Claude-Sitzung nur mit ihrer Session-Id ${id}, nicht ${JSON.stringify(name)}`);
+  return slugAus(name);
+}
+
+async function start(melde: (zeile: string) => void): Promise<{ pid: number; wurzel: string; wurzeln?: string[] }> {
+  const da = await gesund();
+  if (da) {
+    melde(`live-plan laeuft bereits auf Port ${PORT} (PID ${da.pid})`);
+    return da;
+  }
+  mkdirSync(CACHE, { recursive: true });
+  const log = openSync(LOG_DATEI, "a");
+  const kind = spawn(process.execPath, [path.join(SKILL, "server.ts")], {
+    detached: true,
+    stdio: ["ignore", log, log],
+    env: { ...process.env, LIVE_PLAN_PORT: String(PORT) },
+  });
+  kind.unref();
+  for (let i = 0; i < 100; i++) {
+    const g = await gesund();
+    if (g) {
+      writeFileSync(PID_DATEI, `${g.pid}\n`);
+      melde(`live-plan gestartet auf Port ${PORT} (PID ${g.pid}), Log ${LOG_DATEI}`);
+      return g;
+    }
+    if (kind.exitCode !== null) break;
+    await schlafe(100);
+  }
+  abbruch(`Server antwortet nicht auf Port ${PORT}, siehe ${LOG_DATEI}`);
+}
+
+function oeffne(url: string): void {
+  if (process.env.LIVE_PLAN_KEIN_BROWSER) return;
+  // S6: auf macOS `open`; anderswo heisst ein `open` oft etwas anderes (openvt).
+  const kandidaten = ["omarchy-launch-webapp", "xdg-open", ...(process.platform === "darwin" ? ["open"] : [])];
+  for (const befehl of kandidaten) {
+    if (spawnSync("sh", ["-c", `command -v ${befehl}`]).status !== 0) continue;
+    spawn(befehl, [url], { detached: true, stdio: "ignore" }).unref();
+    return;
+  }
+  console.error(`live-plan: kein Browser gefunden (${kandidaten.join(", ")})`);
+}
+
+// neu folgt keinem Symlink (K-2): .live-plan und der Belegordner muessen nach realpath genau ihr
+// Pfad im Repo sein, SLUG.yaml entsteht nur exklusiv mit O_NOFOLLOW, und eine .gitignore, die ein
+// Symlink ist, wird nicht beschrieben. Geprueft wird vor dem ersten Schreiben.
+
+/** Wahr, wenn unter `pfad` etwas liegt, das keine regulaere Datei ist (auch ein haengender Symlink). */
+function keineDatei(pfad: string): boolean {
+  try {
+    return !lstatSync(pfad).isFile();
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw e;
+  }
+}
+
+/** Legt `ordner` an, wenn er fehlt; danach muss er nach realpath genau dieser Pfad und ein Ordner sein. */
+function echterOrdner(ordner: string): string {
+  try {
+    mkdirSync(ordner);
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
+  }
+  let echt: string | null = null;
+  try {
+    echt = realpathSync(ordner);
+  } catch {
+    /* haengender Symlink */
+  }
+  if (echt !== ordner || !statSync(ordner).isDirectory()) abbruch(`${ordner} ist ein Symlink, kein Ordner oder liegt nicht im Repo`);
+  return ordner;
+}
+
+/** Schreibt `inhalt` in eine neue Datei; false, wenn sie schon als regulaere Datei besteht. */
+function legeExklusivAn(datei: string, inhalt: Buffer): boolean {
+  let fd: number;
+  try {
+    fd = openSync(datei, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o644);
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
+    if (keineDatei(datei)) abbruch(`${datei} ist ein Symlink oder keine regulaere Datei`);
+    return false;
+  }
+  try {
+    writeSync(fd, inhalt);
+  } finally {
+    closeSync(fd);
+  }
+  return true;
+}
+
+/**
+ * Die Ausschlussdatei: ohne --auto REPO/.gitignore, mit --auto die lokale info/exclude, die git
+ * nennt -- bei einem Worktree die des gemeinsamen git-Ordners. Die versionierte .gitignore bleibt dann unberuehrt.
+ */
+function ausschlussDatei(wurzel: string, auto: boolean): string {
+  if (!auto) return path.join(wurzel, ".gitignore");
+  const lauf = spawnSync("git", ["rev-parse", "--git-path", "info/exclude"], { cwd: wurzel, encoding: "utf8" });
+  if (lauf.status !== 0) abbruch("git rev-parse --git-path info/exclude scheitert");
+  const datei = path.resolve(wurzel, lauf.stdout.trim());
+  mkdirSync(path.dirname(datei), { recursive: true });
+  return datei;
+}
+
+const einzug = (zeile: string) => zeile.length - zeile.trimStart().length;
+const leerOderKommentar = (zeile: string) => zeile.trim() === "" || zeile.trimStart().startsWith("#");
+
+/**
+ * Die Vorlage ohne Beispielinhalte, fuer die automatische Anlage: jede Blockliste wird `[]`, ausser
+ * bahnen und wellen (das Schema verlangt je eine); titel ist der SLUG, ziel und thema leer.
+ * Kommentare ausserhalb der geleerten Listen bleiben.
+ */
+function leereVorlage(vorlage: string, slug: string): string {
+  const zeilen = vorlage.split("\n");
+  const aus: string[] = [];
+  for (let i = 0; i < zeilen.length; i++) {
+    const zeile = zeilen[i]!;
+    if (/^titel:/.test(zeile)) aus.push(`titel: ${yamlWert(slug)}`);
+    else if (/^ziel:/.test(zeile)) aus.push('ziel: ""');
+    else if (/^ {2}thema:/.test(zeile)) aus.push('  thema: ""');
+    else aus.push(zeile);
+    const m = /^(\s*)([A-Za-z_]+):(\s*)(#.*)?$/.exec(zeile);
+    if (!m || (m[1] === "" && (m[2] === "bahnen" || m[2] === "wellen"))) continue;
+    const basis = m[1]!.length;
+    const naechste = zeilen.slice(i + 1).find((z) => !leerOderKommentar(z));
+    if (naechste === undefined || einzug(naechste) < basis || !naechste.trimStart().startsWith("- ")) continue;
+    aus[aus.length - 1] = `${m[1]}${m[2]}: []${m[4] ? `${m[3] || " "}${m[4]}` : ""}`;
+    while (i + 1 < zeilen.length) {
+      const z = zeilen[i + 1]!;
+      const tiefer = einzug(z) > basis || (einzug(z) === basis && z.trimStart().startsWith("- "));
+      if (z.trim() === "" || !tiefer) break;
+      i++;
+    }
+  }
+  return aus.join("\n");
+}
+
+function neu(slug: string, auto: boolean, melde: (zeile: string) => void = (z) => console.log(z)): void {
+  const wurzel = realpathSync(gitWurzel());
+  const ignore = ausschlussDatei(wurzel, auto);
+  if (keineDatei(ignore)) abbruch(`${ignore} ist ein Symlink oder keine regulaere Datei`);
+  const ordner = echterOrdner(path.join(wurzel, ".live-plan"));
+  echterOrdner(path.join(ordner, slug));
+  const datei = path.join(ordner, `${slug}.yaml`);
+  const vorlage = readFileSync(path.join(SKILL, "vorlage.yaml"));
+  if (legeExklusivAn(datei, auto ? Buffer.from(leereVorlage(vorlage.toString("utf8"), slug)) : vorlage)) melde(`${datei} aus der Vorlage angelegt`);
+  else if (!auto) melde(`${datei} besteht bereits, unveraendert`);
+
+  let fd: number;
+  try {
+    fd = openSync(ignore, constants.O_RDWR | constants.O_CREAT | constants.O_APPEND | constants.O_NOFOLLOW, 0o644);
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === "ELOOP") abbruch(`${ignore} ist ein Symlink`);
+    throw e;
+  }
+  try {
+    if (!fstatSync(fd).isFile()) abbruch(`${ignore} ist keine regulaere Datei`);
+    const inhalt = readFileSync(fd, "utf8");
+    if (!inhalt.split("\n").some((z) => z.trim() === ".live-plan/" || z.trim() === ".live-plan")) {
+      writeSync(fd, `${inhalt === "" || inhalt.endsWith("\n") ? "" : "\n"}.live-plan/\n`);
+    }
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/** .live-plan des Repos, nur wenn er nach realpath im Repo liegt (S1). */
+function sitzungsOrdner(wurzel: string): string {
+  const ordner = path.join(realpathSync(wurzel), ".live-plan");
+  if (existsSync(ordner) && realpathSync(ordner) !== ordner) abbruch(`${ordner} ist ein Symlink oder liegt nicht im Repo`);
+  return ordner;
+}
+
+/** Oeffnet die Warteposition ohne Symlink zu folgen; null, wenn es sie nicht gibt und `anlegen` fehlt. */
+function oeffneSeit(datei: string, anlegen: boolean): number | null {
+  let fd: number;
+  try {
+    const flags = (anlegen ? constants.O_RDWR | constants.O_CREAT : constants.O_RDONLY) | constants.O_NOFOLLOW | constants.O_NONBLOCK;
+    fd = openSync(datei, flags, 0o644);
+  } catch (e) {
+    const code = (e as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") return null;
+    if (code === "ELOOP") abbruch(`${datei} ist ein Symlink`);
+    throw e;
+  }
+  if (!fstatSync(fd).isFile()) {
+    closeSync(fd);
+    abbruch(`${datei} ist keine regulaere Datei`);
+  }
+  return fd;
+}
+
+function liesSeit(datei: string): number {
+  const fd = oeffneSeit(datei, false);
+  if (fd === null) return 0;
+  try {
+    return Number.parseInt(readFileSync(fd, "utf8"), 10) || 0;
+  } finally {
+    closeSync(fd);
+  }
+}
+
+function schreibeSeit(datei: string, seit: number): void {
+  const fd = oeffneSeit(datei, true)!;
+  try {
+    ftruncateSync(fd, 0);
+    writeSync(fd, `${seit}\n`, 0);
+  } finally {
+    closeSync(fd);
+  }
+}
+
+async function warte(slug: string, hoechstens: number | null): Promise<void> {
+  const wurzel = gitWurzel();
+  const repo = path.basename(wurzel);
+  const seitDatei = path.join(sitzungsOrdner(wurzel), `${slug}.seit`);
+  let seit = liesSeit(seitDatei);
+  await start(() => {});
+  const ende = hoechstens === null ? Number.POSITIVE_INFINITY : Date.now() + hoechstens;
+  for (;;) {
+    const rest = Math.max(1, Math.min(ende - Date.now(), 10 * 60_000));
+    let antwort: string;
+    try {
+      const r = await fetch(`${BASIS}/api/${repo}/${slug}/warte?seit=${seit}&hoechstens_ms=${Math.round(rest)}`);
+      antwort = await r.text();
+      if (!r.ok) abbruch(`${r.status} ${antwort.trim()}`);
+    } catch (e) {
+      await start(() => {});
+      if (Date.now() >= ende) abbruch(`Server nicht erreichbar: ${(e as Error).message}`);
+      continue;
+    }
+    const m = /^seit=(\d+)$/m.exec(antwort);
+    if (m) {
+      seit = Number(m[1]);
+      schreibeSeit(seitDatei, seit);
+    }
+    const entschieden = antwort.split("\n").some((z) => z !== "" && !z.startsWith("seit="));
+    if (entschieden || Date.now() >= ende) {
+      process.stdout.write(antwort);
+      return;
+    }
+  }
+}
+
+/** Liest eine Datei im Sitzungsordner ohne Symlink zu folgen; null, wenn es sie nicht gibt. */
+function liesSicher(datei: string): string | null {
+  const fd = oeffneSeit(datei, false);
+  if (fd === null) return null;
+  try {
+    return readFileSync(fd, "utf8");
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/**
+ * Schreibt ueber eine neue Nachbardatei und rename, Dateimodus der alten bleibt (wie der Server).
+ * Steht vor dem rename nicht mehr `basis` in der Datei, hat jemand anders geschrieben: dann false.
+ */
+function schreibeAtomar(datei: string, inhalt: string, basis: string): boolean {
+  const st = lstatSync(datei);
+  if (!st.isFile()) abbruch(`${datei} ist ein Symlink oder keine regulaere Datei`);
+  const modus = st.mode & 0o7777;
+  const tmp = `${datei}.${process.pid}.${Date.now()}.tmp`;
+  writeFileSync(tmp, inhalt, { flag: "wx", mode: modus });
+  try {
+    chmodSync(tmp, modus);
+    if (liesSicher(datei) !== basis) {
+      rmSync(tmp, { force: true });
+      return false;
+    }
+    renameSync(tmp, datei);
+  } catch (e) {
+    rmSync(tmp, { force: true });
+    throw e;
+  }
+  return true;
+}
+
+const ersteZeile = (e: unknown) => (e as Error).message.split("\n")[0];
+
+/** Fragen von stdin an fragen: anhaengen; Ablauf wie setzeEntscheidung im Server: aendern, gegenlesen, atomar schreiben. */
+async function frage(slug: string): Promise<void> {
+  let roh: unknown;
+  try {
+    roh = JSON.parse(await Bun.stdin.text());
+  } catch (e) {
+    abbruch(`Eingabe ist kein JSON: ${ersteZeile(e)}`);
+  }
+  const eingabe = fragenEingabe(roh);
+  if (eingabe.art === "fehler") abbruch(eingabe.grund);
+  const wurzel = gitWurzel();
+  const datei = path.join(sitzungsOrdner(wurzel), `${slug}.yaml`);
+  if (liesSicher(datei) === null) neu(slug, true, (z) => console.error(z));
+  for (let anlauf = 0; anlauf < 3; anlauf++) {
+    const text = liesSicher(datei);
+    if (text === null) abbruch(`${datei} fehlt`);
+    let vorher: unknown;
+    try {
+      vorher = Bun.YAML.parse(text);
+    } catch (e) {
+      abbruch(`YAML nicht lesbar: ${ersteZeile(e)}`);
+    }
+    const eintraege = naechsteFrageIds(vorher, eingabe.fragen.length).map((id, i) => ({ id, frage: eingabe.fragen[i]! }));
+    const ergebnis = fuegeFragenAnImText(text, eintraege);
+    if (ergebnis.art !== "ok") abbruch(ergebnis.art === "fehler" ? ergebnis.grund : "fragen nicht gefunden");
+    let nachher: unknown;
+    try {
+      nachher = Bun.YAML.parse(ergebnis.text);
+    } catch (e) {
+      abbruch(`Ergebnis nicht lesbar: ${ersteZeile(e)}`);
+    }
+    const grund = pruefeAngehaengt(vorher, nachher, eintraege);
+    if (grund) abbruch(grund);
+    if (schreibeAtomar(datei, ergebnis.text, text)) {
+      console.log(JSON.stringify({ ids: eintraege.map((e) => e.id), url: `http://localhost:${PORT}/${path.basename(wurzel)}/${slug}` }));
+      return;
+    }
+  }
+  abbruch(`${datei} aendert sich laufend, nach drei Anlaeufen aufgegeben`);
+}
+
+/** Der kurze Stand fuer den System-Prompt; ohne Git-Repo oder Sitzung leer. */
+function stand(slug: string): void {
+  const lauf = spawnSync("git", ["rev-parse", "--show-toplevel"], { encoding: "utf8" });
+  if (lauf.status !== 0) return;
+  const text = liesSicher(path.join(sitzungsOrdner(lauf.stdout.trim()), `${slug}.yaml`));
+  if (text === null) return;
+  let roh: unknown;
+  try {
+    roh = Bun.YAML.parse(text);
+  } catch (e) {
+    abbruch(`YAML nicht lesbar: ${ersteZeile(e)}`);
+  }
+  process.stdout.write(kurzStand(pruefePlan(roh).plan));
+}
+
+/** Beendet nur den Prozess, den /api/gesund auf dem Port nennt; eine PID-Datei allein reicht nie (S2). */
+async function stop(): Promise<void> {
+  const g = await gesund();
+  if (!g) {
+    if (existsSync(PID_DATEI)) console.log(`live-plan: veraltete PID-Datei ${PID_DATEI} entfernt, kein Prozess beendet`);
+    rmSync(PID_DATEI, { force: true });
+    console.log(`live-plan laeuft nicht auf Port ${PORT}`);
+    return;
+  }
+  const pid = g.pid;
+  process.kill(pid, "SIGTERM");
+  for (let i = 0; i < 50 && lebt(pid); i++) await schlafe(100);
+  rmSync(PID_DATEI, { force: true });
+  console.log(`live-plan auf Port ${PORT} beendet (PID ${pid})`);
+}
+
+function lebt(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// --- handout (#328): die Ansicht ?handout=1 als PNG und eigenstaendiges HTML ------------------------
+// Chrome laeuft headless mit eigenem Profil; gesprochen wird CDP ueber den WebSocket von bun, ohne
+// playwright oder puppeteer. Der Server schreibt nichts, das Skript legt beide Dateien selbst ab.
+
+const HANDOUT_BREITE = 1600;
+const HANDOUT_FAKTOR = 2;
+/** Der ganze Lauf hoechstens so lange; danach werden Chrome und Profil beendet und entfernt. */
+const HANDOUT_FRIST_MS = 180_000;
+
+/**
+ * Ein Fehler im Handout-Lauf. Im Lauf wird geworfen statt abbruch() gerufen: process.exit() liesse das
+ * finally aus, und Chrome samt Profil blieben liegen.
+ */
+class HandoutFehler extends Error {}
+
+/** Der Chrome fuer das Handout, oder Abbruch mit der Meldung, wie er sich angeben laesst. */
+function chromeOderAbbruch(): string {
+  const pfad = chromePfad({
+    env: process.env,
+    platform: process.platform,
+    vorhanden: (p) => existsSync(p),
+    imPfad: (name) => {
+      const lauf = spawnSync("sh", ["-c", `command -v ${name}`], { encoding: "utf8" });
+      return lauf.status === 0 && lauf.stdout.trim() ? lauf.stdout.trim() : null;
+    },
+  });
+  if (pfad) return pfad;
+  const gesetzt = process.env.LIVE_PLAN_CHROME?.trim();
+  if (gesetzt) abbruch(`LIVE_PLAN_CHROME zeigt auf ${JSON.stringify(gesetzt)}, dort liegt kein Chrome`);
+  abbruch(`kein Chrome gefunden (macOS ${CHROME_MAC}, sonst google-chrome oder chromium im PATH); LIVE_PLAN_CHROME nennt den Pfad`);
+}
+
+type CdpAntwort = { id?: number; result?: Record<string, any>; error?: { message: string }; sessionId?: string };
+
+/** Ein Chrome-DevTools-Protokoll-Zugang ueber WebSocket; jede Anfrage endet nach `frist` Millisekunden. */
+function cdpVerbindung(url: string, frist = 60_000) {
+  const ws = new WebSocket(url);
+  let zaehler = 0;
+  const offen = new Map<number, { ok: (r: Record<string, any>) => void; fehl: (e: Error) => void }>();
+  const bereit = new Promise<void>((ok, fehl) => {
+    ws.onopen = () => ok();
+    ws.onerror = () => fehl(new Error(`WebSocket ${url} nicht erreichbar`));
+  });
+  ws.onclose = () => {
+    for (const w of offen.values()) w.fehl(new Error("Chrome hat die Verbindung geschlossen"));
+    offen.clear();
+  };
+  ws.onmessage = (e) => {
+    const m = JSON.parse(String(e.data)) as CdpAntwort;
+    const w = m.id === undefined ? undefined : offen.get(m.id);
+    if (!w || m.id === undefined) return;
+    offen.delete(m.id);
+    if (m.error) w.fehl(new Error(m.error.message));
+    else w.ok(m.result ?? {});
+  };
+  const sende = (method: string, params: Record<string, unknown> = {}, sessionId?: string) =>
+    new Promise<Record<string, any>>((ok, fehl) => {
+      const id = ++zaehler;
+      const uhr = setTimeout(() => {
+        offen.delete(id);
+        fehl(new Error(`${method}: keine Antwort von Chrome nach ${frist / 1000} s`));
+      }, frist);
+      offen.set(id, { ok: (r) => (clearTimeout(uhr), ok(r)), fehl: (e) => (clearTimeout(uhr), fehl(e)) });
+      ws.send(JSON.stringify({ id, method, params, ...(sessionId ? { sessionId } : {}) }));
+    });
+  return { bereit, sende, schliesse: () => ws.close() };
+}
+
+/** Das eigenstaendige HTML, im Browser gebaut: CSS inline, keine Skripte, Bilder als Data-URL. */
+const HANDOUT_HTML_SKRIPT = `(async () => {
+  const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  const css = Array.prototype.map.call(document.styleSheets, (s) => {
+    try { return Array.prototype.map.call(s.cssRules, (r) => r.cssText).join("\\n"); } catch (e) { return ""; }
+  }).join("\\n");
+  const wurzel = document.getElementById("lp").cloneNode(true);
+  Array.prototype.forEach.call(wurzel.querySelectorAll("script"), (n) => n.remove());
+  const bilder = Array.prototype.slice.call(wurzel.querySelectorAll("img[src]"));
+  await Promise.all(bilder.map(async (img) => {
+    if (img.src.startsWith("data:")) return;
+    try {
+      const blob = await (await fetch(img.src)).blob();
+      img.src = await new Promise((ok, fehl) => { const l = new FileReader(); l.onload = () => ok(l.result); l.onerror = fehl; l.readAsDataURL(blob); });
+    } catch (e) { img.removeAttribute("src"); }
+  }));
+  return "<!doctype html>\\n<html lang=\\"de\\" data-thema=\\"dunkel\\" data-handout=\\"1\\" data-fertig=\\"1\\">\\n<head>\\n<meta charset=\\"utf-8\\">\\n<title>" + esc(document.title) +
+    "</title>\\n<style>\\n" + css + "\\n</style>\\n</head>\\n<body>\\n<main id=\\"lp\\" class=\\"lp\\">" + wurzel.innerHTML + "</main>\\n</body>\\n</html>\\n";
+})()`;
+
+/** Schreibt eine Datei, ohne einem Symlink zu folgen; eine vorhandene wird ersetzt. */
+function schreibeDatei(datei: string, inhalt: Buffer | string): void {
+  const fd = openSync(datei, constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC | constants.O_NOFOLLOW, 0o644);
+  try {
+    writeSync(fd, typeof inhalt === "string" ? Buffer.from(inhalt) : inhalt);
+  } finally {
+    closeSync(fd);
+  }
+}
+
+async function handout(slug: string): Promise<void> {
+  const chrome = chromeOderAbbruch();
+  const wurzel = realpathSync(gitWurzel());
+  const repo = path.basename(wurzel);
+  await start((z) => console.error(z));
+  const antwort = await fetch(`${BASIS}/api/${encodeURIComponent(repo)}/${encodeURIComponent(slug)}`, { signal: AbortSignal.timeout(10_000) });
+  if (antwort.status === 404) abbruch(`keine Sitzung ${repo}/${slug}`);
+  const daten = (await antwort.json()) as { plan?: { titel?: string } | null };
+  if (!daten.plan) abbruch(`${repo}/${slug} hat keine Sitzungsdatei, nur das Register; ein Handout braucht .live-plan/${slug}.yaml`);
+  const name = handoutName(daten.plan.titel || slug, new Date());
+  const ziel = echterOrdner(path.join(sitzungsOrdner(wurzel), "handouts"));
+
+  const profil = mkdtempSync(path.join(os.tmpdir(), "live-plan-chrome-"));
+  const argumente = [
+    "--headless=new", "--remote-debugging-port=0", `--user-data-dir=${profil}`, "--no-first-run", "--no-default-browser-check",
+    "--disable-gpu", "--hide-scrollbars", "--mute-audio", "--disable-dev-shm-usage", `--window-size=${HANDOUT_BREITE},1200`,
+    ...(process.platform === "linux" && process.getuid?.() === 0 ? ["--no-sandbox"] : []),
+    "about:blank",
+  ];
+  // Eigene Prozessgruppe: das Signal trifft auch Chromes Kindprozesse, und Strg-C im Terminal erreicht sie nicht von selbst.
+  const kind = spawn(chrome, argumente, { stdio: "ignore", detached: true });
+  const beendet = new Promise<void>((ok) => kind.once("exit", () => ok()));
+  let startFehler: Error | null = null;
+  kind.once("error", (e) => (startFehler = e));
+  const beendeChrome = (signal: NodeJS.Signals) => {
+    try {
+      process.kill(-kind.pid!, signal);
+    } catch {
+      kind.kill(signal);
+    }
+  };
+  let verbindung: ReturnType<typeof cdpVerbindung> | null = null;
+  const raeume = async () => {
+    try {
+      verbindung?.schliesse();
+    } catch {
+      /* already closed */
+    }
+    if (kind.exitCode === null) {
+      beendeChrome("SIGTERM");
+      await Promise.race([beendet, schlafe(3000)]);
+      if (kind.exitCode === null) beendeChrome("SIGKILL");
+    }
+    rmSync(profil, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+  };
+  const aufSignal = () => void raeume().finally(() => process.exit(130));
+  const frist = setTimeout(() => {
+    console.error(`live-plan: das Handout wurde in ${HANDOUT_FRIST_MS / 1000} s nicht fertig, Chrome beendet`);
+    void raeume().finally(() => process.exit(1));
+  }, HANDOUT_FRIST_MS);
+  for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) process.once(signal, aufSignal);
+  try {
+    let wsUrl: string | null = null;
+    for (let i = 0; i < 150 && !wsUrl; i++) {
+      if (startFehler) throw new HandoutFehler(`Chrome liess sich nicht starten: ${(startFehler as Error).message}`);
+      if (kind.exitCode !== null) throw new HandoutFehler(`Chrome ist beim Start beendet worden (Exit ${kind.exitCode}): ${chrome}`);
+      try {
+        const [port, pfad] = readFileSync(path.join(profil, "DevToolsActivePort"), "utf8").split("\n");
+        if (port && pfad) wsUrl = `ws://127.0.0.1:${port}${pfad}`;
+      } catch {
+        /* Chrome schreibt die Datei erst nach dem Start */
+      }
+      if (!wsUrl) await schlafe(100);
+    }
+    if (!wsUrl) throw new HandoutFehler("Chrome meldet seinen Debug-Port nicht (DevToolsActivePort) nach 15 s");
+    verbindung = cdpVerbindung(wsUrl);
+    await verbindung.bereit;
+    const { sende } = verbindung;
+    const { targetId } = await sende("Target.createTarget", { url: "about:blank" });
+    const { sessionId } = await sende("Target.attachToTarget", { targetId, flatten: true });
+    const seite = (methode: string, p: Record<string, unknown> = {}) => sende(methode, p, sessionId);
+    await seite("Page.enable");
+    await seite("Emulation.setDeviceMetricsOverride", { width: HANDOUT_BREITE, height: 1200, deviceScaleFactor: HANDOUT_FAKTOR, mobile: false });
+    await seite("Page.navigate", { url: `${BASIS}/${encodeURIComponent(repo)}/${encodeURIComponent(slug)}?handout=1` });
+    let fertig = false;
+    for (let i = 0; i < 150 && !fertig; i++) {
+      const r = await seite("Runtime.evaluate", { expression: 'document.documentElement.dataset.fertig === "1"', returnByValue: true });
+      fertig = r.result?.value === true;
+      if (!fertig) await schlafe(200);
+    }
+    if (!fertig) throw new HandoutFehler("die Ansicht wurde in 30 s nicht fertig (data-fertig fehlt); laeuft der Server und kennt er die Sitzung?");
+    await seite("Runtime.evaluate", { expression: "document.fonts ? document.fonts.ready.then(() => true) : true", awaitPromise: true, returnByValue: true });
+    const hoehe = Math.ceil((await seite("Page.getLayoutMetrics")).cssContentSize?.height ?? 1200);
+    await seite("Emulation.setDeviceMetricsOverride", { width: HANDOUT_BREITE, height: hoehe, deviceScaleFactor: HANDOUT_FAKTOR, mobile: false });
+    const bild = await seite("Page.captureScreenshot", {
+      format: "png",
+      captureBeyondViewport: true,
+      clip: { x: 0, y: 0, width: HANDOUT_BREITE, height: hoehe, scale: 1 },
+    });
+    const html = await seite("Runtime.evaluate", { expression: HANDOUT_HTML_SKRIPT, awaitPromise: true, returnByValue: true });
+    if (typeof html.result?.value !== "string") throw new HandoutFehler("das HTML des Handouts liess sich nicht bauen");
+    const png = path.join(ziel, `${name}.png`);
+    const htmlDatei = path.join(ziel, `${name}.html`);
+    schreibeDatei(htmlDatei, html.result.value);
+    schreibeDatei(png, Buffer.from(bild.data as string, "base64"));
+    console.log(htmlDatei);
+    console.log(png);
+  } finally {
+    clearTimeout(frist);
+    for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) process.off(signal, aufSignal);
+    await raeume();
+  }
+}
+
+const [befehl, ...rest] = process.argv.slice(2);
+switch (befehl) {
+  case "start":
+    await start((z) => console.log(z));
+    break;
+  case "open": {
+    const slug = rest[0] === undefined ? null : slugAus(rest[0]);
+    const pfad = slug ? `/${path.basename(gitWurzel())}/${slug}` : "/";
+    const g = await start((z) => console.error(z));
+    // Ausserhalb der Wurzel sieht der Server die Sitzung nur ueber ihr Register (S5).
+    const gesehen = (g.wurzeln ?? [g.wurzel]).map((w) => path.resolve(w));
+    if (slug && !gesehen.includes(path.resolve(path.dirname(gitWurzel()))) && !existsSync(path.join(CACHE, "sitzungen", `${slug}.json`))) {
+      console.error(`live-plan: dieses Repo liegt nicht unter ${gesehen.join(":")}; der Server sieht es nicht (LIVE_PLAN_WURZEL)`);
+    }
+    const url = `http://localhost:${PORT}${pfad}`;
+    console.log(url);
+    oeffne(url);
+    break;
+  }
+  case "neu": {
+    neu(sitzungsSlug("neu", rest), rest.includes("--auto"));
+    break;
+  }
+  case "warte": {
+    const i = rest.indexOf("--hoechstens");
+    const ms = i >= 0 ? Number.parseInt(rest[i + 1] ?? "", 10) : null;
+    if (ms !== null && !(ms > 0)) abbruch("--hoechstens braucht Millisekunden > 0");
+    await warte(slugAus(rest[0]), ms);
+    break;
+  }
+  case "frage":
+  case "stand": {
+    if (befehl === "frage") await frage(sitzungsSlug(befehl, rest));
+    else {
+      const name = rest.find((a) => !a.startsWith("--")) ?? process.env.CLAUDE_SESSION_ID;
+      if (!name) abbruch(`${befehl} braucht einen SLUG oder CLAUDE_SESSION_ID`);
+      stand(slugAus(name));
+    }
+    break;
+  }
+  case "handout": {
+    const name = rest.find((a) => !a.startsWith("--")) ?? process.env.CLAUDE_SESSION_ID;
+    if (!name) abbruch("handout braucht einen SLUG oder CLAUDE_SESSION_ID");
+    try {
+      await handout(slugAus(name));
+    } catch (e) {
+      // Chrome und Profil sind hier schon beendet und entfernt (finally in handout).
+      abbruch(e instanceof HandoutFehler ? e.message : `Handout fehlgeschlagen: ${(e as Error).message}`);
+    }
+    break;
+  }
+  case "stop":
+    await stop();
+    break;
+  default:
+    console.error("Aufruf: live-plan start | open [SLUG] | neu [SLUG] [--auto] | warte SLUG [--hoechstens MS] | frage [SLUG] | stand [SLUG] --kurz | handout [SLUG] | stop");
+    process.exit(befehl === undefined || befehl === "-h" || befehl === "--help" ? 0 : 2);
+}

@@ -1,0 +1,660 @@
+/* live-plan (#257): Liste, Kopf, Ueberblick, Teil 1 (Verbrauch, Fortschritt, Kacheln, Jetzt, zwei Spalten),
+   Teil 2 (Dokumentation), Dateien, Fuss, Seitenleiste, Beweisbild-Modal (S26, A20, Vorlage). Farben nach
+   hiro-development/planner/streams/roadmap-infra.html. Thema per Knopf (data-thema auf <html>):
+   dunkel als Vorgabe, hell fest, auto nach prefers-color-scheme.
+   Things-Stil (#328): Palette Blau, Gelb, Tuerkis, Gruen, Rot, Beige in beiden Themen gleich; dunkel mit
+   dunklen Flaechen, hell mit weissen. Die Dokumentation und das Handout weiter unten nutzen nur Variablen. */
+
+:root {
+  color-scheme: dark;
+  --s1: #1c1d1f;
+  --s2: #242528;
+  --s3: #2a2b2e;
+  --ink-1: #ececee;
+  --ink-2: #b9b9be;
+  --ink-3: #98989d;
+  --line-1: #2f3034;
+  --line-2: #3a3b40;
+  --l1: #3d8af7;
+  --l2: #f0575d;
+  --l3: #46b5c5;
+  --l4: #f5c242;
+  --l5: #c4ae86;
+  --ok: #59c26b;
+  --rot: #f0575d;
+  --auf: #fff;
+  --warn: #f5c242;
+  --st-offen: #6c6c70;
+  --st-laeuft: var(--l1);
+  --st-fertig: var(--ok);
+  --st-verworfen: #4a4a4f;
+  --pk-bahn-alt: rgba(255, 255, 255, 0.045);
+  --r: 12px;
+  --r-s: 8px;
+  --font: -apple-system, "SF Pro Text", system-ui, "Segoe UI", sans-serif;
+  --font-kopf: -apple-system, "SF Pro Display", system-ui, "Segoe UI", sans-serif;
+  --mono: "SF Mono", ui-monospace, "JetBrains Mono", "Cascadia Mono", Menlo, monospace;
+}
+
+/* Hell per Knopf; derselbe Block gilt unter auto, wenn das System hell ist. */
+:root[data-thema="hell"] {
+  color-scheme: light;
+  --s1: #ffffff;
+  --s2: #f5f5f7;
+  --s3: #ebebef;
+  --ink-1: #1d1d1f;
+  --ink-2: #48484d;
+  --ink-3: #6e6e73;
+  --line-1: #ececf0;
+  --line-2: #d8d8de;
+  --warn: #b07a00;
+  --st-offen: #aeaeb4;
+  --st-verworfen: #d1d1d6;
+  --pk-bahn-alt: rgba(0, 0, 0, 0.045);
+}
+
+@media (prefers-color-scheme: light) {
+  :root[data-thema="auto"] {
+    color-scheme: light;
+    --s1: #ffffff;
+    --s2: #f5f5f7;
+    --s3: #ebebef;
+    --ink-1: #1d1d1f;
+    --ink-2: #48484d;
+    --ink-3: #6e6e73;
+    --line-1: #ececf0;
+    --line-2: #d8d8de;
+    --warn: #b07a00;
+    --st-offen: #aeaeb4;
+    --st-verworfen: #d1d1d6;
+    --pk-bahn-alt: rgba(0, 0, 0, 0.045);
+  }
+}
+
+body { margin: 0; background: var(--s1); font-family: var(--font); }
+.lp { position: relative; max-width: 1600px; margin: 0 auto; padding: 20px 24px 40px; color: var(--ink-2); font-size: 13px; }
+.lp a { color: var(--l1); }
+.lp-zurueck { font-size: 12px; text-decoration: none; }
+.lp-zurueck::before { content: "\2190  "; }
+
+/* Liste */
+.lp-liste { width: 100%; border-collapse: collapse; border: 1px solid var(--line-1); border-radius: 6px; }
+.lp-liste th { padding: 8px 10px; text-align: left; font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-3); background: var(--s2); border-bottom: 1px solid var(--line-2); }
+.lp-liste td { padding: 8px 10px; border-bottom: 1px solid var(--line-1); }
+.lp-liste td b { color: var(--ink-1); font-weight: 600; }
+.lp-liste .klein { font-size: 12px; color: var(--ink-3); }
+.lp-liste .leer { color: var(--ink-3); }
+
+/* Segmentschalter: Thema im Kopf, Modus der Dateien */
+.seg { display: inline-flex; border: 1px solid var(--line-2); border-radius: 8px; overflow: hidden; background: var(--s2); }
+.lp .seg button { padding: 4px 12px; border: 0; background: none; color: var(--ink-3); }
+.lp .seg button + button { border-left: 1px solid var(--line-2); }
+.lp .seg button.aktiv { background: var(--s3); color: var(--ink-1); font-weight: 600; }
+.lp-thema button { font-size: 12px; }
+
+
+.lp .mono { font-family: var(--mono); }
+.lp button { font: inherit; color: inherit; cursor: pointer; }
+
+/* Kopf in drei Zeilen (S26, Issue 320): Titel mit Git-Stand und Thema, Ziel auf zwei Zeilen */
+.lp-kopf { display: grid; gap: 4px; margin-bottom: 10px; }
+.lp-oben { display: flex; gap: 12px; align-items: center; min-width: 0; }
+.lp-oben .lp-thema { flex: none; }
+.lp-oben .lp-git { flex: 1 1 0; min-width: 0; overflow: hidden; text-align: right; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; color: var(--ink-3); }
+.lp-git b { color: var(--ink-2); font-weight: 500; }
+.lp-kopf h1 { flex: 0 1 auto; margin: 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 24px; font-weight: 700; letter-spacing: -0.3px; font-family: var(--font-kopf); color: var(--ink-1); }
+.lp-ziel { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; margin: 0; max-width: 140ch; color: var(--ink-3); white-space: pre-line; overflow-wrap: anywhere; cursor: pointer; }
+.lp-ziel.voll { display: block; -webkit-line-clamp: unset; line-clamp: unset; }
+.lp-zeile { display: flex; flex-wrap: wrap; gap: 4px 14px; align-items: center; color: var(--ink-3); font-size: 12px; }
+.lp-zeile b { color: var(--ink-2); font-weight: 500; }
+.lp-git { font-family: var(--mono); }
+.lp-git .an { color: var(--ok); }
+.lp-git .aus, .lp-git .unbekannt { color: var(--ink-3); }
+
+/* Vier Kacheln (Issue 320): Geplant, Erledigt, Laeuft jetzt, Wartet auf Sie; aus der Datei */
+.lp-blick { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; margin-bottom: 8px; }
+.lp-kachel { display: grid; min-width: 0; padding: 5px 8px 6px; border: 1px solid var(--line-2); border-radius: 7px; background: var(--s2); }
+.lp-kachel .k { font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-3); }
+.lp-kachel .w { font-size: 20px; font-weight: 700; line-height: 1.15; color: var(--ink-1); font-variant-numeric: tabular-nums; }
+.lp-kachel .w small { font-size: 11px; font-weight: 500; color: var(--ink-3); }
+.lp-kachel .s { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; color: var(--ink-3); }
+.lp-kachel.lauf { border-color: color-mix(in srgb, var(--warn) 55%, var(--line-2)); background: color-mix(in srgb, var(--warn) 10%, var(--s2)); }
+.lp-kachel.lauf .w { color: var(--warn); }
+.lp-kachel.rot { border-color: color-mix(in srgb, var(--rot) 55%, var(--line-2)); background: color-mix(in srgb, var(--rot) 10%, var(--s2)); }
+.lp-kachel.rot .w { color: var(--rot); }
+
+/* Fehler aus pruefePlan */
+.lp-fehler { margin: 0 0 10px; padding: 8px 10px; border: 1px solid var(--l2); border-radius: var(--r); background: color-mix(in srgb, var(--l2) 8%, transparent); font-family: var(--mono); font-size: 12px; }
+.lp-fehler div { white-space: pre-wrap; }
+
+/* Jetzt-Zeile (S26): genau eine, einzeilig; offene Fragen mit ihren Optionen darin */
+.lp-jetzt { display: flex; gap: 8px; align-items: center; min-width: 0; margin: 0 0 10px; padding: 6px 10px; border: 1px solid var(--line-2); border-left: 3px solid var(--warn); border-radius: var(--r); background: var(--s2); white-space: nowrap; overflow: hidden; }
+.lp-jetzt .k { flex: none; font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-3); }
+.lp-jetzt .leer { color: var(--ink-3); }
+.lp-jetzt > .t { min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--ink-1); font-weight: 600; }
+.lp-jetzt > button { display: inline-flex; gap: 6px; align-items: center; min-width: 0; padding: 2px 8px; border: 1px solid var(--line-2); border-radius: 999px; background: var(--s1); }
+.lp-jetzt > button .t { overflow: hidden; text-overflow: ellipsis; color: var(--ink-1); }
+.lp-jetzt .id { font-family: var(--mono); color: var(--l1); }
+.lp-jetzt .ag { color: var(--ink-3); }
+.lp-jetzt .seit { font-family: var(--mono); color: var(--warn); }
+.lp-jetzt.fragen { align-items: flex-start; border-left-color: var(--rot); white-space: normal; }
+.lp-jetzt.fragen .k { padding-top: 2px; }
+.lp-fragen { display: grid; gap: 10px; min-width: 0; flex: 1 1 auto; }
+.lp-frage { display: grid; gap: 4px; min-width: 0; }
+.lp-frage .kopf { display: flex; flex-wrap: wrap; gap: 2px 8px; align-items: baseline; }
+.lp-frage .id { font-family: var(--mono); color: var(--rot); }
+.lp-frage .t { color: var(--ink-1); font-weight: 600; }
+.lp-frage .grund { flex-basis: 100%; color: var(--ink-2); font-size: 13px; }
+.lp-frage .bl { font-family: var(--mono); font-size: 11px; color: var(--ink-3); }
+.lp-frage .opt { display: grid; gap: 3px; margin: 0; padding: 0 0 0 22px; list-style: none; }
+.lp-frage .opt li { display: flex; gap: 8px; align-items: baseline; min-width: 0; }
+.lp-frage .opt button { flex: none; padding: 2px 9px; border: 1px solid var(--line-2); border-radius: 6px; background: var(--s1); }
+.lp-frage .opt button:hover { border-color: var(--ink-3); }
+.lp-frage .opt button.empfohlen { border-color: var(--l4); box-shadow: inset 0 0 0 1px var(--l4); }
+.lp-frage .opt .emp { flex: none; color: var(--l4); font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
+.lp-frage .opt .bsp { min-width: 0; color: var(--ink-2); font-size: 13px; }
+.lp-frage .opt button:disabled { opacity: 0.5; cursor: progress; }
+/* Eigene Antwort unter den Optionen (Freitext, wie Other in AskUserQuestion): eine Zeile, kompakt. */
+.lp-frage .eigen { display: flex; flex-wrap: wrap; gap: 4px 6px; align-items: center; min-width: 0; margin: 2px 0 0; padding: 0 0 0 22px; }
+.lp-frage .eigen input { flex: 1 1 220px; min-width: 0; max-width: 480px; padding: 2px 8px; border: 1px solid var(--line-2); border-radius: 6px; background: var(--s1); font: inherit; font-size: 13px; color: var(--ink-1); }
+.lp-frage .eigen input::placeholder { color: var(--ink-3); }
+.lp-frage .eigen input:focus { outline: none; border-color: var(--l1); }
+.lp-frage .eigen button { flex: none; padding: 2px 9px; border: 1px solid var(--line-2); border-radius: 6px; background: var(--s3); font-size: 13px; color: var(--ink-1); }
+.lp-frage .eigen button:hover:not(:disabled) { border-color: var(--ink-3); }
+.lp-frage .eigen button:disabled { opacity: 0.5; cursor: default; }
+.lp-frage .eigen-fehler { flex-basis: 100%; font-size: 12px; color: var(--warn); }
+.eigen-marke { margin-left: 8px; padding: 0 5px; border: 1px solid var(--line-2); border-radius: 4px; font-size: 10px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--ink-2); }
+.lp .befehl { padding: 1px 6px; border: 1px solid var(--line-2); border-radius: 4px; background: var(--s1); font-family: var(--mono); font-size: 12px; color: var(--ink-1); user-select: all; }
+.lp .kopieren { flex: none; margin-left: 4px; padding: 1px 8px; border: 1px solid var(--line-2); border-radius: 4px; background: var(--s3); font: 11px var(--mono); color: var(--ink-2); }
+.lp .kopieren:hover { border-color: var(--ink-3); }
+
+/* Live-Block (S8, Vertrag v1.1 A): Register der Claude-Sitzung unter der Jetzt-Zeile, nach savvy-progress:
+   Kopf mit Fortschritt, Kennzahlkacheln, Agentenzeilen in drei Zeilen mit Balken, Gruppen Laufend, Fertig, Geplant */
+.lp-live { display: grid; gap: 8px; margin: 0 0 10px; padding: 8px 10px; border: 1px solid var(--line-2); border-left: 3px solid var(--line-2); border-radius: var(--r); background: var(--s2); font-size: 12px; }
+.lp-live.lv-aktiv { border-left-color: var(--l1); }
+.lp-live .k { flex: none; font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-3); }
+.lp-live .n, .lp-live .lv-zeit, .lp-live .st { font-family: var(--mono); font-size: 11px; font-variant-numeric: tabular-nums; color: var(--ink-3); }
+.lp-live .mod { color: var(--ink-2); }
+.lp-live .aus { color: var(--ink-3); font-style: italic; }
+.lv-kopf { display: flex; gap: 10px; align-items: center; min-width: 0; white-space: nowrap; }
+.lv-fortschritt { display: flex; flex: 0 1 auto; gap: 8px; align-items: center; min-width: 0; }
+.lv-fortschritt .t { min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--ink-1); font-size: 14px; font-weight: 600; }
+.lv-fortschritt .phase { flex: none; padding: 0 6px; border: 1px solid var(--line-2); border-radius: 999px; font-size: 11px; color: var(--ink-2); }
+.lv-fortschritt .lv-bar { width: 160px; }
+.lv-fortschritt .zustand { flex: none; font-size: 11px; color: var(--ink-2); }
+.lv-fortschritt .zustand .uhr { font-family: var(--mono); }
+.lv-fortschritt.ruht { opacity: 0.55; }
+.lv-fortschritt.ruht .lv-bar i { background: var(--ink-3); }
+.lv-fortschritt.aktiv .zustand { color: var(--l1); font-weight: 600; }
+.lv-fortschritt.fertig .zustand { color: var(--ok); font-weight: 600; }
+.lv-sitzung { display: flex; flex: none; gap: 8px; align-items: center; margin-left: auto; }
+.lv-sitzung .mod { color: var(--ink-1); }
+/* Balken im Live-Block: Fortschritt, Agenten, Kontext */
+.lv-bar { position: relative; display: block; flex: none; width: 70px; height: 6px; border-radius: 3px; background: var(--line-2); overflow: hidden; }
+.lv-bar i { position: absolute; inset: 0 auto 0 0; border-radius: 3px; background: var(--l1); }
+.lv-bar.grau i { background: var(--ink-3); }
+.lv-bar.gelb i { background: var(--warn); }
+.lv-bar.rot i { background: var(--rot); }
+.lv-bar.ok i, .lv-bar.st-light i { background: var(--ok); }
+.lv-bar.st-medium i { background: var(--l1); }
+.lv-bar.st-careful i { background: var(--l4); }
+.lv-bar.st-heavy i { background: var(--l2); }
+/* Verbrauch in zwei Zeilen (Issue 320): Zeile Sitzung und Zeile 5h mit breitem Balken, keine bricht um.
+   Im Balken Fuellung = Nutzung, Schraffur bis voll mit gestrichelter Linie, 1-px-Strich an der Zeitposition. */
+.lv-verbrauch { display: grid; gap: 4px; padding: 4px 8px 5px; border: 1px solid var(--line-2); border-radius: 6px; background: var(--s1); font-size: 11px; color: var(--ink-3); font-variant-numeric: tabular-nums; }
+.lv-verbrauch .w { color: var(--ink-1); font-weight: 600; }
+.lv-verbrauch .w .uhr { font: inherit; color: inherit; }
+.lv-verbrauch .k { font-size: 10px; }
+.lv-verbrauch .mod { color: var(--ink-2); }
+.vb-trenn { color: var(--line-2); }
+.vb-sitzung { display: flex; gap: 6px; align-items: center; min-width: 0; white-space: nowrap; overflow: hidden; }
+.vb-sitzung > * { flex: none; }
+.vb-sitzung .lv-bar { width: 30px; height: 5px; }
+.vb-limit.gelb .w { color: var(--warn); }
+.vb-limit.rot .w { color: var(--rot); }
+.vb-limit.alt { opacity: 0.55; }
+.ab-reserve { cursor: help; }
+.ab-wechsel { color: var(--l1); font-weight: 600; }
+.vb-fenster { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 8px; align-items: center; min-width: 0; white-space: nowrap; overflow: hidden; }
+.vb-fenster.alt { opacity: 0.55; }
+.vb-konto { display: inline-flex; gap: 5px; align-items: center; }
+.ab-konto { color: var(--ink-1); font-weight: 600; cursor: help; }
+.ab-konto.aus { color: var(--ink-3); font-weight: 400; font-style: italic; }
+.ab-ok .zs { color: var(--ok); }
+.ab-gelb .zs { color: var(--warn); }
+.ab-rot .zs { color: var(--rot); }
+.vb-rechts { display: inline-flex; gap: 5px; align-items: center; }
+.ab-tempo { color: var(--rot); font-weight: 600; }
+.vb-7t.gelb .w { color: var(--warn); }
+.vb-7t.rot .w { color: var(--rot); }
+.vb-fbar { position: relative; min-width: 0; height: 14px; }
+.vb-fbar .spur { position: absolute; inset: 0; border-radius: 4px; background: var(--line-2); overflow: hidden; }
+.vb-fbar .fill { position: absolute; top: 0; bottom: 0; left: 0; background: var(--ok); }
+.vb-fbar.gelb .fill { background: var(--warn); }
+.vb-fbar.rot .fill { background: var(--rot); }
+.vb-fbar .prog { position: absolute; top: 0; bottom: 0; background: repeating-linear-gradient(-45deg, color-mix(in srgb, var(--rot) 45%, transparent) 0 3px, transparent 3px 6px); }
+.vb-fbar .strich { position: absolute; top: -2px; bottom: -2px; width: 1px; background: var(--ink-1); }
+.vb-fbar .voll { position: absolute; top: -2px; bottom: -2px; width: 0; border-left: 1.5px dashed var(--rot); }
+.vb-fbar .lab { position: absolute; top: 0; line-height: 14px; font-size: 10px; font-weight: 600; color: var(--ink-1); text-shadow: 0 0 3px var(--s1), 0 0 2px var(--s1); }
+.vb-fbar .lab.vor { transform: translateX(calc(-100% - 4px)); }
+.vb-fbar .lab.nach { transform: translateX(4px); }
+.vb-fbar .lab.r { right: 5px; color: var(--ink-2); font-weight: 500; }
+/* Gruppen Laufend, Fertig, Geplant; laufend deutlich in zwei Zeilen, der Rest einzeilig und gedimmt */
+.lv-gruppe { display: grid; gap: 2px; }
+.lv-gkopf { justify-self: start; padding: 0; border: 0; background: none; font-size: 11px; color: var(--ink-3); }
+.lv-agenten { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 0 18px; margin: 0; padding: 0; list-style: none; }
+.lv-zeile { display: grid; gap: 0; min-width: 0; padding: 4px 2px 5px; border-bottom: 1px solid var(--line-1); line-height: 1.4; }
+.lv-zeile > div { display: flex; gap: 8px; align-items: baseline; min-width: 0; white-space: nowrap; }
+.lv-zeile > div > * { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.lv-zeile .t { flex: 1 1 auto; color: var(--ink-1); font-size: 13px; font-weight: 600; }
+.lv-zeile .mt { flex: 0 1 auto; font-size: 11px; }
+.lv-zeile .zs { flex: none; font-size: 12px; }
+.lv-zeile .st { flex: 0 1 auto; font-size: 11.5px; color: var(--ink-2); }
+.lv-zeile .n { flex: none; margin-left: auto; text-align: right; font-family: var(--mono); font-size: 11.5px; color: var(--ink-3); }
+.lv-zeile .typ { font-family: var(--mono); font-size: 11px; color: var(--ink-3); }
+.lv-zeile .lv-bar { width: 100%; height: 3px; margin-top: 3px; }
+.lv-zeile.kurz { padding: 2px 2px 3px; opacity: 0.55; }
+.lv-zeile.kurz .t { font-size: 12px; font-weight: 400; color: var(--ink-2); }
+.lv-zeile.g-fehler { opacity: 0.85; }
+.lv-zeile.g-laeuft .zs { animation: lv-puls 1.6s ease-in-out infinite; }
+@keyframes lv-puls { 50% { opacity: 0.25; } }
+.lp-live .stufe { flex: none; font-weight: 600; }
+.stufe.st-light { color: var(--ok); }
+.stufe.st-medium { color: var(--l1); }
+.stufe.st-careful { color: var(--l4); }
+.stufe.st-heavy { color: var(--l2); }
+.stufe.st-andere { color: var(--ink-2); }
+.g-laeuft .zs { color: var(--l1); }
+.g-fertig .zs { display: inline-grid; place-items: center; width: 14px; height: 14px; border-radius: 50%; background: var(--ok); color: var(--auf); font-size: 9px; font-weight: 700; }
+.g-fehler .zs { color: var(--rot); }
+.g-geplant .zs, .g-geplant .t { color: var(--ink-3); }
+.lv-mehr { justify-self: start; padding: 0 8px; border: 1px solid var(--line-2); border-radius: 6px; background: var(--s1); font-size: 11px; color: var(--ink-3); }
+.lv-marke { margin-left: 6px; padding: 0 5px; border-radius: 999px; background: color-mix(in srgb, var(--l1) 18%, transparent); font-size: 10px; color: var(--l1); }
+.lv-marke.aus { background: var(--s3); color: var(--ink-3); }
+
+/* Drei Abschnitte nebeneinander (S26): je hoechstens fuenf Zeilen, einzeilig mit Ellipse */
+.lp-ueberblick { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px 20px; margin: 0 0 10px; }
+@media (max-width: 1100px) {
+  .lp-ueberblick { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 700px) {
+  .lp-ueberblick { grid-template-columns: minmax(0, 1fr); }
+}
+.lp-abschnitt { min-width: 0; text-overflow: ellipsis; }
+.lp-abschnitt h2 { display: flex; gap: 8px; align-items: baseline; margin: 0 0 4px; padding-bottom: 5px; border-bottom: 1px solid var(--line-1); font-size: 14px; font-weight: 700; font-family: var(--font-kopf); color: var(--l1); white-space: nowrap; }
+.lp-abschnitt h2 .zaehler { margin-left: auto; font-family: var(--font); font-size: 12px; font-weight: 500; letter-spacing: 0; text-transform: none; color: var(--ink-3); }
+.lp-anforderungen h2 .zaehler { color: var(--ok); }
+.lp-abschnitt .mehr { margin-left: 8px; padding: 0 8px; border: 1px solid var(--line-2); border-radius: 6px; background: var(--s2); font-size: 11px; letter-spacing: 0; text-transform: none; color: var(--ink-3); }
+.lp-abschnitt .mehr:hover { border-color: var(--ink-3); color: var(--ink-2); }
+.lp-abschnitt ul { display: grid; gap: 1px; margin: 0; padding: 0; list-style: none; }
+.lp-abschnitt li { position: relative; display: flex; gap: 5px; align-items: center; min-width: 0; padding: 1px 6px; border-left: 3px solid var(--st, var(--line-2)); border-radius: 4px; line-height: 1.5; white-space: nowrap; }
+.lp-abschnitt li > * { flex: none; }
+.lp-abschnitt li > .t { flex: 1 1 0; min-width: 2em; overflow: hidden; text-overflow: ellipsis; color: var(--ink-1); }
+.lp-abschnitt li > .mit { flex: 0 1 auto; min-width: 0; max-width: 40%; overflow: hidden; text-overflow: ellipsis; }
+/* Nur die Anforderungen lassen die Vorschau des Beweisbilds ueberstehen; alle anderen schneiden ab. */
+.lp-entscheidungen li, .lp-offen li { overflow: hidden; }
+.lp-abschnitt li > .id { font-family: var(--mono); font-size: 11px; color: var(--ink-3); }
+.lp-abschnitt li.zuletzt { box-shadow: 0 0 0 2px var(--warn); }
+.lp-abschnitt li .uhr { font-family: var(--mono); font-size: 11px; color: var(--warn); }
+.lp-abschnitt .leer { margin: 0; padding: 1px 9px; color: var(--ink-3); }
+.af.z-erfuellt { --st: var(--st-fertig); }
+.af.z-in-arbeit { --st: var(--st-laeuft); }
+.af.z-offen { --st: var(--st-offen); }
+/* Things-Glyphen: erfuellt = Haken im blauen Kreis, in Arbeit = halber Ring, offen = Ring */
+.af .zs { display: inline-grid; flex: none; place-items: center; width: 15px; height: 15px; box-sizing: border-box; border: 1.6px solid var(--st); border-radius: 50%; font-size: 0; line-height: 1; overflow: hidden; }
+.af.z-erfuellt .zs { border-color: var(--l1); background: var(--l1); color: var(--auf); font-size: 10px; font-weight: 700; }
+.af.z-in-arbeit .zs { border-color: var(--l1); background: conic-gradient(var(--l1) 0 50%, transparent 0 100%); }
+.af.z-offen .zs { border: 1.6px solid var(--st); }
+.ent { --st: var(--l1); }
+.blatt { --st: var(--line-2); }
+.blatt.gate-mensch { --st: var(--rot); }
+.blatt.gate-mensch .gate { color: var(--rot); }
+.blatt.jetzt { --st: var(--warn); }
+.blatt .gate { color: var(--ink-3); font-size: 11px; cursor: help; }
+/* Text hat Vorrang in Offen (S29, M1): Gate als Zeichen, Befehl nur als Kopierknopf, der Text mindestens die halbe Breite */
+.lp-offen li > .t { flex: 1 1 auto; min-width: 50%; }
+.lp-offen .kopieren { margin-left: auto; padding: 0 5px; font-size: 12px; line-height: 1.4; }
+.lp .vw { display: inline; padding: 0 4px; border: 1px solid var(--line-2); border-radius: 4px; background: var(--s2); font-size: 12px; color: var(--ink-2); }
+.lp .vw:hover { border-color: var(--ink-3); }
+.lp .vw .id { font-family: var(--mono); font-size: 11px; color: var(--st, var(--l1)); }
+
+/* Beweisbild (A20): Icon an der erfuellten Anforderung, Vorschau beim Zeigen, Modal beim Klick */
+.lp .bw { display: inline-flex; align-items: center; padding: 1px 3px; border: 1px solid transparent; border-radius: 4px; background: none; color: var(--ok); }
+.lp .bw:hover, .lp .bw:focus-visible { border-color: var(--ok); outline: none; }
+.bw-vorschau { display: none; position: absolute; z-index: 40; top: calc(100% + 4px); right: 0; width: 240px; padding: 4px; border: 1px solid var(--line-2); border-radius: 6px; background: var(--s2); box-shadow: 0 10px 28px rgba(0, 0, 0, 0.35); pointer-events: none; }
+.bw:hover + .bw-vorschau, .bw:focus-visible + .bw-vorschau { display: block; }
+.bw-vorschau img { display: block; width: 100%; height: auto; border-radius: 3px; }
+.lp-modal { position: fixed; inset: 0; z-index: 80; display: grid; place-items: center; padding: 2vh 2vw; background: rgba(0, 0, 0, 0.6); }
+.lp-modal-box { display: grid; gap: 6px; max-width: 94vw; max-height: 96vh; padding: 10px; border: 1px solid var(--line-2); border-radius: 8px; background: var(--s2); box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5); }
+.lp-modal-kopf { display: flex; gap: 12px; align-items: baseline; min-width: 0; }
+.lp-modal-kopf h2 { margin: 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 15px; color: var(--ink-1); }
+.lp-modal-kopf .pfad { color: var(--ink-3); font-size: 12px; }
+.lp-modal-kopf .zu { margin-left: auto; width: 28px; height: 28px; border: 1px solid var(--line-2); border-radius: 6px; background: var(--s1); }
+.lp-modal img { max-width: 90vw; max-height: 90vh; display: block; width: auto; height: auto; object-fit: contain; }
+
+/* Status als Farbe (S22) */
+.s-offen { --st: var(--st-offen); }
+.s-laeuft { --st: var(--st-laeuft); }
+.s-fertig { --st: var(--st-fertig); }
+.s-verworfen { --st: var(--st-verworfen); }
+.dim { opacity: 0.12; }
+
+/* Seitenleiste: fest am rechten Rand (die Regel `.open` vorweg, sie ist spezifischer) */
+.lp-drawer.open { transform: none; }
+.lp-drawer { position: fixed; top: 0; right: 0; bottom: 0; z-index: 60; width: 520px; max-width: 100vw; overflow: auto; padding: 18px 20px 32px; background: var(--s2); border-left: 1px solid var(--line-2); box-shadow: -12px 0 32px rgba(0, 0, 0, 0.25); transform: translateX(105%); transition: transform 0.22s ease; color: var(--ink-2); font-size: 13px; }
+.lp-drawer .lane { font-size: 12px; color: var(--ink-3); text-transform: uppercase; letter-spacing: 0.06em; }
+.lp-drawer h2 { display: flex; gap: 8px; align-items: baseline; margin: 4px 0 10px; font-size: 18px; color: var(--ink-1); }
+.lp-drawer h2 .id { font-family: var(--mono); font-size: 13px; color: var(--l1); }
+.lp-drawer h2 .pill { padding: 0 6px; border: 1px solid var(--line-2); border-radius: 999px; font-family: var(--mono); font-size: 10px; font-weight: 400; color: var(--ink-3); }
+.lp-drawer h2 .pill.st-laeuft { border-color: var(--warn); color: var(--warn); }
+.lp-drawer h2 .pill.st-fertig { border-color: var(--ok); color: var(--ok); }
+.lp-drawer .verweise { display: flex; flex-direction: column; gap: 4px; }
+.lp-drawer .ref { display: flex; gap: 8px; align-items: baseline; padding: 4px 8px; border: 1px solid var(--line-2); border-left: 3px solid var(--st, var(--line-2)); border-radius: 5px; background: var(--s1); text-align: left; }
+.lp-drawer .ref:hover { border-color: var(--ink-3); border-left-color: var(--st, var(--ink-3)); }
+.lp-drawer .ref .id { font-family: var(--mono); font-size: 11px; color: var(--l1); }
+.lp-drawer .ref .t { color: var(--ink-1); }
+.lp-drawer .schl { position: absolute; top: 10px; right: 12px; width: 28px; height: 28px; border: 1px solid var(--line-2); border-radius: 6px; background: var(--s1); }
+.lp-drawer h3 { margin: 16px 0 6px; font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-3); }
+.lp-drawer p { margin: 0; white-space: pre-wrap; }
+.lp-drawer .meta { display: flex; flex-wrap: wrap; gap: 6px 14px; font-family: var(--mono); font-size: 12px; color: var(--ink-3); }
+.lp-drawer ul { margin: 0; padding-left: 18px; }
+.lp-drawer li { font-family: var(--mono); font-size: 12px; }
+.lp-drawer .beleg { margin: 8px 0; border: 1px solid var(--line-2); border-radius: 6px; overflow: hidden; background: var(--s1); }
+.lp-drawer .beleg .k { padding: 4px 8px; font-family: var(--mono); font-size: 11px; color: var(--ink-3); border-bottom: 1px solid var(--line-1); }
+.lp-drawer .beleg img { display: block; max-width: 100%; }
+.lp-drawer .beleg .k a { float: right; }
+.lp-drawer .beleg iframe { display: block; width: 100%; height: 320px; border: 0; background: #fff; }
+.lp-drawer .beleg pre { margin: 0; padding: 8px; overflow: auto; font-family: var(--mono); font-size: 11px; white-space: pre-wrap; }
+.lp-drawer .leer { color: var(--ink-3); }
+
+/* Dateien (Vertrag v1.1 B): Baum unter der Dokumentation, nach data-goblin/claude-code-filetree (MIT, Kurt Buhler).
+   Git-Farbe je Datei (M gelb, A/? gruen, D rot, R blau), Punkte fuer gelesen (lila) und geschrieben (orange). */
+.lp-dateien { margin: 10px 0 0; border: 1px solid var(--line-1); border-radius: 8px; background: var(--s1); }
+.bd-kopf { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; padding: 6px 10px; border-bottom: 1px solid var(--line-1); font-size: 12px; }
+.bd-kopf h2 { margin: 0; font-size: 11px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-3); }
+.bd-info { display: inline-flex; flex-wrap: wrap; gap: 4px 12px; align-items: center; font-family: var(--mono); font-size: 11px; color: var(--ink-3); }
+.bd-info .zweig { color: var(--ink-1); font-weight: 600; }
+.bd-info .unbekannt { color: var(--ink-3); font-family: inherit; }
+.bd-filter { margin-left: auto; width: 180px; padding: 2px 8px; border: 1px solid var(--line-2); border-radius: 6px; background: var(--s2); font: inherit; color: var(--ink-1); }
+.bd-modus button { font-size: 11px; }
+.bd-baum { max-height: 60vh; overflow: auto; padding: 4px 0; font-family: var(--mono); font-size: 12px; }
+.bd-baum .leer { margin: 0; padding: 6px 12px; color: var(--ink-3); font-family: system-ui, sans-serif; }
+.lp .bd-ordner, .lp .bd-datei { position: relative; display: flex; gap: 8px; align-items: center; width: 100%; min-width: 0; padding: 1px 12px 1px calc(12px + var(--t, 0) * 16px); border: 0; background: none; text-align: left; white-space: nowrap; line-height: 1.6; }
+.bd-ordner:hover, .bd-datei:hover { background: var(--s2); }
+.bd-ordner .pf { flex: none; width: 1em; color: var(--ink-3); }
+.bd-ordner .nm { min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--ink-2); }
+.bd-ordner .sm { display: inline-flex; gap: 6px; font-size: 10.5px; }
+.bd-datei .nm { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--ink-2); }
+.bd-datei .df { display: inline-flex; flex: none; gap: 4px; font-size: 10.5px; }
+.bd-datei .df i, .bd-datei .akt i { font-style: normal; }
+.bd-datei .plus { color: var(--ok); }
+.bd-datei .minus { color: var(--rot); }
+.bd-datei .akt { display: inline-flex; flex: none; gap: 3px; margin-left: auto; }
+.bd-datei .pk { width: 7px; height: 7px; border-radius: 50%; }
+.bd-datei .pk.gelesen { background: var(--l5); }
+.bd-datei .pk.geschrieben { background: var(--l2); }
+.bd-datei .bd-zeit { flex: none; min-width: 4.2em; text-align: right; font-size: 10.5px; color: var(--ink-3); }
+.g-m, .bd-datei.g-m .nm { color: var(--warn); }
+.g-a, .g-neu, .bd-datei.g-a .nm, .bd-datei.g-neu .nm { color: var(--ok); }
+.g-d, .g-konflikt, .bd-datei.g-d .nm, .bd-datei.g-konflikt .nm { color: var(--rot); }
+.bd-datei.g-d .nm { text-decoration: line-through; }
+.g-r, .bd-datei.g-r .nm { color: var(--l1); }
+/* GitButler (E3): je angewendetem Branch ein aufklappbarer Abschnitt ueber dem Baum, Ueberschneidung in Warnfarbe */
+.bd-gruppe { border-bottom: 1px solid var(--line-1); }
+.lp .bd-gkopf { display: flex; gap: 8px; align-items: center; width: 100%; min-width: 0; padding: 2px 12px; border: 0; background: var(--s2); text-align: left; white-space: nowrap; line-height: 1.6; }
+.bd-gkopf:hover { background: var(--s3); }
+.bd-gruppe.warn .bd-gkopf { box-shadow: inset 3px 0 0 var(--warn); }
+.bd-gkopf .pf { flex: none; width: 1em; color: var(--ink-3); }
+.bd-gkopf .nm { min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--ink-1); font-weight: 600; }
+.bd-gkopf .sm { flex: none; font-size: 10.5px; color: var(--ink-3); }
+.bd-gkopf .bd-warn { flex: none; color: var(--warn); }
+.bd-datei .bd-marke { flex: none; padding: 0 5px; border: 1px solid var(--line-2); border-radius: 999px; font-size: 10px; line-height: 1.4; color: var(--ink-3); }
+.bd-datei .bd-auch { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; font-size: 10.5px; color: var(--warn); }
+.bd-rest { padding: 6px 12px 2px; font-family: system-ui, sans-serif; font-size: 11px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-3); }
+/* Unter 60 s beruehrt: Schimmer ueber die Zeile */
+.bd-datei.frisch { background: linear-gradient(90deg, transparent 0%, color-mix(in srgb, var(--l2) 22%, transparent) 50%, transparent 100%) 0 0 / 200% 100% no-repeat; animation: bd-schimmer 1.8s linear infinite; }
+@keyframes bd-schimmer { from { background-position: 100% 0; } to { background-position: -100% 0; } }
+/* Diff einer Datei im Modal (Klick im Baum): + gruen, - rot, @@ gedaempft, Zeilennummern alt und neu */
+.lp-modal-box.lp-diff { grid-template-rows: auto minmax(0, 1fr) auto; width: min(1100px, 94vw); height: 90vh; }
+.lp-diff .lp-modal-kopf { align-items: center; }
+.lp-diff .lp-modal-kopf h2 { font-family: var(--mono); font-size: 13px; }
+.lp-diff .lp-modal-kopf .pfad { flex: none; white-space: nowrap; }
+.lp-diff .lp-modal-kopf .kopieren { flex: none; margin-left: auto; padding: 2px 8px; border: 1px solid var(--line-2); border-radius: 6px; background: var(--s1); color: var(--ink-2); font-size: 11.5px; }
+.lp-diff .lp-modal-kopf .zu { flex: none; margin-left: 0; }
+.lp-diff-text { overflow: auto; min-height: 0; border: 1px solid var(--line-1); border-radius: 6px; background: var(--s1); font-family: var(--mono); font-size: 12px; line-height: 1.5; }
+.lp-diff-text .dz { display: grid; grid-template-columns: 4.5em 4.5em max-content; min-width: max-content; }
+.lp-diff-text.einspaltig .dz { grid-template-columns: 4.5em max-content; }
+.lp-diff-text.einspaltig .dz-nr:first-child { display: none; }
+.lp-diff-text .dz-nr { position: sticky; padding: 0 8px 0 0; text-align: right; color: var(--ink-3); background: var(--s1); user-select: none; }
+.lp-diff-text .dz-nr:first-child { left: 0; }
+.lp-diff-text .dz-nr + .dz-nr { left: 4.5em; border-right: 1px solid var(--line-1); }
+.lp-diff-text.einspaltig .dz-nr + .dz-nr { left: 0; }
+.lp-diff-text code { padding: 0 10px; white-space: pre; color: var(--ink-2); }
+.lp-diff-text .dz-plus code { background: color-mix(in srgb, var(--ok) 16%, transparent); color: var(--ok); }
+.lp-diff-text .dz-minus code { background: color-mix(in srgb, var(--rot) 16%, transparent); color: var(--rot); }
+.lp-diff-text .dz-hunk code { color: var(--ink-3); background: var(--s2); }
+.lp-diff-text .dz-hunk, .lp-diff-text .dz-kopf, .lp-diff-text .dz-hinweis { color: var(--ink-3); }
+.lp-diff-text .dz-kopf code, .lp-diff-text .dz-hinweis code { color: var(--ink-3); }
+.lp-diff .df-hinweis { margin: 0; padding: 6px 2px; color: var(--ink-3); font-size: 12px; }
+
+/* +N aeltere als Text nur fuer den Druck (E8, S5) */
+.lp-druck-mehr { display: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  .lp-drawer { transition: none; }
+  .bd-datei.frisch { animation: none; background: color-mix(in srgb, var(--l2) 14%, transparent); }
+  .lv-zeile.g-laeuft .zs { animation: none; }
+}
+
+/* Dokumentation (#328): Ueberblick, Ablauf als SVG-Flowchart, Bausteine, Befehle, Regeln im Things-Stil;
+   keine Farbe ausser ueber die Variablen des Themas */
+.lp-doku { margin: 0; }
+.lp-doku h3 { display: flex; align-items: baseline; margin: 26px 0 6px; padding-bottom: 7px; border-bottom: 1px solid var(--line-1); font-family: var(--font-kopf); font-size: 15px; font-weight: 700; color: var(--l1); }
+.lp-doku h3 .zaehler { margin-left: auto; font-family: var(--font); font-size: 12.5px; font-weight: 500; color: var(--ink-3); }
+.lp-doku code { font-family: var(--mono); font-size: 12px; color: var(--ink-3); }
+.dk-ueber { max-width: 110ch; margin: 8px 0 0; font-size: 15px; line-height: 1.6; color: var(--ink-2); white-space: pre-line; }
+.dk-ablauf-titel { margin: 0 0 4px; color: var(--ink-3); }
+.dk-diagramm { margin: 12px 0 0; overflow-x: auto; border-radius: var(--r); box-shadow: 0 0 0 1px var(--line-1); background: var(--s1); }
+/* Viele Spalten: nicht unter 60 % der Naturgroesse stauchen, der Rest scrollt; das Handout zeigt immer alles. */
+.dk-ablauf { display: block; width: 100%; min-width: var(--min, 0); height: auto; font-family: var(--font); }
+.dk-bahn rect { fill: transparent; }
+.dk-bahn.alt rect { fill: var(--pk-bahn-alt); }
+.dk-bahn line { stroke: var(--line-1); stroke-width: 1; }
+.dk-bahnname { fill: var(--ink-2); }
+.dk-karte { fill: var(--s3); stroke: var(--line-2); stroke-width: 1; }
+.dk-knoten.fertig .dk-karte { stroke: var(--line-2); }
+.dk-knoten.laeuft .dk-karte { stroke: var(--l1); stroke-width: 1.6; }
+.dk-knoten.wartet .dk-karte { stroke: var(--l4); stroke-width: 1.6; }
+.dk-knoten.offen { opacity: 0.45; }
+.dk-hof { fill: none; stroke: var(--l4); stroke-width: 8; opacity: 0.25; }
+.dk-kapsel { fill: var(--s3); stroke: var(--c, var(--line-2)); stroke-width: 1.4; }
+.dk-t { fill: var(--ink-1); }
+.dk-d { fill: var(--ink-3); }
+.dk-kapsel-t { fill: var(--ink-1); }
+.dk-kapsel-d { fill: var(--ink-3); }
+.dk-kante { fill: none; stroke: var(--ink-3); stroke-width: 1.5; stroke-linecap: round; opacity: 0.8; }
+.dk-kante.blau { stroke: var(--l1); stroke-width: 2; opacity: 1; }
+.dk-kante.zurueck { stroke-dasharray: 5 4; }
+.dk-pfeil-n { fill: var(--ink-3); }
+.dk-pfeil-x { fill: var(--l1); }
+.dk-pille { fill: var(--s2); stroke: var(--line-2); stroke-width: 1; }
+.dk-pille-t { fill: var(--ink-2); }
+.dk-pille-t.blau { fill: var(--l1); }
+.dk-legende { display: flex; flex-wrap: wrap; gap: 6px 22px; margin: 12px 0 0; font-size: 12.5px; color: var(--ink-3); }
+.dk-legende span { display: inline-flex; align-items: center; gap: 7px; }
+.dk-legende .dk-kapsel { stroke: var(--line-2); }
+.dk-leg-blau { fill: none; stroke: var(--l1); stroke-width: 2; }
+.dk-leg-zurueck { fill: none; stroke: var(--ink-3); stroke-width: 1.5; stroke-dasharray: 5 4; }
+.dk-glyph { flex: none; margin-top: 1px; }
+.dk-spalten { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 56px; }
+.dk-zeile { display: flex; align-items: flex-start; gap: 12px; padding: 8px 4px; }
+.dk-inhalt { flex: 1 1 0; min-width: 0; color: var(--ink-1); overflow-wrap: anywhere; }
+.dk-notiz { margin-top: 1px; font-size: 13px; color: var(--ink-3); }
+.dk-rechts { flex: none; margin-left: auto; }
+.dk-cmd { font-size: 12.5px; color: var(--ink-1); }
+.dk-tag { padding: 2px 10px; border-radius: 999px; background: var(--s3); font-size: 12px; font-weight: 500; white-space: nowrap; color: var(--ink-2); }
+.dk-tag.blau { background: color-mix(in srgb, var(--l1) 22%, var(--s2)); color: var(--l1); }
+.dk-tag.gelb { background: color-mix(in srgb, var(--l4) 22%, var(--s2)); color: var(--l4); }
+.dk-text { max-width: 90ch; margin: 6px 4px 0; color: var(--ink-2); }
+.dk-ort { margin: 4px 4px 2px; }
+/* Was die Seite zeigt: Nummer im Kreis, Name, Text */
+.dk-zone { display: grid; grid-template-columns: 26px 120px minmax(0, 1fr) auto; gap: 10px; align-items: start; padding: 7px 4px; }
+.dk-zone .nr { display: grid; place-items: center; width: 22px; height: 22px; box-sizing: border-box; border: 1.5px solid var(--st-offen); border-radius: 50%; font-size: 11.5px; font-weight: 600; color: var(--ink-3); }
+.dk-zone .dk-zname { font-weight: 600; color: var(--ink-1); }
+.dk-zone > span:nth-child(3) { font-size: 13px; color: var(--ink-3); }
+
+/* Vorlage (Things-Handout): Kopf mit Torte, Notiz und Tags; Teile mit grossem Titel; Ueberblick als drei Karten;
+   Fortschritt mit Phasen und Segmentbalken; Teil 1 in zwei Spalten; Fuss. Nur Variablen des Themas. */
+.lp-torte { flex: none; }
+.lp-notiz { max-width: 980px; margin: 8px 0 0 44px; font-size: 15px; line-height: 1.6; color: var(--ink-3); }
+.lp-notiz b { font-weight: 600; color: var(--ink-1); }
+.lp-tags { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0 0 44px; }
+.lp-kopf .lp-ziel { margin-left: 44px; }
+.lp-h { display: flex; align-items: baseline; margin: 30px 0 6px; padding-bottom: 7px; border-bottom: 1px solid var(--line-1); font-family: var(--font-kopf); font-size: 15px; font-weight: 700; color: var(--l1); }
+.lp-h .zaehler { margin-left: auto; font-family: var(--font); font-size: 12.5px; font-weight: 500; color: var(--ink-3); }
+.lp-teil { display: flex; gap: 14px; align-items: baseline; margin: 56px 0 0; padding-bottom: 10px; border-bottom: 2px solid var(--l1); }
+.lp-teil i { font-family: var(--font-kopf); font-size: 12px; font-style: normal; font-weight: 700; letter-spacing: 2px; text-transform: uppercase; color: var(--l1); }
+.lp-teil strong { font-family: var(--font-kopf); font-size: 26px; font-weight: 700; letter-spacing: -0.3px; color: var(--ink-1); }
+.lp-teil span { margin-left: auto; font-size: 13px; color: var(--ink-3); }
+.lp-teil + .lp-ziel { margin: 12px 0 0; }
+.lp-teil + section .lp-h, .lp-teil + .lp-ziel + section .lp-h { margin-top: 20px; }
+.lp-ueber { margin: 8px 0 0; }
+.lp-karten { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 28px; align-items: start; }
+.lp-ueber-text { max-width: 110ch; margin: 8px 0 0; font-size: 15px; line-height: 1.6; color: var(--ink-2); white-space: pre-line; }
+.lp-verbrauch .lv-verbrauch { padding: 10px 14px; border: 0; border-radius: 12px; background: var(--s2); font-size: 12.5px; }
+.lp-fbalken { margin: 10px 0 0; padding: 14px 18px; border-radius: 12px; background: var(--s2); }
+.fb-kopf { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; }
+.fb-kopf > b { font-family: var(--font-kopf); font-size: 16px; font-weight: 700; color: var(--ink-1); }
+.fb-phasen { display: flex; gap: 4px; }
+.fb-phasen span { padding: 2px 10px; border-radius: 999px; background: var(--s3); font-size: 11.5px; color: var(--st-offen); }
+.fb-phasen span.vor { color: var(--ink-2); }
+.fb-phasen span.an { background: var(--l1); color: var(--auf); font-weight: 600; }
+.fb-stand { margin-left: auto; font-size: 13px; color: var(--ink-3); font-variant-numeric: tabular-nums; }
+.lp-fbalken.aktiv .fb-stand .zustand, .lp-fbalken.fertig .fb-stand { color: var(--ok); }
+.lp-fbalken.ruht { opacity: 0.7; }
+.fb-bar { display: flex; gap: 10px; height: 10px; margin-top: 12px; }
+.fb-welle { display: flex; gap: 3px; min-width: 0; }
+.fb-bar i { flex: 1; border-radius: 3px; background: var(--s3); }
+.fb-wellen { display: flex; gap: 10px; margin-top: 6px; font-size: 11.5px; color: var(--ink-3); font-variant-numeric: tabular-nums; }
+.fb-wellen span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fb-wellen b { color: var(--ink-2); font-weight: 600; }
+.fb-wellen .voll b { color: var(--ok); }
+.fb-bar i.f { background: var(--l1); }
+.fb-bar i.l { background: repeating-linear-gradient(135deg, var(--l1) 0 3px, color-mix(in srgb, var(--l1) 33%, transparent) 3px 6px); }
+.lp-blick { margin-top: 14px; }
+/* Agenten direkt unter Verbrauch, ohne Kasten und ohne eigene Ueberschrift (Nutzerwunsch 2026-10-11) */
+.lp-live.lp-agentenliste { margin: 8px 0 0; padding: 0 4px; border: 0; background: none; }
+.lp-agentenliste .lv-agenten { grid-template-columns: minmax(0, 1fr); }
+/* Alter je Punkt: 1m, 3h, 2d, 1w; am zuletzt geaenderten gelb */
+.alter { flex: none; font-size: 11px; color: var(--ink-3); font-variant-numeric: tabular-nums; }
+.zuletzt .alter { color: var(--warn); font-weight: 600; }
+/* Teil 1 in zwei Spalten wie die Vorlage: links Offen und Anforderungen, rechts Fragen an Sie und Entscheidungen */
+.lp-teil1 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-areas: "of fr" "an en"; gap: 0 64px; align-items: start; }
+.lp-teil1 .lp-ueberblick { display: contents; }
+.lp-teil1 .lp-fragen-sie { grid-area: fr; }
+.lp-teil1 .lp-offen { grid-area: of; }
+.lp-teil1 .lp-anforderungen { grid-area: an; }
+.lp-teil1 .lp-entscheidungen { grid-area: en; }
+.lp-teil1 > *, .lp-teil1 .lp-ueberblick > * { margin-top: 30px; }
+@media (max-width: 900px) {
+  .lp-teil1 { grid-template-columns: minmax(0, 1fr); grid-template-areas: "fr" "of" "an" "en"; }
+  .lp-karten, .dk-spalten { grid-template-columns: minmax(0, 1fr); }
+}
+.lp-teil1 .lp-live { margin: 0; padding: 0; border: 0; background: none; }
+.lp-teil1 .lp-abschnitt h2 { padding-bottom: 7px; font-size: 15px; }
+.lp-teil1 .lp-abschnitt li { padding: 6px 4px; border-left: 0; border-bottom: 1px solid var(--line-1); border-radius: 0; }
+.lp-teil1 .lp-abschnitt li.zuletzt { box-shadow: inset 3px 0 0 var(--warn); }
+.lp-teil1 .blatt .gate { margin-left: auto; padding: 1px 8px; border-radius: 999px; background: var(--s3); color: var(--ink-2); }
+.lp-teil1 .blatt.gate-mensch .gate { background: color-mix(in srgb, var(--l4) 22%, var(--s2)); color: var(--l4); }
+.lp-teil1 .blatt.jetzt .gate { background: color-mix(in srgb, var(--l1) 22%, var(--s2)); color: var(--l1); }
+.lp-az { display: grid; grid-template-columns: 18px auto minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 8px 4px; border-bottom: 1px solid var(--line-1); }
+.lp-az.fr-entschieden { grid-template-columns: 18px auto minmax(0, 1fr) auto auto; }
+.lp-az .id { font-family: var(--mono); font-size: 11.5px; color: var(--ink-3); }
+.lp-az .t { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink-1); }
+.lp-az .wahl { font-weight: 600; color: var(--l1); }
+/* Offene Frage als Karte mit gelbem Rand; jede Option eine Zeile mit Ring */
+.lp-fragen-sie .lp-frage { gap: 2px; margin-top: 12px; padding: 12px 14px 10px; border-radius: 12px; background: var(--s2); box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--l4) 60%, transparent); }
+.lp-fragen-sie .lp-frage .kopf { align-items: center; gap: 4px 10px; padding: 2px 4px 4px; }
+.lp-fragen-sie .lp-frage .kopf .t { font-size: 14.5px; }
+.lp-fragen-sie .lp-frage .kopf .dk-tag { margin-left: auto; }
+.lp-fragen-sie .lp-frage .grund { order: 9; }
+.lp-fragen-sie .lp-frage .opt { gap: 0; padding: 0 0 0 4px; }
+.lp-fragen-sie .lp-frage .opt li { flex-wrap: wrap; gap: 2px 10px; padding: 5px 0; }
+.lp-fragen-sie .lp-frage .opt button { display: inline-flex; gap: 10px; align-items: center; padding: 0; border: 0; background: none; font-weight: 500; color: var(--ink-1); }
+.lp-fragen-sie .lp-frage .opt button::before { content: ""; flex: none; width: 15px; height: 15px; box-sizing: border-box; border: 1.6px solid var(--st-offen); border-radius: 50%; }
+.lp-fragen-sie .lp-frage .opt button:hover::before { border-color: var(--l1); }
+.lp-fragen-sie .lp-frage .opt button.empfohlen { box-shadow: none; }
+.lp-fragen-sie .lp-frage .opt button.empfohlen::before { border-color: var(--l1); }
+.lp-fragen-sie .lp-frage .opt .emp { padding: 1px 8px; border-radius: 999px; background: color-mix(in srgb, var(--l1) 22%, var(--s2)); font-size: 11px; font-weight: 500; letter-spacing: 0; text-transform: none; color: var(--l1); }
+.lp-fragen-sie .lp-frage .opt .bsp { flex-basis: 100%; padding-left: 25px; font-size: 13px; color: var(--ink-3); }
+.lp-fragen-sie .lp-frage .eigen { margin: 6px 0 2px; padding: 0 0 0 4px; }
+.lp-jetzt.wartet { border-left-color: var(--rot); }
+.lp-jetzt.wartet > .t { flex: none; color: var(--rot); }
+/* Fuss: Quelle und Stand links, die Sitzungsdatei rechts */
+.lp-fuss { display: flex; flex-wrap: wrap; gap: 4px 16px; justify-content: space-between; margin-top: 44px; padding-top: 12px; border-top: 1px solid var(--line-1); font-size: 12px; color: var(--st-offen); }
+.lp-dateien { margin-top: 44px; }
+
+/* Handout (?handout=1): feste Breite fuer das Bild, nur Kopf, Listen und Dokumentation */
+:root[data-handout] { width: 1600px; }
+:root[data-handout] body { width: 1600px; }
+:root[data-handout] .lp { max-width: none; padding: 44px 64px 52px; font-size: 14px; }
+:root[data-handout] .dk-diagramm { overflow: hidden; }
+:root[data-handout] .dk-ablauf { min-width: 0; }
+:root[data-handout] .lp-kopf h1 { overflow: visible; white-space: normal; font-size: 34px; }
+:root[data-handout] .lp-ziel { max-width: 120ch; font-size: 15px; line-height: 1.6; cursor: default; }
+.lp-handout .lp-handout-listen { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 64px; margin-top: 22px; }
+.lp-handout .lp-handout-listen .lp-abschnitt h2 { padding-bottom: 7px; font-size: 15px; }
+.lp-handout .lp-abschnitt li { border-left: 0; border-bottom: 1px solid var(--line-1); border-radius: 0; }
+:root[data-handout] .lp-notiz, :root[data-handout] .lp-tags { margin-left: 48px; }
+.lp-handout .lp-abschnitt li { align-items: flex-start; padding: 4px 6px; white-space: normal; overflow: visible; }
+.lp-handout .lp-abschnitt li > .t { flex: 1 1 0; overflow: visible; text-overflow: clip; }
+
+@media print {
+  @page { size: A4 landscape; margin: 8mm; }
+  :root[data-thema] {
+    color-scheme: light;
+    --s1: #fff;
+    --s2: #f3f2ee;
+    --s3: #e6e5df;
+    --ink-1: #1a1a19;
+    --ink-2: #3a3935;
+    --ink-3: #6f6e66;
+    --line-1: #e6e5df;
+    --line-2: #d4d3cc;
+    --warn: #b86e00;
+    --st-offen: #9c9b92;
+    --st-verworfen: #c9c8c0;
+  }
+  html, body { background: #fff; }
+  .lp { max-width: none; padding: 0 !important; font-size: 9px; print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+  .lp-druck-mehr { display: inline; padding: 0 4px; font-size: 8px; color: var(--ink-3); }
+  .lp-abschnitt li[data-aelter], .lp-az[data-aelter] { display: none !important; }
+  .lp-drawer, .seg, .kopieren, [data-mehr], .lp-modal, .lp-zurueck, .bw-vorschau { display: none !important; }
+  .lp-frage .eigen { display: none !important; }
+  .lp-kopf { margin-bottom: 6px; }
+  .lp-kopf h1 { font-size: 15px; }
+  .lp-zeile { font-size: 9px; gap: 2px 10px; }
+  .lp-ziel { max-width: none; }
+  .lp-jetzt { margin-bottom: 6px; padding: 3px 6px; }
+  .lp-jetzt .k { font-size: 8px; }
+  /* Live-Block im Druck knapp: Verbrauch, Kopfzeile und Fortschritt, keine Agentenzeilen; Dateien gar nicht. */
+  .lp-live { gap: 3px; margin-bottom: 6px; padding: 3px 6px; font-size: 8px; }
+  .lp-live .lv-gruppe, .lp-live .lv-agenten, .lp-live .lv-mehr { display: none !important; }
+  .lp-blick { gap: 4px; margin-bottom: 6px; }
+  .lp-kachel { padding: 2px 6px; }
+  .lp-kachel .w { font-size: 13px; }
+  .lv-verbrauch { padding: 2px 6px; font-size: 8px; }
+  .vb-fbar { height: 10px; }
+  .vb-fbar .lab { line-height: 10px; font-size: 7px; }
+  .lp-dateien { display: none !important; }
+  .lp-ueberblick { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px 12px; margin-bottom: 6px; }
+  .lp-abschnitt h2 { margin-bottom: 2px; font-size: 8px; }
+  .lp-abschnitt li { padding: 0 4px; line-height: 1.3; }
+  .lp-abschnitt li > .id, .lp .vw .id { font-size: 8px; }
+  .lp .vw { padding: 0 2px; font-size: 8px; background: none; }
+  .lp-teil { margin-top: 14px; }
+  .lp-teil strong { font-size: 14px; }
+  .lp-h { margin-top: 10px; font-size: 9px; }
+  .lp-teil1 > *, .lp-teil1 .lp-ueberblick > * { margin-top: 8px; }
+  .lp-agentenliste { display: none !important; }
+}
