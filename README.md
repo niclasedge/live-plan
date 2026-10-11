@@ -5,6 +5,18 @@ Agent-Skill für Claude Code und andere Coding-Agenten: Eine Sitzung führt ein 
 Schritte in Bahnen und Wellen sowie Belege. Ein Klick auf eine Option schreibt die Entscheidung
 zurück in die Datei.
 
+## Beispiel
+
+Die Plan-Ansicht im Browser (`live-plan open SLUG`): Fortschritt, offene Fragen mit Optionen,
+Anforderungen und Entscheidungen.
+
+![Plan-Ansicht einer Beispiel-Sitzung](docs/plan.png)
+
+Das Handout derselben Sitzung (`live-plan handout SLUG`): Kopf, Anforderungen, Entscheidungen und
+Dokumentation als PNG und eigenständiges HTML unter `.live-plan/handouts/`.
+
+<img src="docs/handout.png" alt="Handout einer Beispiel-Sitzung" width="800">
+
 ## Installation
 
 Mit dem [skills-Installer](https://skills.sh):
