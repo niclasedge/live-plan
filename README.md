@@ -34,6 +34,23 @@ Von Hand:
 git clone https://github.com/niclasedge/live-plan ~/.claude/skills/live-plan
 ```
 
+### Mod `live-plan-sitzung` (Claude Code)
+
+Der Mod verbindet jede Claude-Code-Sitzung mit dem live-plan. Er legt beim Sitzungsstart per
+`live-plan neu --auto` die Sitzung an und führt ein Register nach
+`~/.cache/live-plan/sitzungen/<id>.json` (Kontext, Kosten, Subagenten, Fortschritt), das die
+Ansicht als Live-Block zeigt. Dazu kommen die Werkzeuge `progress` und `step`, Antworten auf
+`AskUserQuestion` direkt im Browser, der Stand im System-Prompt und der Sprengradius, der riskante
+Bash-Befehle bis zur Freigabe anhält. In einer Terminal-Sitzung:
+
+```
+/plugin install live-plan-sitzung --marketplace niclasedge/live-plan
+```
+
+Mit `y` den Marketplace hinzufügen, dann den Scope wählen. Der Mod sucht das Skript unter
+`~/.claude/skills/live-plan/live-plan` (bzw. unter `$CLAUDE_CONFIG_DIR`); ein anderer Pfad geht über die Option `skript` oder
+`LIVE_PLAN_SKRIPT`. Quelltext und Tests liegen unter [`mod/`](mod/) (`claude plugin test mod`).
+
 ## Voraussetzungen
 
 - [bun](https://bun.sh) für Server und Startskript

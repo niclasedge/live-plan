@@ -1,0 +1,15 @@
+{
+  "name": "live-plan-sitzung",
+  "version": "0.7.0",
+  "author": { "name": "niclasedge" },
+  "description": "Schreibt je Sitzung ein Register nach ~/.cache/live-plan/sitzungen/<id>.json (Kontext, Kosten, Subagenten, Fortschritt) fuer den live-plan-Webserver; Werkzeuge progress und step; AskUserQuestion auch im live-plan-Browser beantwortbar, mit Option oder eigener Antwort, Entscheidungen dort wecken die Sitzung; Sprengradius haelt riskante Bash-Befehle (rm -rf, git reset --hard, Force-Push, Migrationen, but land/discard) mit gemessener Wirkung an: Claude stellt die Freigabe als Frage im Chat (zugleich im live-plan), erst nach Ausfuehren laeuft der Befehl.",
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "skript": {
+      "type": "string",
+      "title": "live-plan-Skript",
+      "description": "Pfad zum live-plan-Skript fuer 'neu --auto'; leer: LIVE_PLAN_SKRIPT, sonst <CLAUDE_CONFIG_DIR oder ~/.claude>/skills/live-plan/live-plan",
+      "default": ""
+    }
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "name": "live-plan",
+  "owner": { "name": "niclasedge" },
+  "description": "live-plan: Mod fuer den Skill live-plan (Sitzungsregister, Fragen im Browser, Sprengradius)",
+  "plugins": [
+    {
+      "name": "live-plan-sitzung",
+      "source": "./mod",
+      "description": "Register je Claude-Sitzung fuer den live-plan: Kontext, Kosten, Subagenten, Fortschritt"
+    }
+  ]
+}
