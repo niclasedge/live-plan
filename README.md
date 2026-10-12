@@ -48,8 +48,9 @@ Bash-Befehle bis zur Freigabe anhält. In einer Terminal-Sitzung:
 ```
 
 Mit `y` den Marketplace hinzufügen, dann den Scope wählen. Der Mod sucht das Skript unter
-`~/.claude/skills/live-plan/live-plan` (bzw. unter `$CLAUDE_CONFIG_DIR`); ein anderer Pfad geht über die Option `skript` oder
-`LIVE_PLAN_SKRIPT`. Quelltext und Tests liegen unter [`mod/`](mod/) (`claude plugin test mod`).
+`~/.claude/skills/live-plan/live-plan` (bzw. unter `$CLAUDE_CONFIG_DIR`); ein anderer Pfad geht
+über die Option `skript` oder `LIVE_PLAN_SKRIPT`. Quelltext und Tests liegen unter [`mod/`](mod/)
+(`claude plugin test mod`).
 
 ## Voraussetzungen
 
