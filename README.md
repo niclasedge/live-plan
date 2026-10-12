@@ -73,17 +73,36 @@ erreichbar; legen Sie keine Secrets in die Sitzungsdatei.
 
 ## Firstmate-Cockpit
 
-`cockpit.ts` zeigt die Worker eines [Firstmate](https://github.com/kunchenguid/firstmate)-Home:
-je Worker Projekt, Art, Modus, Harness, Modell, tmux-Fenster und ob es lebt, letzte Statuszeile
-mit Alter, offene Entscheidungen und Blocker, Inbox, PR, Stand des Worktrees (Zweig, ahead/behind,
-geänderte Dateien, letzter Commit), Brief und die letzten Zeilen des Panes. Darunter stehen
-fertige Befehle zum Öffnen des Fensters und zum Prüfen von Hand. Der Kopf nennt Home, Zahl der
-Worker und die Abschnitte des Backlogs. Das Skript liest nur; es braucht node >= 22.18
+`cockpit.ts` zeigt die Worker eines [Firstmate](https://github.com/kunchenguid/firstmate)-Home.
+Ohne Optionen startet eine Live-Ansicht, die sich alle 5 Sekunden neu aufbaut: je Worker ein
+kleiner Kasten mit Rahmen, im Raster nach Breite des Terminals angeordnet (bei Größenänderung neu).
+Der Rand trägt die id und den Zustand (working, paused, blocked, needs-decision, done, failed, dead
+für ein fehlendes tmux-Fenster) samt Farbe; darin stehen Projekt · Art/Modus, Harness/Modell, die
+letzte Statuszeile mit Alter, der PR, Zweig mit ahead/behind und Zahl geänderter Dateien und der
+Befehl zum Öffnen des tmux-Fensters. Zu Langes wird gekürzt. Kopfzeile: Home, Zahl der Worker,
+Abschnitte des Backlogs; Ende mit `q` oder Strg-C. Farbe nur im Terminal und ohne `NO_COLOR`.
+
+```
+┌─ ● live-plan-cockpit-tui ────────────── working ─┐
+│ live-plan · ship/no-mistakes                     │
+│ claude/default/medium                            │
+│ 2m setup done, branch fm/live-plan-cockpit-tui,… │
+│ fm/live-plan-cockpit-tui ↑0 ↓0 ±1                │
+│ $ tmux attach -t firstmate:fm-live-plan-cockpit… │
+└──────────────────────────────────────────────────┘
+```
+
+`--once` gibt einmal alle Details aus: Projekt, Art, Modus, Harness, Modell, tmux-Fenster und ob es
+lebt, letzte Statuszeile mit Alter, offene Entscheidungen und Blocker, Inbox, PR, Stand des
+Worktrees (Zweig, ahead/behind, geänderte Dateien, letzter Commit), Brief, die letzten Zeilen des
+Panes und darunter fertige Befehle zum Öffnen des Fensters und zum Prüfen von Hand. Das gilt auch,
+wenn die Ausgabe in eine Pipe oder Datei geht. Das Skript liest nur; es braucht node >= 22.18
 (eingebautes Type-Stripping) oder bun.
 
 ```bash
-./cockpit.ts                       # Home aus FM_HOME, sonst /work/firstmate
+./cockpit.ts                       # Live-Ansicht, Home aus FM_HOME, sonst /work/firstmate
 ./cockpit.ts --home ~/firstmate --watch 10
+./cockpit.ts --once                # alle Details und Befehle je Worker
 ./cockpit.ts --json
 ```
 

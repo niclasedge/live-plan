@@ -6,7 +6,8 @@ import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { test } from "node:test";
-import { alter, backlogTitel, klartext, lagebild, offeneFragen, paneZeilen, parseGitStatus, parseMeta, parseStatus, parseStatusZeile, q, zaehleBacklog } from "./cockpit.ts";
+import { alter, backlogTitel, bild, breite, kasten, KASTEN_MIN, klartext, lagebild, offeneFragen, oeffnenKurz, paneZeilen, parseGitStatus, parseMeta, parseStatus, parseStatusZeile, passend, prKurz, q, raster, zaehleBacklog, zustand } from "./cockpit.ts";
+import type { Lagebild, Rahmen, Worker } from "./cockpit.ts";
 
 test("parseMeta: key=value, letzter Eintrag gilt, Wert darf = enthalten", () => {
   const meta = parseMeta("window=firstmate:fm-a\nkind=ship\npr=https://x/y?a=b\nkind=scout\nkaputt\n=leer\n");
@@ -144,6 +145,134 @@ test("lagebild erkennt ein lebendes tmux-Fenster samt Pane-Zeilen", { skip: spaw
   } finally {
     spawnSync("tmux", ["kill-server"]);
     for (const [k, v] of Object.entries(alt)) v === undefined ? delete process.env[k] : (process.env[k] = v);
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+// Ein Worker fuer die Live-Ansicht, ohne Dateien und tmux.
+function beispiel(id: string, statusText: string, mehr: Partial<Worker> = {}): Worker {
+  const zeilen = parseStatus(statusText);
+  return {
+    id,
+    titel: null,
+    meta: { project: "/src/live-plan", kind: "ship", mode: "no-mistakes", harness: "claude", model: "opus", window: `firstmate:fm-${id}`, pr: "https://github.com/o/r/pull/7" },
+    gestartet: 1000,
+    fenster: { ziel: `firstmate:fm-${id}`, lebt: true, befehl: "claude", aktivitaet: 1900, pane: null },
+    busy: null,
+    status: { letzte: zeilen.at(-1) ?? null, zeilen: zeilen.length, offen: offeneFragen(zeilen) },
+    inbox: null,
+    worktree: { pfad: "/wt", da: true, zweig: `fm/${id}`, upstream: "origin/main", ahead: 2, behind: 1, geaendert: 3, letzterCommit: null },
+    daten: { ordner: "/d", dateien: [] },
+    befehle: [],
+    ...mehr,
+  };
+}
+
+const ohneFarbe: Rahmen = { spalten: 100, zeilen: 30, farbe: false, inTmux: false, takt: 5 };
+
+test("breite und passend: kuerzen mit …, auffuellen, breite Zeichen, kein Umbruch", () => {
+  assert.equal(breite("abc"), 3);
+  assert.equal(breite("\x1b[31mab\x1b[0m"), 2);
+  assert.equal(breite("日本"), 4);
+  assert.equal(breite("é"), 1);
+  assert.equal(passend("abc", 5), "abc  ");
+  assert.equal(passend("abcdef", 4), "abc…");
+  assert.equal(passend("a\nb", 3), "a b");
+  assert.equal(passend("日本語", 4), "日… ");
+  assert.equal(breite(passend("日本語", 4)), 4);
+  assert.equal(passend("x", 0), "");
+});
+
+test("raster: Kaesten je Zeile nach Terminalbreite, nie breiter als das Terminal", () => {
+  assert.deepEqual(raster(80, 3), { proZeile: 1, breite: 64 });
+  assert.deepEqual(raster(120, 3), { proZeile: 2, breite: 59 });
+  assert.deepEqual(raster(200, 3), { proZeile: 3, breite: 64 });
+  assert.deepEqual(raster(200, 1), { proZeile: 1, breite: 64 });
+  assert.equal(raster(30, 2).breite, 30);
+  for (const sp of [20, KASTEN_MIN, 81, 123, 250]) {
+    const r = raster(sp, 9);
+    assert.ok(r.proZeile * r.breite + r.proZeile - 1 <= sp, `spalten ${sp}`);
+  }
+});
+
+test("zustand: offene Frage, Blocker, letzte Zeile, totes Fenster", () => {
+  assert.equal(zustand(beispiel("a", "working [at=1]: los")), "working");
+  assert.equal(zustand(beispiel("a", "needs-decision [at=1] [key=k]: ?\nworking [at=2]: weiter")), "needs-decision");
+  assert.equal(zustand(beispiel("a", "blocked [at=1]: x\nresolved [at=2]: ok")), "working");
+  assert.equal(zustand(beispiel("a", "blocked [at=1]: x")), "blocked");
+  assert.equal(zustand(beispiel("a", "paused [at=1]: wartet")), "paused");
+  assert.equal(zustand(beispiel("a", "failed [at=1]: aus")), "failed");
+  const tot = { ziel: "s:w", lebt: false, befehl: null, aktivitaet: null, pane: null };
+  assert.equal(zustand(beispiel("a", "working [at=1]: los", { fenster: tot })), "dead");
+  assert.equal(zustand(beispiel("a", "done [at=1]: fertig", { fenster: tot })), "done");
+  assert.equal(zustand(beispiel("a", "")), "unknown");
+});
+
+test("prKurz und oeffnenKurz", () => {
+  assert.equal(prKurz("https://github.com/o/r/pull/7"), "o/r#7");
+  assert.equal(prKurz("https://gitlab.example/x/-/merge_requests/3"), "https://gitlab.example/x/-/merge_requests/3");
+  const w = beispiel("a", "");
+  assert.equal(oeffnenKurz(w, false), "tmux attach -t firstmate:fm-a");
+  assert.equal(oeffnenKurz(w, true), "tmux switch-client -t firstmate:fm-a");
+  assert.equal(oeffnenKurz(beispiel("a", "", { fenster: { ziel: null, lebt: null, befehl: null, aktivitaet: null, pane: null } }), false), null);
+});
+
+test("kasten: Titel mit Zustand, dichte Zeilen, alle gleich breit, gekuerzt statt umbrochen", () => {
+  const w = beispiel("ein-sehr-langer-auftragsname-der-nicht-passt", `working [at=1700]: ${"lang ".repeat(30)}`);
+  const k = kasten(w, 2000, 44, 6, ohneFarbe);
+  assert.equal(k.length, 8);
+  for (const z of k) assert.equal(breite(z), 44, z);
+  assert.match(k[0], /^┌─ ● ein-sehr-langer.*… ─+ working ─┐$/);
+  assert.equal(k[1], `│ ${passend("live-plan · ship/no-mistakes", 40)} │`);
+  assert.match(k[2], /claude\/opus/);
+  assert.match(k[3], /^│ 5m lang lang .*… │$/);
+  assert.match(k[4], /PR o\/r#7/);
+  assert.match(k[5], /fm\/ein-sehr-langer.*…/);
+  assert.match(k[6], /\$ tmux attach -t firstmate:fm-ein-sehr/);
+  assert.match(k[7], /^└─+┘$/);
+  const bunt = kasten(w, 2000, 44, 6, { ...ohneFarbe, farbe: true });
+  assert.match(bunt[0], /^\x1b\[32m┌/);
+  assert.ok(bunt.every((z) => breite(z) === 44));
+});
+
+test("bild: Kopf, Raster, Fusszeile, passt in das Terminal und zaehlt was nicht passt", () => {
+  const l: Lagebild = {
+    home: "/work/firstmate",
+    zeit: 2000,
+    tmux: true,
+    backlog: { "In flight": 3, Queued: 1 },
+    worker: [beispiel("a", "working [at=1990]: los"), beispiel("b", "needs-decision [at=1500] [key=k]: welche?"), beispiel("c", "done [at=1900]: fertig")],
+  };
+  const voll = bild(l, ohneFarbe);
+  assert.match(voll[0], /^Firstmate-Cockpit {2}\/work\/firstmate {2}3 Worker {2}In flight 3, Queued 1 {2}00:33:20Z$/);
+  assert.match(voll.at(-1) ?? "", /alle 5s · q\/Strg-C beenden · --once/);
+  assert.equal(voll.length, 2 + 2 * 8 + 1);
+  assert.match(voll[2], /┌─ ● a .* working ─┐ ┌─ \? b .* needs-decision ─┐$/);
+  assert.match(voll[10], /┌─ ✓ c .* done ─┐$/);
+  for (const z of voll) assert.ok(breite(z) <= 100, z);
+
+  const eng = bild(l, { ...ohneFarbe, spalten: 50, zeilen: 14 });
+  assert.equal(eng.length, 2 + 8 + 1);
+  assert.match(eng.at(-1) ?? "", /^\+2 Worker passen nicht/);
+  for (const z of eng) assert.ok(breite(z) <= 50, z);
+
+  assert.match(bild({ ...l, worker: [] }, ohneFarbe).join("\n"), /keine Worker/);
+});
+
+test("Aufruf ohne Terminal und mit --once/--json gibt einmal aus und endet", () => {
+  const home = mkdtempSync(path.join(os.tmpdir(), "cockpit-test-"));
+  mkdirSync(path.join(home, "state"), { recursive: true });
+  writeFileSync(path.join(home, "state", "t-1.meta"), "kind=ship\n");
+  const skript = path.join(import.meta.dirname, "cockpit.ts");
+  try {
+    for (const args of [[], ["--once"], ["--json"]]) {
+      const r = spawnSync(process.execPath, [skript, "--home", home, ...args], { encoding: "utf8", timeout: 10000 });
+      assert.equal(r.status, 0, r.stderr);
+      assert.match(r.stdout, args[0] === "--json" ? /"id": "t-1"/ : /== t-1/);
+      assert.doesNotMatch(r.stdout, /\x1b\[\?1049h/);
+    }
+    assert.equal(spawnSync(process.execPath, [skript, "--home", home, "--once", "--json"]).status, 2);
+  } finally {
     rmSync(home, { recursive: true, force: true });
   }
 });
