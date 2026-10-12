@@ -12,11 +12,15 @@
 //   --json         einmal alles als JSON
 //   --keine-pane   bei --once die letzten Zeilen des tmux-Panes nicht lesen
 //
+// Kopf: Captain-Inbox (wartende Notizen in state/inbox/) und Warteschlange (Queued im Backlog) mit
+// dem, worauf jeder Auftrag wartet; im Kasten zeigt "✉ N" ungelesene Nachrichten an den Worker.
+//
 // Nur lesend: das Skript schreibt nichts in state/, data/ oder das Backlog und sendet nichts an
 // Worker. Es liest state/<id>.meta, state/<id>.status, state/<id>.busy-state, state/<id>.inbox/,
-// data/<id>/ und data/backlog.md, fragt tmux nach Fenstern und Panes und git (ohne optionale
-// Index-Sperren) nach dem Stand der Worktrees. bin/fm-crew-state.sh ruft es nicht selbst auf, denn
-// das kann fuer muse-Worker einen Cache in state/ schreiben; der Befehl steht unter "Zustand".
+// state/inbox/, data/<id>/ und data/backlog.md, fragt tmux nach Sitzungen, Fenstern und Panes und
+// git (ohne optionale Index-Sperren) nach dem Stand der Worktrees. bin/fm-crew-state.sh ruft es
+// nicht selbst auf, denn das kann fuer muse-Worker einen Cache in state/ schreiben; der Befehl steht
+// unter "Zustand".
 
 import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
@@ -106,13 +110,94 @@ export function zaehleBacklog(text: string): Record<string, number> {
   return zahl;
 }
 
-// Titel eines Backlog-Eintrags `- [ ] <id> - <titel> (repo: ...)`.
-export function backlogTitel(text: string, id: string): string | null {
+export interface Eintrag {
+  id: string;
+  erledigt: boolean;
+  abschnitt: string | null;
+  titel: string;
+  tags: Record<string, string>;
+  blockiertVon: string[];
+}
+
+// Ein Backlog-Eintrag `- [ ] <id> - <titel> blocked-by: <id> (repo: r) (hold-until: 2026-11-01)`:
+// angehaengte Tags `(name: wert)` / `(since 2026-...)` und `blocked-by:` gehoeren nicht zum Titel.
+export function backlogEintraege(text: string): Eintrag[] {
+  const eintraege: Eintrag[] = [];
+  let abschnitt: string | null = null;
   for (const zeile of text.split("\n")) {
-    const m = /^- \[[ xX]\] (\S+) - (.*)$/.exec(zeile);
-    if (m && m[1] === id) return m[2].replace(/(\s+\([a-z]+[: ][^)]*\))+\s*$/, "").trim();
+    const kopf = /^##\s+(.+?)\s*$/.exec(zeile);
+    if (kopf) abschnitt = kopf[1];
+    const m = /^- \[([ xX])\] (\S+) - (.*?)\s*$/.exec(zeile);
+    if (!m) continue;
+    let titel = m[3];
+    const tags: Record<string, string> = {};
+    const blockiertVon: string[] = [];
+    // erst die Tags am Ende, davor die blocked-by; `(since 2026-...)` traegt ein Datum statt Doppelpunkt
+    for (let t; (t = /\s+\(([a-z][a-z-]*)(?:: *([^)]*)| (\d[^)]*))\)$/.exec(titel)); titel = titel.slice(0, t.index)) tags[t[1]] ??= (t[2] ?? t[3]).trim();
+    for (let b; (b = /\s+blocked-by: (\S+)$/.exec(titel)); titel = titel.slice(0, b.index)) blockiertVon.unshift(b[1]);
+    eintraege.push({ id: m[2], erledigt: m[1] !== " ", abschnitt, titel: titel.trim(), tags, blockiertVon });
   }
-  return null;
+  return eintraege;
+}
+
+// Titel eines Backlog-Eintrags ohne Tags.
+export function backlogTitel(text: string, id: string): string | null {
+  return backlogEintraege(text).find((e) => e.id === id)?.titel ?? null;
+}
+
+// Gruende einer Captain-Haltung kann fm-captain-hold.sh als `fm-hold-v1:<base64>` ablegen.
+export function haltGrund(roh: string): string {
+  const m = /^fm-hold-v1:([A-Za-z0-9+/]*={0,2})$/.exec(roh);
+  if (!m) return roh;
+  const bytes = Buffer.from(m[1], "base64");
+  if (bytes.toString("base64") !== m[1]) return roh;
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    return roh;
+  }
+}
+
+export interface Auftrag {
+  id: string;
+  titel: string;
+  blockiertVon: string[];
+  halt: { grund: string; art: string | null; bis: string | null } | null;
+  wartet: string;
+}
+
+// Auftraege der Warteschlange (Abschnitte Queued und Held) mit dem, worauf sie warten, wie
+// tasks-axi es liest: blocked-by zaehlt nur, solange der andere Eintrag offen im Backlog steht
+// (erledigt oder archiviert gibt frei); eine Haltung mit hold-until gilt bis vor diesem Tag.
+// `heute` ist YYYY-MM-DD.
+export function warteschlange(text: string, heute: string): Auftrag[] {
+  const eintraege = backlogEintraege(text);
+  const offen = new Set(eintraege.filter((e) => !e.erledigt && !/^done$/i.test(e.abschnitt ?? "")).map((e) => e.id));
+  return eintraege
+    .filter((e) => !e.erledigt && /^(queued|held)$/i.test(e.abschnitt ?? ""))
+    .map((e) => {
+      const blockiertVon = e.blockiertVon.filter((id) => offen.has(id));
+      const bis = e.tags["hold-until"] ?? null;
+      const art = e.tags["hold-kind"] ?? null;
+      const gehalten = (e.tags.hold !== undefined || /^held$/i.test(e.abschnitt ?? "")) && !(bis && heute >= bis);
+      const halt = gehalten ? { grund: haltGrund(e.tags.hold ?? ""), art, bis } : null;
+      const gruende: string[] = [];
+      if (blockiertVon.length) gruende.push(`wartet auf ${blockiertVon.join(", ")}`);
+      if (halt?.bis) gruende.push(`bis ${halt.bis}`);
+      else if (halt?.art === "captain") gruende.push("fuer den Captain gehalten");
+      else if (halt) gruende.push(`gehalten${halt.art ? ` (${halt.art})` : ""}${halt.grund ? `: ${halt.grund}` : ""}`);
+      return { id: e.id, titel: e.titel, blockiertVon, halt, wartet: gruende.join("; ") || "bereit" };
+    });
+}
+
+// Wartende Notizen der Captain-Inbox: state/inbox/*.note ohne Punktdateien (wie
+// `fm-inbox.sh status` und `receipts`); handled/ und die versteckten Ordner zaehlen nicht.
+export function wartendeNotizen(namen: { name: string; datei: boolean }[]): string[] {
+  return namen.filter((n) => n.datei && n.name.endsWith(".note") && !n.name.startsWith(".")).map((n) => n.name.slice(0, -5)).sort();
+}
+
+export function notizenText(n: number): string {
+  return n === 0 ? "keine Notiz wartet" : n === 1 ? "1 Notiz wartet" : `${n} Notizen warten`;
 }
 
 // `git status --porcelain=v2 --branch`: Zweig, ahead/behind, Upstream und Zahl geaenderter Pfade.
@@ -210,6 +295,8 @@ export interface Lagebild {
   zeit: number;
   tmux: boolean;
   backlog: Record<string, number> | null;
+  notizen: string[];
+  warteschlange: Auftrag[] | null;
   worker: Worker[];
 }
 
@@ -319,21 +406,25 @@ export function lagebild(o: Optionen): Lagebild {
     ids = readdirSync(state).filter((n) => n.endsWith(".meta") && !n.startsWith(".")).map((n) => n.slice(0, -5)).sort();
   } catch {}
   const backlog = lies(path.join(o.home, "data", "backlog.md"));
-  const sitzungen = new Set(ids.map((id) => parseMeta(lies(path.join(state, `${id}.meta`)) ?? "").window?.split(":")[0]).filter((s): s is string => !!s));
+  // erreichbar ist tmux, wenn der Server antwortet, auch ohne eine Sitzung eines Workers
+  const laufend = lauf("tmux", ["list-sessions", "-F", "#{session_name}"]);
+  const tmux = laufend !== null;
+  const sitzungen = new Set(ids.map((id) => parseMeta(lies(path.join(state, `${id}.meta`)) ?? "").window?.split(":")[0]).filter((s): s is string => !!s && !!laufend?.split("\n").includes(s)));
   const fenster = new Map<string, Fenster>();
-  let tmux = false;
-  for (const s of sitzungen) {
-    const f = tmuxFenster(s);
-    if (f) {
-      tmux = true;
-      for (const [n, w] of f) fenster.set(n, w);
-    }
-  }
+  for (const s of sitzungen) for (const [n, w] of tmuxFenster(s) ?? []) fenster.set(n, w);
+  let notizen: string[] = [];
+  try {
+    notizen = wartendeNotizen(readdirSync(path.join(state, "inbox"), { withFileTypes: true }).map((d) => ({ name: d.name, datei: d.isFile() })));
+  } catch {}
+  const jetzt = new Date();
+  const heute = `${jetzt.getFullYear()}-${String(jetzt.getMonth() + 1).padStart(2, "0")}-${String(jetzt.getDate()).padStart(2, "0")}`;
   return {
     home: o.home,
-    zeit: Math.floor(Date.now() / 1000),
+    zeit: Math.floor(jetzt.getTime() / 1000),
     tmux,
     backlog: backlog === null ? null : zaehleBacklog(backlog),
+    notizen,
+    warteschlange: backlog === null ? null : warteschlange(backlog, heute),
     worker: ids.map((id) => leseWorker(o, id, tmux ? fenster : null, backlog)),
   };
 }
@@ -350,6 +441,11 @@ export function klartext(l: Lagebild): string {
   const zahlen = l.backlog ? Object.entries(l.backlog).map(([k, v]) => `${k} ${v}`).join(", ") : "kein data/backlog.md";
   aus.push(`Firstmate-Cockpit  ${l.home}  ${new Date(jetzt * 1000).toISOString().replace(/\.\d+Z$/, "Z")}`);
   aus.push(`Worker: ${l.worker.length}   Backlog: ${zahlen}${l.tmux ? "" : "   (tmux nicht erreichbar)"}`);
+  aus.push(`Captain-Inbox: ${notizenText(l.notizen.length)}${l.notizen.length ? ` (${l.notizen.join(", ")})` : ""}`);
+  if (l.warteschlange) {
+    aus.push(`Warteschlange: ${l.warteschlange.length ? l.warteschlange.length : "leer"}`);
+    for (const a of l.warteschlange) aus.push(`   ${a.id}  [${a.wartet}]  ${a.titel}`);
+  }
   for (const w of l.worker) {
     const m = w.meta;
     aus.push("");
@@ -514,8 +610,10 @@ export function kasten(w: Worker, jetzt: number, b: number, hoehe: number, r: Ra
   const zs = ZUSTAND[zustand(w)];
   const farbe = (t: string, code: string) => (r.farbe ? `\x1b[${code}m${t}\x1b[0m` : t);
   const innen = b - 4;
-  // `┌─ ● id ──── zustand ─┐`: der Zustand bleibt stehen, die id wird gekuerzt
-  const rechts = b >= 24 ? ` ${zustand(w)} ` : "";
+  // `┌─ ● id ──── ✉ 2 zustand ─┐`: ungelesene Inbox-Nachrichten und Zustand bleiben stehen, die id
+  // wird gekuerzt
+  const post = w.inbox?.wartend.length ? `✉ ${w.inbox.wartend.length} ` : "";
+  const rechts = b >= 24 ? ` ${post}${zustand(w)} ` : "";
   const links = `${passend(` ${zs.zeichen} ${w.id}`, Math.max(0, b - 6 - breite(rechts))).trimEnd()} `;
   const oben = `┌─${links}${"─".repeat(Math.max(0, b - 4 - breite(links) - breite(rechts)))}${rechts}─┐`;
   const zeilen = kastenZeilen(w, jetzt, r.inTmux);
@@ -531,17 +629,32 @@ export function kasten(w: Worker, jetzt: number, b: number, hoehe: number, r: Ra
   ];
 }
 
-// Ein ganzes Bild der Live-Ansicht: Kopfzeile, Kaesten im Raster, Fusszeile; jede Zeile hoechstens
-// `r.spalten` breit und hoechstens `r.zeilen` Zeilen, nicht passende Kaesten zaehlt die Fusszeile.
+export const AUFTRAEGE_LIVE = 3;
+
+// Zeilen unter dem Kopf der Live-Ansicht: Captain-Inbox und Warteschlange, davon hoechstens `max`
+// Auftraege mit dem, worauf sie warten, der Rest als "+N weitere".
+export function lageZeilen(l: Lagebild, max: number): string[] {
+  const ws = l.warteschlange;
+  const z = [`Captain-Inbox: ${notizenText(l.notizen.length)} · Warteschlange: ${ws === null ? "kein Backlog" : ws.length || "leer"}`];
+  for (const a of (ws ?? []).slice(0, max)) z.push(`  ${a.id}  [${a.wartet}]  ${a.titel}`);
+  if (ws && ws.length > max) z.push(`  +${ws.length - max} weitere (--once)`);
+  return z;
+}
+
+// Ein ganzes Bild der Live-Ansicht: Kopfzeile, Inbox und Warteschlange, Kaesten im Raster, Fusszeile;
+// jede Zeile hoechstens `r.spalten` breit und hoechstens `r.zeilen` Zeilen, nicht passende Kaesten
+// zaehlt die Fusszeile.
 export function bild(l: Lagebild, r: Rahmen): string[] {
   const jetzt = l.zeit;
   const uhr = new Date(jetzt * 1000).toISOString().slice(11, 19);
   const zahlen = l.backlog ? Object.entries(l.backlog).map(([k, v]) => `${k} ${v}`).join(", ") : "kein Backlog";
   const kopf = passend(`Firstmate-Cockpit  ${l.home}  ${l.worker.length} Worker  ${zahlen}${l.tmux ? "" : "  tmux nicht erreichbar"}  ${uhr}Z`, r.spalten).trimEnd();
+  const lage = lageZeilen(l, AUFTRAEGE_LIVE).slice(0, Math.max(0, r.zeilen - 3)).map((z) => passend(z, r.spalten).trimEnd());
+  if (r.farbe && l.notizen.length && lage.length) lage[0] = `\x1b[33m${lage[0]}\x1b[0m`;
   const { proZeile, breite: b } = raster(r.spalten, l.worker.length);
   const koerper: string[] = [];
   let gezeigt = 0;
-  const platz = r.zeilen - 3; // Kopf, Leerzeile, Fuss
+  const platz = r.zeilen - 3 - lage.length; // Kopf, Lage, Leerzeile, Fuss
   for (let i = 0; i < l.worker.length; i += proZeile) {
     const reihe = l.worker.slice(i, i + proZeile);
     const hoehe = Math.max(...reihe.map((w) => kastenZeilen(w, jetzt, r.inTmux).length));
@@ -553,7 +666,7 @@ export function bild(l: Lagebild, r: Rahmen): string[] {
   if (!l.worker.length) koerper.push("keine Worker (kein state/*.meta)");
   const rest = l.worker.length - gezeigt;
   const fuss = passend(`${rest > 0 ? `+${rest} Worker passen nicht  ` : ""}alle ${r.takt}s · q/Strg-C beenden · --once alle Details und Befehle · --json`, r.spalten).trimEnd();
-  return [r.farbe ? `\x1b[1m${kopf}\x1b[0m` : kopf, "", ...koerper, r.farbe ? `\x1b[2m${fuss}\x1b[0m` : fuss];
+  return [r.farbe ? `\x1b[1m${kopf}\x1b[0m` : kopf, ...lage, "", ...koerper, r.farbe ? `\x1b[2m${fuss}\x1b[0m` : fuss];
 }
 
 // Live-Ansicht im alternativen Bildschirm; jedes Bild ueberschreibt das vorige an Ort und Stelle

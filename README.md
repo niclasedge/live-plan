@@ -79,25 +79,39 @@ kleiner Kasten mit Rahmen, im Raster nach Breite des Terminals angeordnet (bei G
 Der Rand trägt die id und den Zustand (working, paused, blocked, needs-decision, done, failed, dead
 für ein fehlendes tmux-Fenster) samt Farbe; darin stehen Projekt · Art/Modus, Harness/Modell, die
 letzte Statuszeile mit Alter, der PR, Zweig mit ahead/behind und Zahl geänderter Dateien und der
-Befehl zum Öffnen des tmux-Fensters. Zu Langes wird gekürzt. Kopfzeile: Home, Zahl der Worker,
-Abschnitte des Backlogs; Ende mit `q` oder Strg-C. Farbe nur im Terminal und ohne `NO_COLOR`.
+Befehl zum Öffnen des tmux-Fensters. Liegen ungelesene Nachrichten von Firstmate an den Worker
+(`state/<id>.inbox/*.msg`), steht `✉ N` vor dem Zustand. Zu Langes wird gekürzt. Kopfzeile: Home,
+Zahl der Worker, Abschnitte des Backlogs, `tmux nicht erreichbar`, wenn der tmux-Server nicht
+antwortet. Darunter die Captain-Inbox (wartende Notizen in `state/inbox/`, wie `fm-inbox.sh status`
+sie zählt) und die Warteschlange (`## Queued`, in älteren Backlogs auch `## Held`, in
+`data/backlog.md`): die ersten drei Aufträge mit dem, worauf sie warten (`wartet auf <id>`, solange
+der Eintrag offen ist, `bis <Datum>`, `fuer den Captain gehalten`, `gehalten` oder `bereit`), der
+Rest als `+N weitere`. Ende mit `q` oder Strg-C. Farbe nur im Terminal und ohne `NO_COLOR`.
 
 ```
-┌─ ● live-plan-cockpit-tui ────────────── working ─┐
-│ live-plan · ship/no-mistakes                     │
-│ claude/default/medium                            │
-│ 2m setup done, branch fm/live-plan-cockpit-tui,… │
-│ fm/live-plan-cockpit-tui ↑0 ↓0 ±1                │
-│ $ tmux attach -t firstmate:fm-live-plan-cockpit… │
-└──────────────────────────────────────────────────┘
+Firstmate-Cockpit  /work/firstmate  1 Worker  In flight 1, Queued 5, Done 7  21:36:24Z
+Captain-Inbox: 2 Notizen warten · Warteschlange: 5
+  cockpit-folge-a1  [wartet auf live-plan-cockpit-inbox]  Cockpit: Notizen im --once lesbar
+  airlock-dns-b2  [bis 2026-11-01]  airlock: DNS-Override pruefen
+  fm-hold-c3  [fuer den Captain gehalten]  Firstmate: Wake-Queue entschlacken
+  +2 weitere (--once)
+
+┌─ ● live-plan-cockpit-inbox ──────────────────── ✉ 2 working ─┐
+│ live-plan · ship/no-mistakes                                 │
+│ claude/default/medium                                        │
+│ 3m setup done on fm/live-plan-cockpit-inbox; backlog wait-r… │
+│ fm/live-plan-cockpit-inbox ↑0 ↓0 ±2                          │
+│ $ tmux attach -t firstmate:fm-live-plan-cockpit-inbox        │
+└──────────────────────────────────────────────────────────────┘
 ```
 
-`--once` gibt einmal alle Details aus: Projekt, Art, Modus, Harness, Modell, tmux-Fenster und ob es
-lebt, letzte Statuszeile mit Alter, offene Entscheidungen und Blocker, Inbox, PR, Stand des
-Worktrees (Zweig, ahead/behind, geänderte Dateien, letzter Commit), Brief, die letzten Zeilen des
-Panes und darunter fertige Befehle zum Öffnen des Fensters und zum Prüfen von Hand. Das gilt auch,
-wenn die Ausgabe in eine Pipe oder Datei geht. Das Skript liest nur; es braucht node >= 22.18
-(eingebautes Type-Stripping) oder bun.
+`--once` gibt einmal alle Details aus: die wartenden Notizen mit Namen, die ganze Warteschlange und
+je Worker Projekt, Art, Modus, Harness, Modell, tmux-Fenster und ob es lebt, letzte Statuszeile mit
+Alter, offene Entscheidungen und Blocker, Inbox, PR, Stand des Worktrees (Zweig, ahead/behind,
+geänderte Dateien, letzter Commit), Brief, die letzten Zeilen des Panes und darunter fertige Befehle
+zum Öffnen des Fensters und zum Prüfen von Hand. Das gilt auch, wenn die Ausgabe in eine Pipe oder
+Datei geht. `--json` enthält dasselbe (`notizen`, `warteschlange`, je Worker `inbox`). Das
+Skript liest nur; es braucht node >= 22.18 (eingebautes Type-Stripping) oder bun.
 
 ```bash
 ./cockpit.ts                       # Live-Ansicht, Home aus FM_HOME, sonst /work/firstmate

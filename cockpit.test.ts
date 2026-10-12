@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { test } from "node:test";
-import { alter, backlogTitel, bild, breite, kasten, KASTEN_MIN, klartext, lagebild, offeneFragen, oeffnenKurz, paneZeilen, parseGitStatus, parseMeta, parseStatus, parseStatusZeile, passend, prKurz, q, raster, zaehleBacklog, zustand } from "./cockpit.ts";
+import { alter, AUFTRAEGE_LIVE, backlogEintraege, backlogTitel, bild, breite, kasten, KASTEN_MIN, haltGrund, klartext, lagebild, lageZeilen, notizenText, offeneFragen, oeffnenKurz, paneZeilen, parseGitStatus, parseMeta, parseStatus, parseStatusZeile, passend, prKurz, q, raster, wartendeNotizen, warteschlange, zaehleBacklog, zustand } from "./cockpit.ts";
 import type { Lagebild, Rahmen, Worker } from "./cockpit.ts";
 
 test("parseMeta: key=value, letzter Eintrag gilt, Wert darf = enthalten", () => {
@@ -73,6 +73,80 @@ test("zaehleBacklog und backlogTitel", () => {
   assert.equal(backlogTitel(text, "fehlt"), null);
 });
 
+test("backlogEintraege: Tags, blocked-by und Bindestrich-Tags gehoeren nicht zum Titel", () => {
+  const [e] = backlogEintraege("## Queued\n- [ ] a-1 - Titel (mit Klammer) blocked-by: b-2 blocked-by: c-3 (repo: r) (since 2026-10-12) (hold: x y) (hold-until: 2026-11-01)\n");
+  assert.deepEqual(e, {
+    id: "a-1",
+    erledigt: false,
+    abschnitt: "Queued",
+    titel: "Titel (mit Klammer)",
+    tags: { repo: "r", since: "2026-10-12", hold: "x y", "hold-until": "2026-11-01" },
+    blockiertVon: ["b-2", "c-3"],
+  });
+  assert.equal(backlogTitel("- [ ] h-1 - Gehalten (repo: r) (hold: grund) (hold-kind: captain)", "h-1"), "Gehalten");
+});
+
+test("warteschlange: worauf jeder Auftrag wartet, wie tasks-axi es liest", () => {
+  const text = [
+    "## In flight",
+    "- [ ] laeuft-a - Laeuft (repo: r) (since 2026-10-12)",
+    "## Queued",
+    "- [ ] dep-b - Haengt ab blocked-by: laeuft-a (repo: r) (since 2026-10-12)",
+    "- [ ] frei-c - Abhaengigkeit fertig blocked-by: fertig-x blocked-by: archiviert-y (repo: r)",
+    "- [ ] datum-d - Ab Datum (repo: r) (hold: nach dem Start) (hold-until: 2026-11-01)",
+    "- [ ] alt-e - Datum vorbei (repo: r) (hold: x) (hold-until: 2026-10-12)",
+    "- [ ] cap-f - Captain (repo: r) (hold: fm-hold-v1:RnJhZ2UgKG9mZmVuKQ==) (hold-kind: captain)",
+    "- [ ] ext-g - Extern (repo: r) (hold: wartet auf Lieferant) (hold-kind: external)",
+    "- [ ] beides-h - Beides blocked-by: dep-b (repo: r) (hold: y) (hold-kind: captain)",
+    "- [ ] bereit-i - Bereit (repo: r) (priority: 1)",
+    "## Held",
+    "- [ ] alt-j - Alter Held-Abschnitt (repo: r)",
+    "## Done",
+    "- [x] fertig-x - Fertig (done 2026-10-12)",
+  ].join("\n");
+  const ws = warteschlange(text, "2026-10-12");
+  assert.deepEqual(
+    ws.map((a) => [a.id, a.wartet]),
+    [
+      ["dep-b", "wartet auf laeuft-a"],
+      ["frei-c", "bereit"],
+      ["datum-d", "bis 2026-11-01"],
+      ["alt-e", "bereit"],
+      ["cap-f", "fuer den Captain gehalten"],
+      ["ext-g", "gehalten (external): wartet auf Lieferant"],
+      ["beides-h", "wartet auf dep-b; fuer den Captain gehalten"],
+      ["bereit-i", "bereit"],
+      ["alt-j", "gehalten"],
+    ],
+  );
+  assert.deepEqual(ws[4].halt, { grund: "Frage (offen)", art: "captain", bis: null });
+  assert.equal(ws[1].titel, "Abhaengigkeit fertig");
+  assert.equal(warteschlange("## In flight\n## Done\n", "2026-10-12").length, 0);
+});
+
+test("haltGrund: fm-hold-v1 dekodieren, alles andere wie es ist", () => {
+  assert.equal(haltGrund(`fm-hold-v1:${Buffer.from("Zeile 1\nä").toString("base64")}`), "Zeile 1\nä");
+  assert.equal(haltGrund("einfacher Grund"), "einfacher Grund");
+  assert.equal(haltGrund("fm-hold-v1:kein base64!"), "fm-hold-v1:kein base64!");
+  assert.equal(haltGrund(`fm-hold-v1:${Buffer.from([0xff, 0xfe]).toString("base64")}`), "fm-hold-v1://4=");
+});
+
+test("wartendeNotizen und notizenText: nur *.note-Dateien direkt in state/inbox/", () => {
+  const namen = [
+    { name: "20261012-a.note", datei: true },
+    { name: "handled", datei: false },
+    { name: ".announced", datei: false },
+    { name: ".versteckt.note", datei: true },
+    { name: "ordner.note", datei: false },
+    { name: "x.tmp", datei: true },
+    { name: "20261011-b.note", datei: true },
+  ];
+  assert.deepEqual(wartendeNotizen(namen), ["20261011-b", "20261012-a"]);
+  assert.equal(notizenText(0), "keine Notiz wartet");
+  assert.equal(notizenText(1), "1 Notiz wartet");
+  assert.equal(notizenText(2), "2 Notizen warten");
+});
+
 test("parseGitStatus: Zweig, Upstream, ahead/behind, geaenderte Pfade", () => {
   const st = parseGitStatus("# branch.oid abc\n# branch.head fm/x\n# branch.upstream origin/fm/x\n# branch.ab +2 -1\n1 .M N... 100644 100644 100644 a b f.ts\n? neu.ts\n");
   assert.deepEqual(st, { zweig: "fm/x", upstream: "origin/fm/x", ahead: 2, behind: 1, geaendert: 2 });
@@ -101,7 +175,10 @@ test("lagebild und klartext auf einem Beispiel-Home ohne tmux-Fenster", () => {
   writeFileSync(path.join(home, "state", "t-1.status"), "working [at=1000]: los\nneeds-decision [at=1100] [key=k]: welche Option?\n");
   writeFileSync(path.join(home, "state", "t-1.inbox", "001.msg"), "x");
   writeFileSync(path.join(home, "data", "t-1", "brief.md"), "# Brief");
-  writeFileSync(path.join(home, "data", "backlog.md"), "## In flight\n- [ ] t-1 - Testaufgabe (repo: r)\n## Queued\n");
+  writeFileSync(path.join(home, "data", "backlog.md"), "## In flight\n- [ ] t-1 - Testaufgabe (repo: r)\n## Queued\n- [ ] q-2 - Danach blocked-by: t-1 (repo: r)\n");
+  mkdirSync(path.join(home, "state", "inbox", "handled"), { recursive: true });
+  writeFileSync(path.join(home, "state", "inbox", "n1.note"), "x");
+  writeFileSync(path.join(home, "state", "inbox", "handled", "n0.note"), "x");
 
   const l = lagebild({ home, pane: false });
   assert.equal(l.worker.length, 1);
@@ -112,13 +189,17 @@ test("lagebild und klartext auf einem Beispiel-Home ohne tmux-Fenster", () => {
   assert.equal(w.status.offen.length, 1);
   assert.deepEqual(w.inbox, { wartend: ["001.msg"], erledigt: 0 });
   assert.equal(w.worktree?.da, false);
-  assert.deepEqual(l.backlog, { "In flight": 1, Queued: 0 });
+  assert.deepEqual(l.backlog, { "In flight": 1, Queued: 1 });
+  assert.deepEqual(l.notizen, ["n1"]);
+  assert.deepEqual(l.warteschlange?.map((a) => [a.id, a.wartet]), [["q-2", "wartet auf t-1"]]);
   const zwecke = w.befehle.map((b) => b.zweck);
   assert.ok(zwecke.includes("oeffnen") && zwecke.includes("PR") && zwecke.includes("brief"));
   assert.ok(!zwecke.includes("Worktree"));
 
   const text = klartext(l);
-  assert.match(text, /Worker: 1 {3}Backlog: In flight 1, Queued 0/);
+  assert.match(text, /Worker: 1 {3}Backlog: In flight 1, Queued 1/);
+  assert.match(text, /^Captain-Inbox: 1 Notiz wartet \(n1\)$/m);
+  assert.match(text, /^Warteschlange: 1\n {3}q-2 {2}\[wartet auf t-1\] {2}Danach$/m);
   assert.match(text, /ENTSCHEID +\[k\] .*welche Option\?/);
   assert.match(text, /PR: +gh pr view https:\/\/github.com\/o\/r\/pull\/7 --web/);
   rmSync(home, { recursive: true, force: true });
@@ -142,6 +223,30 @@ test("lagebild erkennt ein lebendes tmux-Fenster samt Pane-Zeilen", { skip: spaw
     assert.ok(w.fenster.befehl);
     assert.ok(w.fenster.aktivitaet && w.fenster.aktivitaet > 0);
     assert.ok(w.fenster.pane?.includes("hallo-pane"));
+  } finally {
+    spawnSync("tmux", ["kill-server"]);
+    for (const [k, v] of Object.entries(alt)) v === undefined ? delete process.env[k] : (process.env[k] = v);
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("lagebild: tmux erreichbar heisst Server antwortet, auch ohne Worker", { skip: spawnSync("tmux", ["-V"]).status !== 0 && "tmux fehlt" }, () => {
+  const home = mkdtempSync(path.join(os.tmpdir(), "cockpit-test-"));
+  const alt = { TMUX_TMPDIR: process.env.TMUX_TMPDIR, TMUX: process.env.TMUX };
+  process.env.TMUX_TMPDIR = home;
+  delete process.env.TMUX;
+  try {
+    mkdirSync(path.join(home, "state"), { recursive: true });
+    assert.equal(lagebild({ home, pane: false }).tmux, false, "kein Server");
+    assert.equal(spawnSync("tmux", ["new-session", "-d", "-s", "cockpit-leer", "sleep 30"]).status, 0);
+    const l = lagebild({ home, pane: false });
+    assert.equal(l.worker.length, 0);
+    assert.equal(l.tmux, true);
+    assert.doesNotMatch(klartext(l), /tmux nicht erreichbar/);
+    assert.doesNotMatch(bild(l, { spalten: 100, zeilen: 30, farbe: false, inTmux: false, takt: 5 })[0], /tmux nicht erreichbar/);
+    // Sitzung eines Workers fehlt, Server laeuft: das Fenster gilt als weg, nicht als unbekannt
+    writeFileSync(path.join(home, "state", "t-1.meta"), "window=gibt-es-nicht:fm-t-1\n");
+    assert.equal(lagebild({ home, pane: false }).worker[0].fenster.lebt, false);
   } finally {
     spawnSync("tmux", ["kill-server"]);
     for (const [k, v] of Object.entries(alt)) v === undefined ? delete process.env[k] : (process.env[k] = v);
@@ -230,6 +335,11 @@ test("kasten: Titel mit Zustand, dichte Zeilen, alle gleich breit, gekuerzt stat
   assert.match(k[5], /fm\/ein-sehr-langer.*…/);
   assert.match(k[6], /\$ tmux attach -t firstmate:fm-ein-sehr/);
   assert.match(k[7], /^└─+┘$/);
+  const post = kasten(beispiel("a", "working [at=1]: los", { inbox: { wartend: ["001.msg", "002.msg"], erledigt: 1 } }), 2000, 44, 6, ohneFarbe);
+  assert.match(post[0], /^┌─ ● a ─+ ✉ 2 working ─┐$/);
+  assert.equal(breite(post[0]), 44);
+  assert.doesNotMatch(kasten(beispiel("a", "", { inbox: { wartend: [], erledigt: 3 } }), 2000, 44, 6, ohneFarbe)[0], /✉/);
+  assert.match(kasten(beispiel("ein-sehr-langer-auftragsname-der-nicht-passt", "", { inbox: { wartend: ["1.msg"], erledigt: 0 } }), 2000, 44, 6, ohneFarbe)[0], /….* ✉ 1 unknown ─┐$/);
   const bunt = kasten(w, 2000, 44, 6, { ...ohneFarbe, farbe: true });
   assert.match(bunt[0], /^\x1b\[32m┌/);
   assert.ok(bunt.every((z) => breite(z) === 44));
@@ -241,22 +351,49 @@ test("bild: Kopf, Raster, Fusszeile, passt in das Terminal und zaehlt was nicht 
     zeit: 2000,
     tmux: true,
     backlog: { "In flight": 3, Queued: 1 },
+    notizen: [],
+    warteschlange: [],
     worker: [beispiel("a", "working [at=1990]: los"), beispiel("b", "needs-decision [at=1500] [key=k]: welche?"), beispiel("c", "done [at=1900]: fertig")],
   };
   const voll = bild(l, ohneFarbe);
   assert.match(voll[0], /^Firstmate-Cockpit {2}\/work\/firstmate {2}3 Worker {2}In flight 3, Queued 1 {2}00:33:20Z$/);
+  assert.equal(voll[1], "Captain-Inbox: keine Notiz wartet · Warteschlange: leer");
   assert.match(voll.at(-1) ?? "", /alle 5s · q\/Strg-C beenden · --once/);
-  assert.equal(voll.length, 2 + 2 * 8 + 1);
-  assert.match(voll[2], /┌─ ● a .* working ─┐ ┌─ \? b .* needs-decision ─┐$/);
-  assert.match(voll[10], /┌─ ✓ c .* done ─┐$/);
+  assert.equal(voll.length, 3 + 2 * 8 + 1);
+  assert.match(voll[3], /┌─ ● a .* working ─┐ ┌─ \? b .* needs-decision ─┐$/);
+  assert.match(voll[11], /┌─ ✓ c .* done ─┐$/);
   for (const z of voll) assert.ok(breite(z) <= 100, z);
 
   const eng = bild(l, { ...ohneFarbe, spalten: 50, zeilen: 14 });
-  assert.equal(eng.length, 2 + 8 + 1);
+  assert.equal(eng.length, 3 + 8 + 1);
   assert.match(eng.at(-1) ?? "", /^\+2 Worker passen nicht/);
   for (const z of eng) assert.ok(breite(z) <= 50, z);
 
   assert.match(bild({ ...l, worker: [] }, ohneFarbe).join("\n"), /keine Worker/);
+});
+
+test("lageZeilen und bild: Captain-Inbox und Warteschlange mit +N weitere", () => {
+  const auftrag = (id: string, wartet: string) => ({ id, titel: `Titel ${id}`, blockiertVon: [], halt: null, wartet });
+  const ws = [auftrag("a", "wartet auf x"), auftrag("b", "bis 2026-11-01"), auftrag("c", "fuer den Captain gehalten"), auftrag("d", "bereit"), auftrag("e", "bereit")];
+  const l: Lagebild = { home: "/h", zeit: 2000, tmux: true, backlog: { Queued: 5 }, notizen: ["n1", "n2"], warteschlange: ws, worker: [beispiel("w", "working [at=1990]: los")] };
+  assert.deepEqual(lageZeilen(l, AUFTRAEGE_LIVE), [
+    "Captain-Inbox: 2 Notizen warten · Warteschlange: 5",
+    "  a  [wartet auf x]  Titel a",
+    "  b  [bis 2026-11-01]  Titel b",
+    "  c  [fuer den Captain gehalten]  Titel c",
+    "  +2 weitere (--once)",
+  ]);
+  assert.deepEqual(lageZeilen({ ...l, warteschlange: ws.slice(0, 3) }, 3).length, 4);
+  assert.deepEqual(lageZeilen({ ...l, notizen: [], warteschlange: null }, 3), ["Captain-Inbox: keine Notiz wartet · Warteschlange: kein Backlog"]);
+  const b = bild(l, ohneFarbe);
+  assert.deepEqual(b.slice(1, 6), lageZeilen(l, AUFTRAEGE_LIVE));
+  assert.equal(b[6], "");
+  assert.match(b[7], /^┌─ ● w /);
+  assert.match(bild(l, { ...ohneFarbe, farbe: true })[1], /^\x1b\[33mCaptain-Inbox: 2 Notizen warten/);
+  // ein kurzes Terminal kuerzt die Lage, statt ueber den Rand zu laufen
+  const kurz = bild(l, { ...ohneFarbe, zeilen: 6 });
+  assert.ok(kurz.length <= 6, String(kurz.length));
+  assert.match(kurz.at(-1) ?? "", /^\+1 Worker passen nicht/);
 });
 
 test("Aufruf ohne Terminal und mit --once/--json gibt einmal aus und endet", () => {
