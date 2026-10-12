@@ -340,6 +340,14 @@ test("kasten: Titel mit Zustand, dichte Zeilen, alle gleich breit, gekuerzt stat
   assert.equal(breite(post[0]), 44);
   assert.doesNotMatch(kasten(beispiel("a", "", { inbox: { wartend: [], erledigt: 3 } }), 2000, 44, 6, ohneFarbe)[0], /✉/);
   assert.match(kasten(beispiel("ein-sehr-langer-auftragsname-der-nicht-passt", "", { inbox: { wartend: ["1.msg"], erledigt: 0 } }), 2000, 44, 6, ohneFarbe)[0], /….* ✉ 1 unknown ─┐$/);
+  for (const b of [24, 25, 26, 30]) {
+    for (const n of [1, 12]) {
+      const eng = kasten(beispiel("a", "needs-decision [at=1]: frage", { inbox: { wartend: Array.from({ length: n }, (_, i) => `${i}.msg`), erledigt: 0 } }), 2000, b, 3, ohneFarbe);
+      for (const z of eng) assert.equal(breite(z), b, `b=${b} n=${n}: ${z}`);
+      assert.match(eng[0], / needs-decision ─┐$/);
+    }
+  }
+  assert.doesNotMatch(kasten(beispiel("a", "needs-decision [at=1]: frage", { inbox: { wartend: ["1.msg"], erledigt: 0 } }), 2000, 24, 3, ohneFarbe)[0], /✉/);
   const bunt = kasten(w, 2000, 44, 6, { ...ohneFarbe, farbe: true });
   assert.match(bunt[0], /^\x1b\[32m┌/);
   assert.ok(bunt.every((z) => breite(z) === 44));

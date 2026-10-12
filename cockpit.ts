@@ -613,7 +613,8 @@ export function kasten(w: Worker, jetzt: number, b: number, hoehe: number, r: Ra
   // `┌─ ● id ──── ✉ 2 zustand ─┐`: ungelesene Inbox-Nachrichten und Zustand bleiben stehen, die id
   // wird gekuerzt
   const post = w.inbox?.wartend.length ? `✉ ${w.inbox.wartend.length} ` : "";
-  const rechts = b >= 24 ? ` ${post}${zustand(w)} ` : "";
+  const mitPost = ` ${post}${zustand(w)} `;
+  const rechts = b < 24 ? "" : breite(mitPost) <= b - 5 ? mitPost : ` ${zustand(w)} `;
   const links = `${passend(` ${zs.zeichen} ${w.id}`, Math.max(0, b - 6 - breite(rechts))).trimEnd()} `;
   const oben = `┌─${links}${"─".repeat(Math.max(0, b - 4 - breite(links) - breite(rechts)))}${rechts}─┐`;
   const zeilen = kastenZeilen(w, jetzt, r.inTmux);
