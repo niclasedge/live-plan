@@ -78,7 +78,8 @@ je Worker Projekt, Art, Modus, Harness, Modell, tmux-Fenster und ob es lebt, let
 mit Alter, offene Entscheidungen und Blocker, Inbox, PR, Stand des Worktrees (Zweig, ahead/behind,
 geänderte Dateien, letzter Commit), Brief und die letzten Zeilen des Panes. Darunter stehen
 fertige Befehle zum Öffnen des Fensters und zum Prüfen von Hand. Der Kopf nennt Home, Zahl der
-Worker und die Abschnitte des Backlogs. Das Skript liest nur; es braucht node 22 oder bun.
+Worker und die Abschnitte des Backlogs. Das Skript liest nur; es braucht node >= 22.18
+(eingebautes Type-Stripping) oder bun.
 
 ```bash
 ./cockpit.ts                       # Home aus FM_HOME, sonst /work/firstmate

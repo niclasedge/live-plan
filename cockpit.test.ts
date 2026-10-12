@@ -30,6 +30,10 @@ test("parseStatusZeile: ohne Zeit, kaputte Zeit, doppeltes at, Fortsetzungstext"
   assert.equal(parseStatusZeile("working [at=1] [at=2]: x")?.at, null);
   assert.equal(parseStatusZeile("Reason: kein Verb"), null);
   assert.equal(parseStatusZeile("10:30 Uhr"), null);
+  assert.equal(parseStatusZeile("blocked by flaky CI: retrying"), null);
+  assert.equal(parseStatusZeile("working on X: details"), null);
+  assert.equal(parseStatusZeile("[key=a] blocked [at=1] extra: x"), null);
+  assert.equal(parseStatusZeile("[key=a] blocked [corr=c d]: x")?.key, "a");
   assert.equal(parseStatusZeile("ohne Doppelpunkt"), null);
 });
 

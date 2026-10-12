@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // cockpit: Firstmate-Cockpit, zeigt die Worker eines Firstmate-Home mit allen greifbaren Details und
-// je Worker fertige Befehle zum Oeffnen und Pruefen. Laeuft mit node 22 (Type-Stripping) und bun.
+// je Worker fertige Befehle zum Oeffnen und Pruefen. Laeuft mit node >= 22.18 (eingebautes
+// Type-Stripping) und bun.
 //
 //   cockpit [--home PFAD] [--json] [--watch [SEK]] [--keine-pane]
 //
@@ -48,15 +49,15 @@ export interface StatusZeile {
 const VERBEN = ["working", "paused", "blocked", "needs-decision", "resolved", "done", "failed", "captain-held"];
 
 // `verb [at=<epoch>] [key=<slug>] [corr=...]: text`; Tags in beliebiger Reihenfolge, nur vor dem
-// ersten Doppelpunkt. Eine Zeile ohne erkanntes Verb ist Fortsetzungstext und liefert null.
+// ersten Doppelpunkt. Eine Zeile, deren Kopf nicht genau ein Verb plus Tags ist, ist
+// Fortsetzungstext und liefert null.
 export function parseStatusZeile(roh: string): StatusZeile | null {
   const zeile = roh.replace(/\r$/, "");
   const i = zeile.indexOf(":");
   if (i < 0) return null;
   const kopf = zeile.slice(0, i).trim();
-  const woerter = kopf.split(/\s+/).filter(Boolean);
-  const verb = woerter.find((w) => !w.startsWith("["));
-  if (!verb || !VERBEN.includes(verb)) return null;
+  const verb = kopf.replace(/\[[^\]]*\]/g, " ").trim();
+  if (!VERBEN.includes(verb)) return null;
   let at: number | null = null;
   let key: string | null = null;
   let atZahl = 0;
