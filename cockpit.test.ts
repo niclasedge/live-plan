@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
 import { test } from "node:test";
 import { alter, backlogTitel, klartext, lagebild, offeneFragen, paneZeilen, parseGitStatus, parseMeta, parseStatus, parseStatusZeile, q, zaehleBacklog } from "./cockpit.ts";
 
@@ -120,4 +121,29 @@ test("lagebild und klartext auf einem Beispiel-Home ohne tmux-Fenster", () => {
   assert.match(text, /ENTSCHEID +\[k\] .*welche Option\?/);
   assert.match(text, /PR: +gh pr view https:\/\/github.com\/o\/r\/pull\/7 --web/);
   rmSync(home, { recursive: true, force: true });
+});
+
+test("lagebild erkennt ein lebendes tmux-Fenster samt Pane-Zeilen", { skip: spawnSync("tmux", ["-V"]).status !== 0 && "tmux fehlt" }, () => {
+  const home = mkdtempSync(path.join(os.tmpdir(), "cockpit-test-"));
+  const alt = { TMUX_TMPDIR: process.env.TMUX_TMPDIR, TMUX: process.env.TMUX };
+  process.env.TMUX_TMPDIR = home;
+  delete process.env.TMUX;
+  try {
+    assert.equal(spawnSync("tmux", ["new-session", "-d", "-s", "cockpit-test", "-n", "fm-t-1", "sh -c 'echo hallo-pane; sleep 30'"]).status, 0);
+    mkdirSync(path.join(home, "state"), { recursive: true });
+    writeFileSync(path.join(home, "state", "t-1.meta"), "window=cockpit-test:fm-t-1\n");
+    let w = lagebild({ home, pane: true }).worker[0];
+    for (let i = 0; i < 20 && !w.fenster.pane?.includes("hallo-pane"); i++) {
+      spawnSync("sleep", ["0.1"]);
+      w = lagebild({ home, pane: true }).worker[0];
+    }
+    assert.equal(w.fenster.lebt, true);
+    assert.ok(w.fenster.befehl);
+    assert.ok(w.fenster.aktivitaet && w.fenster.aktivitaet > 0);
+    assert.ok(w.fenster.pane?.includes("hallo-pane"));
+  } finally {
+    spawnSync("tmux", ["kill-server"]);
+    for (const [k, v] of Object.entries(alt)) v === undefined ? delete process.env[k] : (process.env[k] = v);
+    rmSync(home, { recursive: true, force: true });
+  }
 });

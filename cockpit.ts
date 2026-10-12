@@ -177,11 +177,13 @@ interface Fenster {
 }
 
 function tmuxFenster(sitzung: string): Map<string, Fenster> | null {
-  const aus = lauf("tmux", ["list-windows", "-t", sitzung, "-F", "#{window_name}\t#{pane_current_command}\t#{pane_pid}\t#{window_activity}\t#{pane_dead}"]);
+  // tmux gibt Steuerzeichen wie Tab als "_" aus, daher "|" als Trenner und der freie Fenstername zuletzt
+  const aus = lauf("tmux", ["list-windows", "-t", sitzung, "-F", "#{pane_current_command}|#{pane_pid}|#{window_activity}|#{pane_dead}|#{window_name}"]);
   if (aus === null) return null;
   const fenster = new Map<string, Fenster>();
   for (const zeile of aus.split("\n").filter(Boolean)) {
-    const [name, befehl, pid, akt, tot] = zeile.split("\t");
+    const [befehl, pid, akt, tot, ...rest] = zeile.split("|");
+    const name = rest.join("|");
     fenster.set(name, { name, befehl, pid, aktivitaet: Number(akt), tot: tot === "1" });
   }
   return fenster;
