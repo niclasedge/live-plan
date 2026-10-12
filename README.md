@@ -80,9 +80,9 @@ Der Rand trägt die id und den Zustand (working, paused, blocked, needs-decision
 für ein fehlendes tmux-Fenster) samt Farbe; darin stehen Projekt · Art/Modus, Harness/Modell, die
 letzte Statuszeile mit Alter, der PR, Zweig mit ahead/behind und Zahl geänderter Dateien und der
 Befehl zum Öffnen des tmux-Fensters. Liegen ungelesene Nachrichten von Firstmate an den Worker
-(`state/<id>.inbox/*.msg`), steht `✉ N` vor dem Zustand. Zu Langes wird gekürzt. Kopfzeile: Home,
-Zahl der Worker, Abschnitte des Backlogs, `tmux nicht erreichbar`, wenn der tmux-Server nicht
-antwortet. Darunter die Captain-Inbox (wartende Notizen in `state/inbox/`, wie `fm-inbox.sh status`
+(`state/<id>.inbox/*.msg`), steht `✉ N` vor dem Zustand, wenn der Rand Platz hat. Zu Langes wird
+gekürzt. Kopfzeile: Home, Zahl der Worker, Abschnitte des Backlogs, `tmux nicht erreichbar`, wenn
+der tmux-Server nicht antwortet. Darunter die Captain-Inbox (wartende Notizen in `state/inbox/`, wie `fm-inbox.sh status`
 sie zählt) und die Warteschlange (`## Queued`, in älteren Backlogs auch `## Held`, in
 `data/backlog.md`): die ersten drei Aufträge mit dem, worauf sie warten (`wartet auf <id>`, solange
 der Eintrag offen ist, `bis <Datum>`, `fuer den Captain gehalten`, `gehalten` oder `bereit`), der
