@@ -1,14 +1,16 @@
 #!/usr/bin/env node
-// cockpit: Firstmate-Cockpit, zeigt die Worker eines Firstmate-Home mit allen greifbaren Details und
-// je Worker fertige Befehle zum Oeffnen und Pruefen. Laeuft mit node >= 22.18 (eingebautes
-// Type-Stripping) und bun.
+// cockpit: Firstmate-Cockpit, zeigt die Worker eines Firstmate-Home. Vorgabe ist eine Live-Ansicht
+// mit einem kleinen Kasten je Worker, alle 5 Sekunden neu aufgebaut; --once gibt einmal alle
+// greifbaren Details und je Worker fertige Befehle zum Oeffnen und Pruefen aus. Laeuft mit
+// node >= 22.18 (eingebautes Type-Stripping) und bun.
 //
-//   cockpit [--home PFAD] [--json] [--watch [SEK]] [--keine-pane]
+//   cockpit [--home PFAD] [--watch [SEK] | --once | --json] [--keine-pane]
 //
 //   --home PFAD    Firstmate-Home; sonst FM_HOME, sonst /work/firstmate
-//   --json         alles als JSON statt Klartext
-//   --watch [SEK]  Anzeige alle SEK Sekunden (Vorgabe 5) neu aufbauen, Ende mit Strg-C
-//   --keine-pane   die letzten Zeilen des tmux-Panes nicht lesen
+//   --watch [SEK]  Live-Ansicht alle SEK Sekunden (Vorgabe 5) neu aufbauen, Ende mit q oder Strg-C
+//   --once         einmal alle Details und Befehle als Klartext (Vorgabe, wenn stdout kein Terminal ist)
+//   --json         einmal alles als JSON
+//   --keine-pane   bei --once die letzten Zeilen des tmux-Panes nicht lesen
 //
 // Nur lesend: das Skript schreibt nichts in state/, data/ oder das Backlog und sendet nichts an
 // Worker. Es liest state/<id>.meta, state/<id>.status, state/<id>.busy-state, state/<id>.inbox/,
@@ -387,6 +389,217 @@ export function klartext(l: Lagebild): string {
   return aus.join("\n");
 }
 
+// --- Live-Ansicht --------------------------------------------------------------------------
+
+// Spalten, die ein Zeichen im Terminal belegt: Kombinationszeichen 0, breite Zeichen und Emoji 2.
+function zeichenBreite(z: string): number {
+  if (/^[\p{Mn}\p{Me}\u200b-\u200f\ufe0f]$/u.test(z)) return 0;
+  const c = z.codePointAt(0) ?? 0;
+  if (c < 0x20 || (c >= 0x7f && c < 0xa0)) return 0;
+  if (/^\p{Extended_Pictographic}$/u.test(z) && c >= 0x1f000) return 2;
+  if ((c >= 0x1100 && c <= 0x115f) || (c >= 0x2e80 && c <= 0xa4cf) || (c >= 0xac00 && c <= 0xd7a3) || (c >= 0xf900 && c <= 0xfaff) || (c >= 0xfe30 && c <= 0xfe4f) || (c >= 0xff00 && c <= 0xff60) || (c >= 0xffe0 && c <= 0xffe6) || (c >= 0x20000 && c <= 0x3fffd)) return 2;
+  return 1;
+}
+
+export function breite(text: string): number {
+  let b = 0;
+  for (const z of text.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, "")) b += zeichenBreite(z);
+  return b;
+}
+
+// Auf hoechstens `max` Spalten kuerzen (mit "…") und mit Leerzeichen auf genau `max` auffuellen;
+// Steuerzeichen und Zeilenumbrueche werden zu Leerzeichen, denn ein Kasten bricht nie um.
+export function passend(text: string, max: number): string {
+  if (max <= 0) return "";
+  const sauber = text.replace(/[\x00-\x1f\x7f]+/g, " ");
+  if (breite(sauber) <= max) return sauber + " ".repeat(max - breite(sauber));
+  let aus = "";
+  let b = 0;
+  for (const z of sauber) {
+    const zb = zeichenBreite(z);
+    if (b + zb > max - 1) break;
+    aus += z;
+    b += zb;
+  }
+  return `${aus}…${" ".repeat(max - 1 - b)}`;
+}
+
+export type Zustand = "working" | "paused" | "blocked" | "needs-decision" | "done" | "failed" | "dead" | "unknown";
+
+// Ein Zustand je Worker: offene Frage vor offenem Blocker vor letzter Statuszeile; ein fehlendes
+// tmux-Fenster heisst "dead", solange der Worker nicht fertig oder gescheitert ist.
+export function zustand(w: Worker): Zustand {
+  const offen = w.status.offen.map((o) => o.verb);
+  const verb = w.status.letzte?.verb;
+  let z: Zustand = offen.includes("needs-decision")
+    ? "needs-decision"
+    : offen.includes("blocked")
+      ? "blocked"
+      : verb === "done" || verb === "failed" || verb === "paused" || verb === "working"
+        ? verb
+        : verb === "captain-held"
+          ? "paused"
+          : verb === "resolved"
+            ? "working"
+            : "unknown";
+  if (w.fenster.lebt === false && z !== "done" && z !== "failed") z = "dead";
+  return z;
+}
+
+const ZUSTAND: Record<Zustand, { zeichen: string; farbe: string }> = {
+  working: { zeichen: "●", farbe: "32" },
+  paused: { zeichen: "‖", farbe: "34" },
+  blocked: { zeichen: "■", farbe: "31" },
+  "needs-decision": { zeichen: "?", farbe: "33" },
+  done: { zeichen: "✓", farbe: "36" },
+  failed: { zeichen: "✗", farbe: "31" },
+  dead: { zeichen: "†", farbe: "35" },
+  unknown: { zeichen: "·", farbe: "90" },
+};
+
+// https://github.com/o/r/pull/7 -> o/r#7, sonst die Adresse wie sie ist.
+export function prKurz(pr: string): string {
+  const m = /github\.com\/([^/]+\/[^/]+)\/pull\/(\d+)/.exec(pr);
+  return m ? `${m[1]}#${m[2]}` : pr;
+}
+
+// Der eine Befehl im Kasten: das tmux-Fenster oeffnen (in tmux umschalten, sonst anhaengen).
+export function oeffnenKurz(w: Worker, inTmux: boolean): string | null {
+  const ziel = w.fenster.ziel;
+  if (!ziel) return null;
+  if ((w.meta.backend || "tmux") !== "tmux") return `# ${w.meta.backend} ${ziel}`;
+  return `tmux ${inTmux ? "switch-client" : "attach"} -t ${q(ziel)}`;
+}
+
+// Innenzeilen eines Kastens ohne Farbe; die Titelzeile steht im oberen Rand.
+export function kastenZeilen(w: Worker, jetzt: number, inTmux: boolean): string[] {
+  const m = w.meta;
+  const z: string[] = [];
+  const projekt = m.project ? path.basename(m.project) : null;
+  z.push([projekt, [m.kind, m.mode].filter(Boolean).join("/")].filter(Boolean).join(" · ") || "-");
+  z.push([m.harness, m.model, m.effort].filter(Boolean).join("/") || "-");
+  const s = w.status.letzte;
+  z.push(s ? `${s.at === null ? "?" : alter(jetzt - s.at)} ${s.text}` : "noch keine Statuszeile");
+  if (m.pr) z.push(`PR ${prKurz(m.pr)}`);
+  const wt = w.worktree;
+  if (wt?.da) {
+    const ab = wt.ahead === null ? "" : ` ↑${wt.ahead} ↓${wt.behind}`;
+    z.push(`${wt.zweig ?? "?"}${ab}${wt.geaendert ? ` ±${wt.geaendert}` : ""}`);
+  } else if (m.branch) z.push(`${m.branch}${wt ? " (kein Worktree)" : ""}`);
+  const b = oeffnenKurz(w, inTmux);
+  if (b) z.push(`$ ${b}`);
+  return z;
+}
+
+export interface Rahmen {
+  spalten: number;
+  zeilen: number;
+  farbe: boolean;
+  inTmux: boolean;
+  takt: number;
+}
+
+export const KASTEN_MIN = 40;
+export const KASTEN_MAX = 64;
+
+// Wie viele Kaesten nebeneinander passen und wie breit jeder ist (Abstand eine Spalte).
+export function raster(spalten: number, anzahl: number): { proZeile: number; breite: number } {
+  const proZeile = Math.max(1, Math.min(anzahl || 1, Math.floor((spalten + 1) / (KASTEN_MIN + 1))));
+  const b = Math.min(KASTEN_MAX, Math.floor((spalten + 1) / proZeile) - 1);
+  return { proZeile, breite: Math.max(4, Math.min(b, spalten)) };
+}
+
+// Ein Kasten als Zeilen gleicher Breite, auf `hoehe` Innenzeilen aufgefuellt.
+export function kasten(w: Worker, jetzt: number, b: number, hoehe: number, r: Rahmen): string[] {
+  const zs = ZUSTAND[zustand(w)];
+  const farbe = (t: string, code: string) => (r.farbe ? `\x1b[${code}m${t}\x1b[0m` : t);
+  const innen = b - 4;
+  // `┌─ ● id ──── zustand ─┐`: der Zustand bleibt stehen, die id wird gekuerzt
+  const rechts = b >= 24 ? ` ${zustand(w)} ` : "";
+  const links = `${passend(` ${zs.zeichen} ${w.id}`, Math.max(0, b - 6 - breite(rechts))).trimEnd()} `;
+  const oben = `┌─${links}${"─".repeat(Math.max(0, b - 4 - breite(links) - breite(rechts)))}${rechts}─┐`;
+  const zeilen = kastenZeilen(w, jetzt, r.inTmux);
+  while (zeilen.length < hoehe) zeilen.push("");
+  const rand = farbe("│", zs.farbe);
+  return [
+    farbe(oben, zs.farbe),
+    ...zeilen.slice(0, hoehe).map((z) => {
+      const t = passend(z, innen);
+      return `${rand} ${z.startsWith("$ ") ? farbe(t, "2") : t} ${rand}`;
+    }),
+    farbe(`└${"─".repeat(b - 2)}┘`, zs.farbe),
+  ];
+}
+
+// Ein ganzes Bild der Live-Ansicht: Kopfzeile, Kaesten im Raster, Fusszeile; jede Zeile hoechstens
+// `r.spalten` breit und hoechstens `r.zeilen` Zeilen, nicht passende Kaesten zaehlt die Fusszeile.
+export function bild(l: Lagebild, r: Rahmen): string[] {
+  const jetzt = l.zeit;
+  const uhr = new Date(jetzt * 1000).toISOString().slice(11, 19);
+  const zahlen = l.backlog ? Object.entries(l.backlog).map(([k, v]) => `${k} ${v}`).join(", ") : "kein Backlog";
+  const kopf = passend(`Firstmate-Cockpit  ${l.home}  ${l.worker.length} Worker  ${zahlen}${l.tmux ? "" : "  tmux nicht erreichbar"}  ${uhr}Z`, r.spalten).trimEnd();
+  const { proZeile, breite: b } = raster(r.spalten, l.worker.length);
+  const koerper: string[] = [];
+  let gezeigt = 0;
+  const platz = r.zeilen - 3; // Kopf, Leerzeile, Fuss
+  for (let i = 0; i < l.worker.length; i += proZeile) {
+    const reihe = l.worker.slice(i, i + proZeile);
+    const hoehe = Math.max(...reihe.map((w) => kastenZeilen(w, jetzt, r.inTmux).length));
+    if (koerper.length + hoehe + 2 > platz) break;
+    const kaesten = reihe.map((w) => kasten(w, jetzt, b, hoehe, r));
+    for (let z = 0; z < hoehe + 2; z++) koerper.push(kaesten.map((k) => k[z]).join(" "));
+    gezeigt += reihe.length;
+  }
+  if (!l.worker.length) koerper.push("keine Worker (kein state/*.meta)");
+  const rest = l.worker.length - gezeigt;
+  const fuss = passend(`${rest > 0 ? `+${rest} Worker passen nicht  ` : ""}alle ${r.takt}s · q/Strg-C beenden · --once alle Details und Befehle · --json`, r.spalten).trimEnd();
+  return [r.farbe ? `\x1b[1m${kopf}\x1b[0m` : kopf, "", ...koerper, r.farbe ? `\x1b[2m${fuss}\x1b[0m` : fuss];
+}
+
+// Live-Ansicht im alternativen Bildschirm; jedes Bild ueberschreibt das vorige an Ort und Stelle
+// (Cursor nach oben links, je Zeile Rest loeschen, danach alles darunter), ohne Flackern.
+async function live(o: Optionen, takt: number): Promise<void> {
+  const aus = process.stdout;
+  const tty = !!aus.isTTY;
+  const rahmen = (): Rahmen => ({
+    spalten: aus.columns || 80,
+    zeilen: aus.rows || 24,
+    farbe: tty && process.env.NO_COLOR === undefined,
+    inTmux: !!process.env.TMUX,
+    takt,
+  });
+  let l = lagebild(o);
+  const zeichne = () => aus.write(`\x1b[H${bild(l, rahmen()).map((z) => `${z}\x1b[K`).join("\r\n")}\x1b[J`);
+  let fertig = () => {};
+  const ende = new Promise<void>((r) => (fertig = r));
+  const aufraeumen = () => {
+    if (process.stdin.isTTY) process.stdin.setRawMode(false);
+    aus.write("\x1b[0m\x1b[?25h\x1b[?1049l");
+  };
+  process.on("exit", aufraeumen);
+  const beenden = () => fertig();
+  process.on("SIGINT", beenden);
+  process.on("SIGTERM", beenden);
+  aus.on("resize", zeichne);
+  if (process.stdin.isTTY) {
+    process.stdin.setRawMode(true);
+    process.stdin.on("data", (d) => {
+      if (/[q\x03\x04]/.test(d.toString())) beenden();
+    });
+  }
+  aus.write("\x1b[?1049h\x1b[?25l\x1b[2J");
+  zeichne();
+  const uhr = setInterval(() => {
+    l = lagebild(o);
+    zeichne();
+  }, takt * 1000);
+  await ende;
+  clearInterval(uhr);
+  aufraeumen();
+  process.removeListener("exit", aufraeumen);
+  process.exit(0);
+}
+
 // --- Aufruf --------------------------------------------------------------------------------
 
 function hilfe(code: number): never {
@@ -401,6 +614,7 @@ function hilfe(code: number): never {
 async function main(argv: string[]): Promise<void> {
   let home = process.env.FM_HOME || "/work/firstmate";
   let json = false;
+  let once = false;
   let watch: number | null = null;
   const o = { pane: true };
   for (let i = 0; i < argv.length; i++) {
@@ -408,6 +622,7 @@ async function main(argv: string[]): Promise<void> {
     if (a === "--home") home = argv[++i] ?? hilfe(2);
     else if (a.startsWith("--home=")) home = a.slice(7);
     else if (a === "--json") json = true;
+    else if (a === "--once") once = true;
     else if (a === "--watch") watch = /^\d+$/.test(argv[i + 1] ?? "") ? Math.max(1, Number(argv[++i])) : 5;
     else if (a === "--keine-pane") o.pane = false;
     else if (a === "-h" || a === "--help") hilfe(0);
@@ -420,17 +635,17 @@ async function main(argv: string[]): Promise<void> {
     console.error(`cockpit: ${home} ist kein Firstmate-Home (kein state/)`);
     process.exit(1);
   }
-  const optionen: Optionen = { home, ...o };
-  for (;;) {
-    const l = lagebild(optionen);
-    const text = json ? JSON.stringify(l, null, 2) : klartext(l);
-    if (watch === null) {
-      console.log(text);
-      return;
-    }
-    process.stdout.write(`\x1b[H\x1b[2J${text}\n`);
-    await new Promise((r) => setTimeout(r, watch * 1000));
+  if ([json, once, watch !== null].filter(Boolean).length > 1) {
+    console.error("cockpit: --watch, --once und --json schliessen sich aus");
+    hilfe(2);
   }
+  if (json || once || (watch === null && !process.stdout.isTTY)) {
+    const l = lagebild({ home, ...o });
+    console.log(json ? JSON.stringify(l, null, 2) : klartext(l));
+    return;
+  }
+  // die Kaesten zeigen keine Pane-Zeilen, also tmux nicht danach fragen
+  await live({ home, pane: false }, watch ?? 5);
 }
 
 const selbst = (() => {
