@@ -210,7 +210,14 @@ body { margin: 0; background: var(--s1); font-family: var(--font); }
 .lv-verbrauch .mod { color: var(--ink-2); }
 /* Rechner: Last des Servers, gleiche Dichte wie der Verbrauch; die Prozesslisten klappen auf. */
 .lp-host .lv-verbrauch { padding: 10px 14px; border: 0; border-radius: 12px; background: var(--s2); font-size: 12.5px; }
-.lv-host .vb-sitzung { gap: 14px; }
+.hw-balken { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px 22px; }
+@media (max-width: 620px) { .hw-balken { grid-template-columns: minmax(0, 1fr); } }
+.hw-reihe { display: grid; grid-template-columns: 44px minmax(0, 1fr) auto; gap: 8px; align-items: center; min-width: 0; white-space: nowrap; }
+.hw-reihe .k { font-size: 11px; overflow: hidden; text-overflow: ellipsis; }
+.hw-reihe .lv-bar { width: auto; }
+.hw-reihe .w { text-align: right; }
+.hw-reihe.gelb .w { color: var(--warn); }
+.hw-reihe.rot .w { color: var(--rot); }
 .hw-details > summary { cursor: pointer; font-size: 10px; color: var(--ink-3); }
 .hw-prozesse { width: 100%; margin-top: 4px; border-collapse: collapse; font-size: 11px; }
 .hw-prozesse caption { text-align: left; font-size: 10px; color: var(--ink-3); }

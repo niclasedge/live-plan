@@ -178,11 +178,32 @@ test("hostTeil: ohne verfuegbare Daten leer, sonst dicht mit ~ und Top-Listen", 
   });
   const h = a.hostTeil(true);
   assert.match(h, /data-testid="sitzung-host"/);
-  assert.match(h, /37%/);
-  assert.match(h, /1\.50 1\.25 0\.75/);
-  assert.match(h, /7\.8 GB/);
+  assert.match(h, /37 %/);
+  assert.match(h, /title="Last 1\.50 1\.25 0\.75"/);
+  assert.match(h, /8000 MB|7\.8 \/ 15\.6 GB/);
   assert.match(h, /\/tmp/);
   assert.match(h, /<details class="hw-details" open>/);
   assert.match(h, /~\/git\/&lt;x&gt;/);
   assert.doesNotMatch(a.hostTeil(false), /details class="hw-details" open/);
+});
+
+test("hostTeil: vier Balken, gelb ab 60 %, rot ab 80 %", () => {
+  const a = ansicht();
+  a.setzeHost({
+    verfuegbar: true, cpu: 17, last: [0.5, 1, 2], kerne: 8,
+    speicher: { gesamtMb: 16000, benutztMb: 9600, verfuegbarMb: 6400, swapGesamtMb: 4000, swapBenutztMb: 1000 },
+    platten: [{ pfad: "/tmp", gesamtMb: 4000, benutztMb: 21, prozent: 1 }, { pfad: "/", gesamtMb: 128000, benutztMb: 105000, prozent: 82 }],
+    topCpu: [], topRam: [],
+  });
+  const h = a.hostTeil(false);
+  const reihen = h.match(/<div class="hw-reihe[^"]*"/g) ?? [];
+  assert.deepEqual(reihen, ['<div class="hw-reihe"', '<div class="hw-reihe gelb"', '<div class="hw-reihe"', '<div class="hw-reihe rot"']);
+  assert.match(h, /<span class="k">CPU<\/span>/);
+  assert.match(h, /<span class="k">Platte<\/span>/);
+  assert.match(h, /17 %/);
+  assert.match(h, /9\.4 \/ 15\.6 GB/);
+  assert.match(h, /21 MB \/ 3\.9 GB/);
+  assert.match(h, /102\.5 \/ 125 GB/);
+  assert.match(h, /title="Swap 1\.0 GB|title="Swap 1000 MB/);
+  assert.match(h, /style="width:82%"/);
 });
