@@ -703,8 +703,9 @@ async function aboAntwort(): Promise<{ abo: ReturnType<typeof aboLage> | null; f
 // --- Firstmate (GET .../firstmate) ---------------------------------------------------------------
 //
 // Ist die Wurzel der Sitzung ein Firstmate-Home, liest firstmate.ts in einem eigenen Prozess Worker,
-// Captain-Inbox, Warteschlange und Projekte; so halten git und tmux keine Anfrage auf. Das Ergebnis gilt FM_VORHALTEN_MS, danach liefert die Anfrage den
-// alten Stand und ein neuer entsteht im Hintergrund; nur der allererste wird abgewartet. Die offenen
+// Captain-Inbox, Warteschlange und Projekte; so halten git und tmux keine Anfrage auf. Das Ergebnis
+// gilt FM_VORHALTEN_MS, danach liefert die Anfrage den alten Stand und ein neuer entsteht im
+// Hintergrund; nur der allererste wird abgewartet. Die offenen
 // PRs je Projekt fragt gh ebenfalls im Hintergrund (je Aufruf 10 s, 60 s vorgehalten); was noch
 // fehlt, heisst `laedt`, ein Fehler `unbekannt`. Pane-Inhalte liest firstmate.ts nie. Ein Token aus
 // `gh auth token` geht nur in die Umgebung des einen gh-Aufrufs, nie in eine Antwort oder ein Log.
