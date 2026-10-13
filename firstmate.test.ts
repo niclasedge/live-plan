@@ -218,7 +218,7 @@ test("firstmateSicht: Zustand, Verlauf, nur sichtbare Meta, Projekte; ohne tmux-
   try {
     const status = Array.from({ length: VERLAUF_N + 3 }, (_, i) => `working [at=${1000 + i}]: Schritt ${i}`);
     status.push("needs-decision [at=2000] [key=k]: welche Option?");
-    writeFileSync(path.join(home, "state", "t-1.meta"), "project=/p/alpha\nkind=ship\nharness=claude\ntasktmp=/tmp/x\ngeheim=1\n");
+    writeFileSync(path.join(home, "state", "t-1.meta"), "project=/p/alpha\nkind=ship\nharness=claude\ntasktmp=/tmp/x\ngeheim=1\nendpoint_task_id=e-9\n");
     writeFileSync(path.join(home, "state", "t-1.status"), status.join("\n") + "\n");
     writeFileSync(path.join(home, "data", "backlog.md"), "## In flight\n- [ ] t-1 - Testaufgabe (repo: alpha)\n## Queued\n- [ ] q-2 - Danach blocked-by: t-1 (repo: alpha)\n");
     mkdirSync(path.join(home, "projects", "alpha"), { recursive: true });
@@ -231,10 +231,10 @@ test("firstmateSicht: Zustand, Verlauf, nur sichtbare Meta, Projekte; ohne tmux-
     assert.equal(w.titel, "Testaufgabe");
     assert.equal(w.verlauf.length, VERLAUF_N);
     assert.equal(w.verlauf.at(-1)?.text, "welche Option?");
-    // die ganze Meta, nur ohne Geheimes; Kind steht im Kopf der Karte, der Rest unter alle
-    assert.deepEqual(w.meta, { project: "/p/alpha", kind: "ship", harness: "claude", tasktmp: "/tmp/x", geheim: "1" });
+    // nur bekannte Schluessel (unbekanntes "geheim" fehlt); Kind steht im Kopf der Karte, der Rest unter alle
+    assert.deepEqual(w.meta, { project: "/p/alpha", kind: "ship", harness: "claude", tasktmp: "/tmp/x", endpoint_task_id: "e-9" });
     assert.deepEqual(w.metaGruppen.find((g) => g.name === "Lauf")?.eintraege, [{ schluessel: "harness", wert: "claude" }]);
-    assert.deepEqual(w.metaGruppen.find((g) => g.name === "alle")?.eintraege, [{ schluessel: "geheim", wert: "1" }, { schluessel: "tasktmp", wert: "/tmp/x" }]);
+    assert.deepEqual(w.metaGruppen.find((g) => g.name === "alle")?.eintraege, [{ schluessel: "endpoint_task_id", wert: "e-9" }, { schluessel: "tasktmp", wert: "/tmp/x" }]);
     assert.equal("pane" in w.fenster, false);
     assert.deepEqual(s.warteschlange?.map((a) => [a.id, a.wartet]), [["q-2", "wartet auf t-1"]]);
     assert.deepEqual(s.projekte.map((p) => [p.name, p.worker]), [["alpha", ["t-1"]]]);
@@ -271,11 +271,19 @@ test("metaGruppen: Ort, Lauf, Liefern in fester Reihenfolge, der Rest unter alle
   assert.deepEqual(g[3].eintraege.map((e) => e.schluessel), ["busy_gen", "spawn_gen", "tasktmp"]);
 });
 
+test("metaGruppen: unbekannte Schluessel fehlen samt ihren Werten, auch ohne Geheimnis im Namen", () => {
+  const g = metaGruppen({ project: "/p/alpha", remote_url: "https://u:pw-geheim@host/r.git", zusatz: "ok", busy_gen: "g1.2" });
+  const text = JSON.stringify(g);
+  assert.equal(text.includes("pw-geheim"), false);
+  assert.equal(text.includes("zusatz"), false);
+  assert.deepEqual(g.at(-1)?.eintraege, [{ schluessel: "busy_gen", wert: "g1.2" }]);
+});
+
 test("metaGruppen: Schluessel mit token, secret, key, pass oder auth fallen weg, samt ihren Werten", () => {
-  const g = metaGruppen({ project: "/p/alpha", api_token: "t0ken-geheim", GH_SECRET: "s3cr3t-geheim", ssh_key_path: "/keys/geheim", db_password: "pw-geheim", auth_header: "Basic-geheim", zusatz: "ok" });
+  const g = metaGruppen({ project: "/p/alpha", api_token: "t0ken-geheim", GH_SECRET: "s3cr3t-geheim", ssh_key_path: "/keys/geheim", db_password: "pw-geheim", auth_header: "Basic-geheim", tasktmp: "ok" });
   const text = JSON.stringify(g);
   for (const wert of ["t0ken-geheim", "s3cr3t-geheim", "/keys/geheim", "pw-geheim", "Basic-geheim"]) assert.equal(text.includes(wert), false, wert);
-  assert.deepEqual(g.at(-1)?.eintraege, [{ schluessel: "zusatz", wert: "ok" }]);
+  assert.deepEqual(g.at(-1)?.eintraege, [{ schluessel: "tasktmp", wert: "ok" }]);
 });
 
 test("firstmateSicht und --json: Geheimes aus der Meta fehlt in der Sicht und in der Ausgabe", () => {

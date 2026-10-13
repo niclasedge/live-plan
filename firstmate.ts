@@ -588,7 +588,10 @@ const META_GRUPPEN: [string, string[]][] = [
   ["Liefern", ["mode", "yolo", "pr"]],
 ];
 const META_KOPF = ["kind"];
-// Schluessel, die nach einem Geheimnis aussehen, zeigt die Sicht nie (Verteidigung in der Tiefe).
+// Interne Schluessel, die nur unter "alle" erscheinen.
+const META_INTERN = ["endpoint_task_id", "tasktmp", "busy_gen", "spawn_gen"];
+const META_SICHTBAR = new Set([...META_GRUPPEN.flatMap(([, keys]) => keys), ...META_KOPF, ...META_INTERN]);
+// Schluessel, die nach einem Geheimnis aussehen, zeigt die Sicht nie, auch wenn sie bekannt waeren (zweite Sperre).
 const META_GEHEIM = /token|secret|key|pass|auth/i;
 export const VERLAUF_N = 12;
 
@@ -602,10 +605,10 @@ export interface MetaGruppe {
   eintraege: MetaEintrag[];
 }
 
-// Die Meta ohne Geheimes und ohne leere Werte.
+// Die Meta nur mit bekannten Schluesseln, ohne Geheimes und ohne leere Werte.
 export function sichtbareMeta(meta: Meta): Meta {
   const sicht: Meta = {};
-  for (const [k, v] of Object.entries(meta)) if (!META_GEHEIM.test(k) && v) sicht[k] = v;
+  for (const [k, v] of Object.entries(meta)) if (META_SICHTBAR.has(k) && !META_GEHEIM.test(k) && v) sicht[k] = v;
   return sicht;
 }
 
