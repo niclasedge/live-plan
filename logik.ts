@@ -1449,14 +1449,24 @@ function juengsteZuerst<T extends { id: string }>(liste: T[], z: Zeiten): T[] {
     .map((x) => x.e);
 }
 
+/** Offen ist eine Frage ohne entscheidung, auch eine aus AskUserQuestion oder Sprengradius (die Mod schreibt sie in die YAML). */
+export function offeneFragen(plan: Plan): string[] {
+  return plan.fragen.filter((f) => !f.entscheidung).map((f) => f.id);
+}
+
+/** Zahl der offenen Fragen fuer die Liste; null, wenn die Datei kein YAML-Objekt ist (kaputt, halb geschrieben, leer). */
+export function offeneFragenZahl(roh: unknown): number | null {
+  return vergleichbar(roh) ? offeneFragen(pruefePlan(roh).plan).length : null;
+}
+
 export function ueberblick(plan: Plan, z: Zeiten): Ueberblick {
-  const offeneFragen = plan.fragen.filter((f) => !f.entscheidung).map((f) => f.id);
+  const wartend = offeneFragen(plan);
   const laufend = jetzt(plan, z);
   const offen = plan.stand?.offen ?? [];
   const blattJetzt = offen.find((b) => b.gate === "jetzt");
   const zeile: JetztZeile =
-    offeneFragen.length > 0
-      ? { art: "fragen", fragen: offeneFragen }
+    wartend.length > 0
+      ? { art: "fragen", fragen: wartend }
       : laufend.length > 0
         ? { art: "laeuft", schritte: laufend }
         : blattJetzt

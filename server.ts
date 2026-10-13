@@ -33,6 +33,7 @@ import {
   jetzt,
   neueEntscheidungen,
   neuesteId,
+  offeneFragenZahl,
   ORDNER,
   prozessLayout,
   pruefeEigeneAntwort,
@@ -264,19 +265,20 @@ async function liesKoerper(req: Request, grenze: number): Promise<string | null>
 
 const SITZUNGSDATEI = /^([A-Za-z0-9._-]+)\.yaml$/;
 
-function titelVon(pfad: string, slug: string): string {
+/** Titel und Zahl der offenen Fragen aus einem Lesen; eine kaputte Datei gibt den Slug und keine Zahl, nie einen Fehler. */
+function kopfVon(pfad: string, slug: string): { titel: string; offeneFragen: number | null } {
   try {
     const roh = Bun.YAML.parse(liesSicher(pfad) ?? "") as { titel?: unknown } | null;
-    return roh && typeof roh === "object" && typeof roh.titel === "string" ? roh.titel : slug;
+    return { titel: roh && typeof roh === "object" && typeof roh.titel === "string" ? roh.titel : slug, offeneFragen: offeneFragenZahl(roh) };
   } catch {
-    return slug;
+    return { titel: slug, offeneFragen: null };
   }
 }
 
 const REGISTERDATEI = /^([A-Za-z0-9._-]+)\.json$/;
 
 function listeSitzungen() {
-  const eintraege: { repo: string; slug: string; titel: string; geaendert: string; pfad: string | null; live: boolean; beendet: boolean }[] = [];
+  const eintraege: { repo: string; slug: string; titel: string; offeneFragen: number | null; geaendert: string; pfad: string | null; live: boolean; beendet: boolean }[] = [];
   const repos: { wurzel: string; repo: string }[] = [];
   for (const wurzel of WURZELN) {
     try {
@@ -308,7 +310,7 @@ function listeSitzungen() {
       }
       // The same repo name under a later root is shadowed, as in ortVon.
       if (eintraege.some((e) => e.repo === repo && e.slug === slug)) continue;
-      eintraege.push({ repo, slug, titel: titelVon(pfad, slug), geaendert, pfad: path.join(wurzel, repo), live: false, beendet: false });
+      eintraege.push({ repo, slug, ...kopfVon(pfad, slug), geaendert, pfad: path.join(wurzel, repo), live: false, beendet: false });
     }
   }
   let ids: string[] = [];
@@ -328,8 +330,8 @@ function listeSitzungen() {
       Object.assign(da, { pfad: ort.repoPfad, live: true, beendet: r.beendet !== undefined, geaendert: um > da.geaendert ? um : da.geaendert });
       continue;
     }
-    const titel = ort.yaml ? titelVon(ort.yaml, id) : typeof r.fortschritt?.titel === "string" && r.fortschritt.titel ? r.fortschritt.titel : id;
-    eintraege.push({ repo: ort.repo, slug: id, titel, geaendert: um, pfad: ort.repoPfad, live: true, beendet: r.beendet !== undefined });
+    const kopf = ort.yaml ? kopfVon(ort.yaml, id) : { titel: typeof r.fortschritt?.titel === "string" && r.fortschritt.titel ? r.fortschritt.titel : id, offeneFragen: null };
+    eintraege.push({ repo: ort.repo, slug: id, ...kopf, geaendert: um, pfad: ort.repoPfad, live: true, beendet: r.beendet !== undefined });
   }
   return eintraege.sort((a, b) => (a.geaendert < b.geaendert ? 1 : a.geaendert > b.geaendert ? -1 : 0));
 }
