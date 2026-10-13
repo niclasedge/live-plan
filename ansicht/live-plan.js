@@ -2183,10 +2183,12 @@
     var el = wurzel.querySelector('[data-testid="sitzung-firstmate"]');
     var html = firstmateTeil();
     var fokus = doc.activeElement && doc.activeElement.closest && el && el.contains(doc.activeElement) ? doc.activeElement.closest("[data-fm-worker]") : null;
+    var sel = fokus && (fokus.classList.contains("fm-karte") ? ".fm-karte" : ".fm-wid") + '[data-fm-worker="' + (G.CSS && G.CSS.escape ? G.CSS.escape(fokus.dataset.fmWorker) : fokus.dataset.fmWorker) + '"]';
+    var nr = fokus ? Array.prototype.indexOf.call(el.querySelectorAll(sel), fokus) : -1;
     if (el && html && !modal && !diffAuf && !fmAuf) el.outerHTML = html;
     else if (el || html) zeichne();
-    var wieder = fokus && wurzel.querySelector('.fm-karte[data-fm-worker="' + (G.CSS && G.CSS.escape ? G.CSS.escape(fokus.dataset.fmWorker) : fokus.dataset.fmWorker) + '"]');
-    if (wieder) wieder.focus();
+    var wieder = fokus && wurzel.querySelectorAll(sel)[Math.max(nr, 0)];
+    if (wieder) wieder.focus({ preventScroll: true });
   }
 
   function nichtGefunden() {
