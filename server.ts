@@ -22,7 +22,10 @@ import {
   butStatusAus,
   type ButCommittet,
   type ButGruppen,
+  bildArtVon,
+  BILD_HOECHSTENS,
   diffAntwort,
+  eigenerPlanPfad,
   diffArtVon,
   diffPfadGueltig,
   DIFF_LESEN_HOECHSTENS,
@@ -628,17 +631,85 @@ async function diffVon(repoPfad: string, d: BaumDatei): Promise<DiffAntwort | nu
 
 /** Der Inhalt einer Datei ausserhalb des Baums; null, wenn sie nach realpath nicht in der Wurzel liegt. */
 function ignoriertVon(repoPfad: string, p: string): DiffAntwort | null {
+  const voll = ignorierterPfad(repoPfad, p);
+  if (!voll) return null;
+  const datei = liesAnfang(voll);
+  if (!datei) return { p, art: "binaer", text: "Keine regulaere Datei (Symlink oder nicht lesbar), Inhalt nicht gelesen", gekappt: false };
+  return diffAntwort(p, "datei", datei.inhalt, datei.gekappt);
+}
+
+/** Ein Bild bis BILD_HOECHSTENS, keinem Symlink nach: Bytes, "gross" oder null (nicht lesbar). */
+function liesBild(pfad: string): Uint8Array | "gross" | null {
+  let fd: number;
   try {
-    const wurzel = realpathSync(repoPfad);
-    // The last part stays unresolved: liesAnfang refuses a symlink there itself.
-    const ordner = realpathSync(path.dirname(path.join(wurzel, p)));
-    if (ordner !== wurzel && !ordner.startsWith(wurzel + path.sep)) return null;
-    const datei = liesAnfang(path.join(ordner, path.basename(p)));
-    if (!datei) return { p, art: "binaer", text: "Keine regulaere Datei (Symlink oder nicht lesbar), Inhalt nicht gelesen", gekappt: false };
-    return diffAntwort(p, "datei", datei.inhalt, datei.gekappt);
+    fd = openSync(pfad, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   } catch {
     return null;
   }
+  try {
+    const st = fstatSync(fd);
+    if (!st.isFile()) return null;
+    if (st.size > BILD_HOECHSTENS) return "gross";
+    const puffer = Buffer.allocUnsafe(st.size);
+    const n = readSync(fd, puffer, 0, st.size, 0);
+    return Uint8Array.from(puffer.subarray(0, n));
+  } catch {
+    return null;
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/** Der Pfad einer git-ignorierten Datei nach realpath in der Wurzel; null, wenn er sie verlaesst. */
+function ignorierterPfad(repoPfad: string, p: string): string | null {
+  try {
+    const wurzel = realpathSync(repoPfad);
+    // The last part stays unresolved: the readers refuse a symlink there themselves.
+    const ordner = realpathSync(path.dirname(path.join(wurzel, p)));
+    if (ordner !== wurzel && !ordner.startsWith(wurzel + path.sep)) return null;
+    return path.join(ordner, path.basename(p));
+  } catch {
+    return null;
+  }
+}
+
+/** Die Antwort mit den Rohbytes eines Bildes: Inhaltstyp nach Endung, nie als Seite lesbar (SVG fuehrt kein Skript aus). */
+function bildAntwort(p: string, bytes: Uint8Array | "gross" | null): Response {
+  if (bytes === "gross") return json({ fehler: `Bild groesser als ${BILD_HOECHSTENS} Bytes` }, 413);
+  if (!bytes) return json({ fehler: "Datei nicht lesbar oder nicht in der Wurzel der Sitzung" }, 404);
+  return new Response(bytes, {
+    headers: {
+      "content-type": bildArtVon(p)!,
+      "cache-control": "no-store",
+      "x-content-type-options": "nosniff",
+      "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; sandbox",
+    },
+  });
+}
+
+/**
+ * Die Regeln fuer eine Datei ohne branch=, gemeinsam fuer .../diff und .../bild: im Baum, oder (git-ignoriert)
+ * vom Register der Sitzung als gelesen oder geschrieben gefuehrt, nur fuer Loopback und ohne Secret-Namen.
+ * Die eigene Plan-Datei der Sitzung gehoert ihr und braucht keinen Registereintrag. Sonst eine Fehlerantwort.
+ */
+function dateiZugang(ort: Ort, baum: Baum, p: string, req: Request, server: Bun.Server): Response | { eintrag?: BaumDatei; ignoriert: boolean } {
+  const eintrag = baum.dateien.find((x) => x.p === p);
+  if (eintrag) return { eintrag, ignoriert: false };
+  if (p === eigenerPlanPfad(ort.slug)) return { ignoriert: true };
+  if (!registerBeruehrt(ort.live, p)) return json({ fehler: "Datei steht nicht im Dateibaum" }, 404);
+  if (!istLoopback(server.requestIP(req)?.address)) return json({ fehler: "Git-ignorierte Datei, Inhalt nur fuer Aufrufe vom eigenen Rechner" }, 403);
+  if (geheimerName(p)) return json({ fehler: "Git-ignorierte Datei mit Secret-Namen, Inhalt wird nicht gezeigt" }, 403);
+  return { ignoriert: true };
+}
+
+/** Die Bytes eines in einem but-Branch committeten Bildes (git show); "gross" ueber BILD_HOECHSTENS, null bei Fehler. */
+function branchBild(repoPfad: string, branch: string, p: string): Promise<Uint8Array | "gross" | null> {
+  return new Promise((resolve) => {
+    execFile("git", ["--no-optional-locks", "--literal-pathspecs", "show", `refs/heads/${branch}:${p}`], { cwd: repoPfad, timeout: GIT_ABBRUCH_MS, encoding: "buffer", maxBuffer: BILD_HOECHSTENS }, (fehler, stdout) => {
+      if (!fehler) resolve(Uint8Array.from(stdout));
+      else resolve((fehler as { code?: string }).code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER" ? "gross" : null);
+    });
+  });
 }
 
 /** Eine in einem but-Branch committete Datei (E3): git diff zwischen seiner Basis und dem Branch. */
@@ -1121,6 +1192,24 @@ async function antworte(req: Request, server: Bun.Server): Promise<Response> {
       const home = ort.repoPfad && istFirstmateHome(ort.repoPfad) ? ort.repoPfad : null;
       return json(home ? await firstmateDaten(home) : { home: null });
     }
+    if (lesen && d === "bild" && teile.length === 4) {
+      const p = url.searchParams.get("p");
+      if (!diffPfadGueltig(p)) return json({ fehler: "p muss ein relativer Pfad ohne .. sein" }, 400);
+      if (!bildArtVon(p)) return json({ fehler: "Kein Bild (png, jpg, jpeg, gif, webp, svg)" }, 415);
+      const baum = ort.repoPfad ? await baumVon(ort.repoPfad) : null;
+      if (!baum) return json({ fehler: "Sitzung ohne Git-Wurzel" }, 404);
+      const branch = url.searchParams.get("branch");
+      if (branch !== null) {
+        const b = baum.but?.branches.find((x) => x.name === branch);
+        if (!b?.basis || !b.dateien.some((x) => x.p === p && x.committet)) return json({ fehler: "Datei ist in diesem Branch nicht committet" }, 404);
+        return bildAntwort(p, await branchBild(ort.repoPfad!, b.name, p));
+      }
+      const zugang = dateiZugang(ort, baum, p, req, server);
+      if (zugang instanceof Response) return zugang;
+      if (zugang.eintrag?.s === "D") return json({ fehler: "Datei ist geloescht" }, 404);
+      const voll = zugang.ignoriert ? ignorierterPfad(ort.repoPfad!, p) : path.join(ort.repoPfad!, p);
+      return bildAntwort(p, voll ? liesBild(voll) : null);
+    }
     if (lesen && d === "diff" && teile.length === 4) {
       const p = url.searchParams.get("p");
       if (!diffPfadGueltig(p)) return json({ fehler: "p muss ein relativer Pfad ohne .. sein" }, 400);
@@ -1134,14 +1223,13 @@ async function antworte(req: Request, server: Bun.Server): Promise<Response> {
         const antwort = await branchDiffVon(ort.repoPfad!, b.basis, b.name, p);
         return antwort ? json(antwort) : json({ fehler: "git diff fehlgeschlagen" }, 500);
       }
-      const eintrag = baum.dateien.find((x) => x.p === p);
-      if (!eintrag) {
-        if (!registerBeruehrt(ort.live, p)) return json({ fehler: "Datei steht nicht im Dateibaum" }, 404);
-        if (!istLoopback(server.requestIP(req)?.address)) return json({ fehler: "Git-ignorierte Datei, Inhalt nur fuer Aufrufe vom eigenen Rechner" }, 403);
-        if (geheimerName(p)) return json({ fehler: "Git-ignorierte Datei mit Secret-Namen, Inhalt wird nicht gezeigt" }, 403);
+      const zugang = dateiZugang(ort, baum, p, req, server);
+      if (zugang instanceof Response) return zugang;
+      if (zugang.ignoriert) {
         const antwort = ignoriertVon(ort.repoPfad!, p);
         return antwort ? json(antwort) : json({ fehler: "Datei nicht lesbar oder nicht in der Wurzel der Sitzung" }, 404);
       }
+      const eintrag = zugang.eintrag!;
       const antwort = await diffVon(ort.repoPfad!, eintrag);
       return antwort ? json(antwort) : json({ fehler: "git diff fehlgeschlagen" }, 500);
     }

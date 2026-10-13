@@ -1305,7 +1305,9 @@
       '<div class="bd-baum" data-bd-baum>' + baumInhalt() + "</div></section>";
   }
   // --- Diff einer Datei: Klick im Baum, Modal wie das Beweisbild, Daten aus GET .../diff?p= -------
-  var DIFF_ART = { diff: "Diff gegen HEAD", neu: "neu, unversioniert", datei: "unveraendert", binaer: "binaer" };
+  var DIFF_ART = { diff: "Diff gegen HEAD", neu: "neu, unversioniert", datei: "unveraendert", binaer: "binaer", bild: "Bild" };
+  /** Ob der Pfad nach der Endung ein Bild ist, das GET .../bild?p= ausliefert. */
+  function istBild(p) { return /\.(png|jpe?g|gif|webp|svg)$/i.test(String(p || "")); }
   /**
    * Zeilen eines Diffs mit Art und Nummern aus den @@-Koepfen: plus, minus, kontext, hunk, kopf
    * (vor dem ersten @@) und hinweis (`\ No newline`). Bei art `datei` ist jede Zeile kontext, gezaehlt ab 1.
@@ -1340,6 +1342,7 @@
     var hinweis = function (t) { return '<p class="df-hinweis">' + esc(t) + "</p>"; };
     var inhalt = z.fehler ? hinweis("Fehler: " + z.fehler)
       : !b ? hinweis("laedt …")
+      : b.art === "bild" ? '<div class="lp-bild" tabindex="0"><img src="' + esc(b.url) + '" alt="' + esc(z.p) + '"></div>'
       : b.art === "binaer" ? hinweis(b.text || "Binaerdatei, Inhalt nicht gezeigt")
       : !b.text ? hinweis(b.art !== "diff" ? "Leere Datei" : z.branch ? "Kein Unterschied" : "Kein Unterschied zu HEAD")
       : '<div class="lp-diff-text' + (b.art === "diff" ? "" : " einspaltig") + '" tabindex="0">' + diffZeilen(b.text, b.art).map(diffZeileHtml).join("") + "</div>" +
@@ -1802,7 +1805,7 @@
   function fuss() {
     var d = (D.plan && D.plan.doku) || {};
     var links = [d.quelle ? "Quelle " + d.quelle : "", d.stand ? "Stand " + d.stand : ""].filter(Boolean).join(" · ");
-    return '<footer class="lp-fuss" data-testid="sitzung-fuss"><span>' + esc(links) + '</span><span class="mono">' + esc(".live-plan/" + D.slug + ".yaml") + "</span></footer>";
+    return '<footer class="lp-fuss" data-testid="sitzung-fuss"><span>' + esc(links) + '</span><button type="button" class="mono lp-fuss-datei" data-pfad="' + esc(".live-plan/" + D.slug + ".yaml") + '" title="Plan-Datei der Sitzung zeigen">' + esc(".live-plan/" + D.slug + ".yaml") + "</button></footer>";
   }
 
   // --- Handout-Modus: wie die Seite, aber ohne Sitzungsdetails: Kopf, Ueberblick, Anforderungen, Entscheidungen, Dokumentation
@@ -1997,12 +2000,15 @@
     var auf = diffAuf = { p: p, s: e && e.s, branch: branch || null };
     zeichne();
     var fertig = function (teil) {
-      if (diffAuf !== auf) return;
+      if (diffAuf !== auf) { if (teil.daten && teil.daten.url) G.URL.revokeObjectURL(teil.daten.url); return; }
       diffAuf = { p: p, s: auf.s, branch: auf.branch, daten: teil.daten, fehler: teil.fehler };
       auf = diffAuf;
       zeichne();
     };
-    fetch(API + "/diff?p=" + encodeURIComponent(p) + (branch ? "&branch=" + encodeURIComponent(branch) : ""), { cache: "no-store" }).then(function (r) {
+    var bild = istBild(p);
+    fetch(API + (bild ? "/bild" : "/diff") + "?p=" + encodeURIComponent(p) + (branch ? "&branch=" + encodeURIComponent(branch) : ""), { cache: "no-store" }).then(function (r) {
+      // An image comes as raw bytes; shown from a blob URL, so a refusal reads as an error like for the diff.
+      if (bild && r.ok) return r.blob().then(function (blob) { return { p: p, art: "bild", text: "", gekappt: false, url: G.URL.createObjectURL(blob) }; });
       return r.json().catch(function () { return {}; }).then(function (b) {
         if (!r.ok) throw new Error((b && b.fehler) || "HTTP " + r.status);
         return b;
@@ -2012,9 +2018,10 @@
   /** Schliessen per Esc, Hintergrund oder Knopf; der Fokus kehrt zur Zeile im Baum zurueck. */
   function schliesseDiff() {
     var p = diffAuf && diffAuf.p;
+    if (diffAuf && diffAuf.daten && diffAuf.daten.url) G.URL.revokeObjectURL(diffAuf.daten.url);
     diffAuf = null;
     zeichne();
-    var zeile = p && wurzel.querySelector('.bd-datei[data-pfad="' + (G.CSS && G.CSS.escape ? G.CSS.escape(p) : p) + '"]');
+    var zeile = p && wurzel.querySelector('[data-pfad="' + (G.CSS && G.CSS.escape ? G.CSS.escape(p) : p) + '"]');
     if (zeile) zeile.focus();
   }
 
