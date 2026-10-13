@@ -127,7 +127,41 @@ Skript liest nur; es braucht node >= 22.18 (eingebautes Type-Stripping) oder bun
 ./cockpit.ts --json
 ```
 
-Tests: `node --test cockpit.test.ts`.
+Tests: `node --test cockpit.test.ts firstmate.test.ts`.
+
+### Firstmate in der Ansicht
+
+Liegt die Wurzel einer Sitzung in einem Firstmate-Home, zeigt ihre Seite im Browser
+(`http://localhost:4410/firstmate/<sitzung>`) zusätzlich zu Verbrauch, Fortschritt und Dateien den
+Abschnitt Firstmate. Ein Home erkennt die Ansicht am Aufbau (`bin/fm-spawn.sh`, `state/`, `data/`),
+nicht am Namen; `FM_HOME` und `FIRSTMATE_HOME` aus der Umgebung des Servers gelten hier nicht, nur
+im Cockpit.
+
+![Abschnitt Firstmate einer Beispiel-Sitzung](docs/firstmate.png)
+
+- **Kopf:** Home, Zahl der Worker, Abschnitte des Backlogs, Captain-Inbox und die Warteschlange mit
+  dem, worauf jeder Auftrag wartet.
+- **Aktive Worker:** eine Karte je Worker wie ein Kasten des Cockpits (id, Zustand mit Farbe, Projekt,
+  Art/Modus, Harness/Modell, letzte Statuszeile mit Alter, PR, Zweig mit ahead/behind und geänderten
+  Dateien, `✉ N` für ungelesene Nachrichten). Ein Klick (oder Enter) öffnet die Details wie
+  `cockpit --once`: Statusverlauf, offene Entscheidungen und Blocker, Worktree, letzter Commit,
+  Inbox und die Befehle zum Kopieren.
+- **Projekte:** je Klon unter `projects/` Beschreibung und Haltung aus `data/projects.md`, Zweig,
+  sauber oder geändert, ahead/behind, letzter Commit, „zuletzt aktualisiert“ (letzter `git fetch`,
+  mtime von `FETCH_HEAD`), die Worker auf dem Projekt und die offenen PRs.
+
+Die Daten kommen aus `GET /api/REPO/SLUG/firstmate`; die Seite fragt alle 15 Sekunden. Der Server
+liest das Home mit `firstmate.ts` in einem eigenen Prozess (10 s vorgehalten) und fragt `gh pr list`
+je Projekt im Hintergrund (10 s Abbruch, 60 s vorgehalten); was fehlschlägt, steht als
+„PRs unbekannt“ da, ohne die übrige Seite aufzuhalten. Gehört das Repo einem Konto, für das `gh`
+einen Login hat, geht dessen Token (`gh auth token --user <owner>`) nur in die Umgebung dieses einen
+Aufrufs; sonst gilt der aktive Login. Kein Token landet in einer Antwort, einem Log oder auf der
+Platte. Wie das Cockpit liest die Ansicht nur (git ohne optionale Sperren, kein
+`bin/fm-crew-state.sh`).
+
+Weil der Server ohne Anmeldung im LAN erreichbar ist, zeigt die Ansicht **keine Inhalte der
+tmux-Panes**; die letzten Pane-Zeilen gibt es nur im Terminal (`cockpit --once`). Statuszeilen,
+PR-Adressen, Zweige und Titel aus dem Backlog stehen dagegen jedem offen, der die Seite erreicht.
 
 ## Lizenz
 

@@ -62,6 +62,7 @@ import {
   type Register,
   type Verlaufseintrag,
 } from "./logik.ts";
+import { istFirstmateHome, prVorrat, type FirstmateSicht, type GhLauf } from "./firstmate.ts";
 
 const WURZELN = wurzeln(process.env);
 const PORT = Number.parseInt(process.env.LIVE_PLAN_PORT ?? "", 10) || 4410;
@@ -699,6 +700,59 @@ async function aboAntwort(): Promise<{ abo: ReturnType<typeof aboLage> | null; f
   return { abo: aboLage(roh.status, Date.now()) };
 }
 
+// --- Firstmate (GET .../firstmate) ---------------------------------------------------------------
+//
+// Ist die Wurzel der Sitzung ein Firstmate-Home, liest firstmate.ts in einem eigenen Prozess Worker,
+// Captain-Inbox, Warteschlange und Projekte; so halten git und tmux keine Anfrage auf. Das Ergebnis
+// gilt FM_VORHALTEN_MS, danach liefert die Anfrage den alten Stand und ein neuer entsteht im
+// Hintergrund; nur der allererste wird abgewartet. Die offenen
+// PRs je Projekt fragt gh ebenfalls im Hintergrund (je Aufruf 10 s, 60 s vorgehalten); was noch
+// fehlt, heisst `laedt`, ein Fehler `unbekannt`. Pane-Inhalte liest firstmate.ts nie. Ein Token aus
+// `gh auth token` geht nur in die Umgebung des einen gh-Aufrufs, nie in eine Antwort oder ein Log.
+
+const FM_SKRIPT = path.join(import.meta.dir, "firstmate.ts");
+const FM_VORHALTEN_MS = 10_000;
+const FM_ABBRUCH_MS = 30_000;
+const GH_ABBRUCH_MS = 10_000;
+
+const ghLauf: GhLauf = (args, env) =>
+  new Promise((resolve) => {
+    execFile("gh", args, { timeout: GH_ABBRUCH_MS, encoding: "utf8", maxBuffer: 4 * 1024 * 1024, env: { ...process.env, GH_PROMPT_DISABLED: "1", ...env } }, (fehler, stdout) => resolve(fehler ? null : stdout));
+  });
+const prs = prVorrat(ghLauf);
+
+function fmLesen(home: string): Promise<FirstmateSicht | null> {
+  return new Promise((resolve) => {
+    execFile(process.execPath, [FM_SKRIPT, "--json", home], { timeout: FM_ABBRUCH_MS, encoding: "utf8", maxBuffer: 32 * 1024 * 1024 }, (fehler, stdout) => {
+      if (fehler) return resolve(null);
+      try {
+        resolve(JSON.parse(stdout) as FirstmateSicht);
+      } catch {
+        resolve(null);
+      }
+    });
+  });
+}
+
+const fmVorrat = new Map<string, { um: number; sicht: FirstmateSicht | null; laeuft: Promise<void> | null }>();
+
+async function firstmateDaten(home: string) {
+  let e = fmVorrat.get(home);
+  if (!e) fmVorrat.set(home, (e = { um: 0, sicht: null, laeuft: null }));
+  const eintrag = e;
+  if (!eintrag.laeuft && Date.now() - eintrag.um >= FM_VORHALTEN_MS) {
+    eintrag.laeuft = fmLesen(home).then((sicht) => {
+      if (sicht) eintrag.sicht = sicht;
+      eintrag.um = Date.now();
+      eintrag.laeuft = null;
+    });
+  }
+  if (!eintrag.sicht && eintrag.laeuft) await eintrag.laeuft;
+  if (!eintrag.sicht) return { home, fehler: "Firstmate-Home nicht lesbar" };
+  const projekte = eintrag.sicht.projekte.map((p) => ({ ...p, prs: p.github ? prs.stand(p.github) : null }));
+  return { ...eintrag.sicht, projekte };
+}
+
 // --- Entscheidung -----------------------------------------------------------------------------
 
 type Entscheidungsergebnis =
@@ -1054,6 +1108,10 @@ async function antworte(req: Request, server: Bun.Server): Promise<Response> {
     if (lesen && d === "baum" && teile.length === 4) {
       const baum = ort.repoPfad ? await baumVon(ort.repoPfad) : null;
       return baum ? json(baum) : json({ fehler: "Sitzung ohne Git-Wurzel" }, 404);
+    }
+    if (lesen && d === "firstmate" && teile.length === 4) {
+      const home = ort.repoPfad && istFirstmateHome(ort.repoPfad) ? ort.repoPfad : null;
+      return json(home ? await firstmateDaten(home) : { home: null });
     }
     if (lesen && d === "diff" && teile.length === 4) {
       const p = url.searchParams.get("p");

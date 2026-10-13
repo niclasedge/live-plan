@@ -6,7 +6,8 @@
 // Aufbau nach der Vorlage im Things-Stil: Kopf mit Icon, Kurztext und Tags, Ueberblick in drei Karten,
 // Teil 1 Sitzung und Fortschritt (Verbrauch, Fortschritt mit Phasen, vier Kacheln aus Issue 320, genau eine
 // Jetzt-Zeile, dann in zwei Spalten Agenten, Fragen an Sie, Offen, Anforderungen, Entscheidungen; die
-// Abschnitte aus ueberblick in logik.ts), Teil 2 Dokumentation, darunter Dateien und der Fuss. Verbrauch,
+// Abschnitte aus ueberblick in logik.ts), in einem Firstmate-Home der Abschnitt Firstmate (Worker-Karten,
+// Captain-Inbox, Warteschlange, Projekte aus GET .../firstmate), Teil 2 Dokumentation, darunter Dateien und der Fuss. Verbrauch,
 // Fortschritt und Agenten kommen aus der Register-JSON (S8).
 // Die Zeichenfunktionen haengen nicht am DOM und stehen unter globalThis.LivePlanAnsicht, damit
 // die Tests sie ohne Browser pruefen.
@@ -1275,6 +1276,150 @@
       '<div class="lp-zeile lp-meta"><span class="mono">' + esc(L.cwd || D.repoPfad || "") + '</span><span class="unbekannt">nur Register, keine .live-plan/' + esc(D.slug) + ".yaml</span></div></header>";
   }
 
+  // --- Firstmate: Worker als Karten, Captain-Inbox, Warteschlange, Projekte (GET .../firstmate) ----
+  // Nur wenn die Wurzel der Sitzung ein Firstmate-Home ist (FM.home). Eine Karte je Worker wie ein Kasten
+  // des Cockpits; ein Klick oeffnet die Details im Modal wie beim Diff. Ohne Pane-Inhalte (bleibt im Terminal).
+  var FM = null;
+  /** Id des Workers, dessen Details im Modal stehen. */
+  var fmAuf = null;
+  var FM_ZUSTAND = { working: "●", paused: "‖", blocked: "■", "needs-decision": "?", done: "✓", failed: "✗", dead: "†", unknown: "·" };
+  var FM_WARTESCHLANGE_N = 8;
+  function isoAus(sek) {
+    return typeof sek === "number" && isFinite(sek) && sek > 0 ? new Date(sek * 1000).toISOString() : "";
+  }
+  function prKurz(url) {
+    var m = /github\.com\/([^/]+\/[^/]+)\/pull\/(\d+)/.exec(String(url || ""));
+    return m ? m[1] + "#" + m[2] : String(url || "");
+  }
+  /** Ein Link nur auf https-Adressen; sonst der Text. */
+  function fmLink(url, text) {
+    return /^https:\/\//.test(String(url || "")) ? '<a href="' + esc(url) + '" target="_blank" rel="noopener noreferrer">' + esc(text) + "</a>" : esc(text);
+  }
+  function fmZustand(w) {
+    return FM_ZUSTAND[w && w.zustand] ? w.zustand : "unknown";
+  }
+  function fmWorker(id) {
+    return FM && Array.isArray(FM.worker) ? FM.worker.find(function (w) { return w && w.id === id; }) : null;
+  }
+  function fmProjektName(p) {
+    return p ? String(p).replace(/\/+$/, "").split("/").pop() : "";
+  }
+  function fmZweig(w) {
+    var wt = w.worktree, m = w.meta || {};
+    if (wt && wt.da) {
+      return esc(wt.zweig || "?") + (wt.ahead === null || wt.ahead === undefined ? "" : ' <span class="vz">↑' + zahl(wt.ahead) + " ↓" + zahl(wt.behind) + "</span>") +
+        (wt.geaendert ? ' <span class="g-m">±' + zahl(wt.geaendert) + "</span>" : "");
+    }
+    return m.branch ? esc(m.branch) + (wt ? ' <span class="unbekannt">kein Worktree</span>' : "") : "";
+  }
+  function fmStatusZeile(s) {
+    if (!s) return '<span class="unbekannt">noch keine Statuszeile</span>';
+    return (s.at ? zeitAngabe(isoAus(s.at)) + " " : '<span class="unbekannt">?</span> ') + esc(s.text);
+  }
+  function fmKarte(w) {
+    var z = fmZustand(w), m = w.meta || {};
+    var post = w.inbox && w.inbox.wartend && w.inbox.wartend.length ? '<span class="fm-post" title="ungelesene Nachrichten von Firstmate">✉ ' + w.inbox.wartend.length + "</span>" : "";
+    var zeilen = [
+      [fmProjektName(m.project), [m.kind, m.mode].filter(Boolean).join("/")].filter(Boolean).map(esc).join(" · "),
+      esc([m.harness, m.model, m.effort].filter(Boolean).join("/")),
+    ].filter(Boolean).map(function (t) { return '<div class="fm-zeile">' + t + "</div>"; }).join("");
+    var pr = m.pr ? '<div class="fm-zeile">PR ' + fmLink(m.pr, prKurz(m.pr)) + "</div>" : "";
+    var zweig = fmZweig(w);
+    return '<div class="fm-karte fm-z-' + z + '" role="button" tabindex="0" data-fm-worker="' + esc(w.id) + '" title="Details zu ' + esc(w.id) + '">' +
+      '<div class="fm-kopf"><span class="fm-zeichen">' + FM_ZUSTAND[z] + '</span><b class="mono">' + esc(w.id) + "</b>" + post + '<span class="fm-zustand">' + esc(z) + "</span></div>" +
+      (w.titel ? '<div class="fm-titel">' + esc(w.titel) + "</div>" : "") + zeilen +
+      '<div class="fm-status">' + fmStatusZeile(w.status && w.status.letzte) + "</div>" + pr +
+      (zweig ? '<div class="fm-zeile mono">' + zweig + "</div>" : "") + "</div>";
+  }
+  function fmLage() {
+    var n = Array.isArray(FM.notizen) ? FM.notizen.length : 0;
+    var ws = Array.isArray(FM.warteschlange) ? FM.warteschlange : null;
+    var notiz = n === 0 ? "keine Notiz wartet" : n === 1 ? "1 Notiz wartet" : n + " Notizen warten";
+    var zeilen = (ws || []).slice(0, FM_WARTESCHLANGE_N).map(function (a) {
+      return '<li><span class="mono">' + esc(a.id) + '</span><span class="fm-wartet' + (a.wartet === "bereit" ? " bereit" : "") + '">' + esc(a.wartet) + "</span>" + esc(a.titel) + "</li>";
+    }).join("");
+    var rest = ws && ws.length > FM_WARTESCHLANGE_N ? '<li class="unbekannt">+' + (ws.length - FM_WARTESCHLANGE_N) + " weitere (cockpit --once)</li>" : "";
+    return '<div class="fm-lage"><span class="' + (n ? "fm-inbox warten" : "fm-inbox") + '" title="' + esc((FM.notizen || []).join(", ")) + '">Captain-Inbox: ' + esc(notiz) + "</span>" +
+      "<span>Warteschlange: " + (ws === null ? "kein Backlog" : ws.length || "leer") + "</span></div>" + (zeilen || rest ? '<ul class="fm-warteschlange">' + zeilen + rest + "</ul>" : "");
+  }
+  function fmPrs(p) {
+    if (!p.github) return '<span class="unbekannt" title="origin ist kein GitHub-Repo">—</span>';
+    var s = p.prs;
+    if (!s || s.art === "laedt") return '<span class="unbekannt">PRs laden …</span>';
+    if (s.art !== "ok" || !Array.isArray(s.prs)) return '<span class="unbekannt" title="gh hat nicht geantwortet">PRs unbekannt</span>';
+    if (!s.prs.length) return '<span class="unbekannt">keine offenen</span>';
+    return '<b class="fm-prn">' + s.prs.length + " offen</b>" + '<ul class="fm-prs">' + s.prs.map(function (x) {
+      return "<li>" + fmLink(x.url, "#" + x.nummer) + " " + esc(x.titel) + (x.entwurf ? ' <span class="unbekannt">Entwurf</span>' : "") + "</li>";
+    }).join("") + "</ul>";
+  }
+  function fmProjektZeile(p) {
+    var r = p.register;
+    var name = '<b class="mono">' + esc(p.name) + "</b>" + (r && r.haltung ? ' <span class="fm-haltung">' + esc(r.haltung) + "</span>" : "") +
+      (r && r.beschreibung ? '<div class="klein">' + esc(r.beschreibung) + "</div>" : r ? "" : '<div class="klein unbekannt">nicht in data/projects.md</div>');
+    if (!p.git) return "<tr><td>" + name + '</td><td colspan="5" class="unbekannt">kein Git-Klon</td><td>' + esc((p.worker || []).join(", ")) + "</td></tr>";
+    var zweig = esc(p.zweig || "detached") + (p.upstream ? ' <span class="vz" title="' + esc("gegen " + p.upstream) + '">↑' + zahl(p.ahead) + " ↓" + zahl(p.behind) + "</span>" : ' <span class="unbekannt">kein Upstream</span>');
+    var stand = p.geaendert ? '<span class="g-m">geändert ±' + zahl(p.geaendert) + "</span>" : '<span class="fm-sauber">sauber</span>';
+    var commit = p.commit ? zeitAngabe(isoAus(p.commit.zeit)) + ' <span class="mono klein">' + esc(p.commit.hash) + "</span> " + esc(p.commit.betreff) : '<span class="unbekannt">kein Commit</span>';
+    var abgerufen = p.abgerufen ? zeitAngabe(isoAus(p.abgerufen)) : '<span class="unbekannt">nie</span>';
+    var worker = (p.worker || []).map(function (id) { return '<span class="mono fm-wid" data-fm-worker="' + esc(id) + '" role="button" tabindex="0">' + esc(id) + "</span>"; }).join(" ");
+    return "<tr><td>" + name + '</td><td class="mono">' + zweig + "</td><td>" + stand + "</td><td>" + commit + "</td><td>" + abgerufen + "</td><td>" + fmPrs(p) + "</td><td>" + worker + "</td></tr>";
+  }
+  /** Der Abschnitt Firstmate; leer, solange kein Home da ist. */
+  function firstmateTeil() {
+    if (!FM || !FM.home) return "";
+    var kopf = '<h2 class="lp-h">Firstmate <span class="zaehler">';
+    if (FM.fehler) return '<section class="lp-firstmate" data-testid="sitzung-firstmate">' + kopf + esc(FM.home) + '</span></h2><p class="unbekannt">' + esc(FM.fehler) + "</p></section>";
+    var worker = Array.isArray(FM.worker) ? FM.worker : [];
+    var projekte = Array.isArray(FM.projekte) ? FM.projekte : [];
+    var zahlen = FM.backlog && typeof FM.backlog === "object" ? Object.keys(FM.backlog).map(function (k) { return k + " " + zahl(FM.backlog[k]); }).join(", ") : "kein Backlog";
+    return '<section class="lp-firstmate" data-testid="sitzung-firstmate">' + kopf + worker.length + " Worker · " + esc(zahlen) + "</span></h2>" +
+      '<div class="fm-meta"><span class="mono">' + esc(FM.home) + "</span>" + (FM.tmux === false ? '<span class="unbekannt">tmux nicht erreichbar</span>' : "") +
+      (FM.zeit ? "<span>Stand " + zeitAngabe(isoAus(FM.zeit)) + "</span>" : "") + "</div>" + fmLage() +
+      '<h3 class="fm-h">Aktive Worker</h3>' + (worker.length ? '<div class="fm-karten" data-testid="firstmate-worker">' + worker.map(fmKarte).join("") + "</div>" : '<p class="unbekannt">keine Worker (kein state/*.meta)</p>') +
+      '<h3 class="fm-h">Projekte <span class="zaehler">' + projekte.length + "</span></h3>" +
+      (projekte.length ? '<div class="fm-tabelle"><table class="fm-projekte" data-testid="firstmate-projekte"><thead><tr><th>Projekt</th><th>Zweig</th><th>Stand</th><th>Letzter Commit</th><th>zuletzt aktualisiert</th><th>PRs</th><th>Worker</th></tr></thead><tbody>' +
+        projekte.map(fmProjektZeile).join("") + "</tbody></table></div>" : '<p class="unbekannt">keine Klone unter projects/</p>') + "</section>";
+  }
+  /** Die Details eines Workers im Modal: wie `cockpit --once`, ohne Pane-Zeilen. */
+  function fmModal(id) {
+    var w = id && fmWorker(id);
+    if (!w) return "";
+    var m = w.meta || {}, z = fmZustand(w), fe = w.fenster || {}, wt = w.worktree;
+    var feld = function (name, wert) { return wert ? "<dt>" + esc(name) + "</dt><dd>" + wert + "</dd>" : ""; };
+    var lebt = fe.lebt === null || fe.lebt === undefined ? "?" : fe.lebt ? "lebt" : "FEHLT";
+    var felder =
+      feld("Projekt", esc([m.project, m.kind && "kind=" + m.kind, m.mode && "mode=" + m.mode, m.yolo && "yolo=" + m.yolo].filter(Boolean).join("  "))) +
+      feld("Harness", esc([m.harness, m.model && "model=" + m.model, m.effort && "effort=" + m.effort, m.backend && "backend=" + m.backend, m.remote_host && "remote=" + m.remote_host].filter(Boolean).join("  "))) +
+      feld("Gestartet", w.gestartet ? zeitAngabe(isoAus(w.gestartet)) + " (" + esc(ortszeit(isoAus(w.gestartet))) + ")" : "") +
+      feld("Fenster", fe.ziel ? esc(fe.ziel + "  " + lebt + (fe.befehl ? "  " + fe.befehl : "")) + (fe.aktivitaet ? " · aktiv " + zeitAngabe(isoAus(fe.aktivitaet)) : "") : "keins") +
+      feld("Busy", w.busy ? esc(w.busy.zustand + (w.busy.quelle ? " (" + w.busy.quelle + ")" : "")) + (w.busy.ts ? " " + zeitAngabe(isoAus(w.busy.ts)) : "") : "") +
+      feld("Inbox", w.inbox ? esc(w.inbox.wartend.length + " wartend" + (w.inbox.wartend.length ? " (" + w.inbox.wartend.join(", ") + ")" : "") + ", " + w.inbox.erledigt + " erledigt") : "") +
+      feld("PR", m.pr ? fmLink(m.pr, m.pr) : "") +
+      (wt ? feld("Worktree", esc(wt.pfad + (wt.da ? "" : "  (nicht da)"))) +
+        (wt.da ? feld("Git", esc((wt.zweig || "?") + (m.branch && wt.zweig !== m.branch ? " (Meta: " + m.branch + ")" : "") + "  " +
+          (wt.ahead === null || wt.ahead === undefined ? "kein Upstream" : wt.upstream + " +" + wt.ahead + " -" + wt.behind) + "  " + zahl(wt.geaendert) + " geändert")) + feld("Commit", esc(wt.letzterCommit || "")) : "")
+        : feld("Zweig", esc(m.branch || ""))) +
+      feld("Daten", w.daten && w.daten.dateien && w.daten.dateien.length ? esc(w.daten.ordner + "/ (" + w.daten.dateien.join(", ") + ")") : "");
+    var zeile = function (s) {
+      return '<li class="fm-v-' + esc(s.verb) + '"><span class="fm-verb">' + esc(s.verb) + (s.key ? " [" + esc(s.key) + "]" : "") + "</span>" + (s.at ? zeitAngabe(isoAus(s.at)) : '<span class="unbekannt">?</span>') + " " + esc(s.text) + "</li>";
+    };
+    var offen = w.status && Array.isArray(w.status.offen) ? w.status.offen : [];
+    var verlauf = Array.isArray(w.verlauf) ? w.verlauf.slice().reverse() : [];
+    var befehle = Array.isArray(w.befehle) ? w.befehle : [];
+    return '<div class="lp-modal" data-modal-zu><div class="lp-modal-box lp-fm fm-z-' + z + '" role="dialog" aria-modal="true" aria-labelledby="lp-modal-titel" data-testid="firstmate-details">' +
+      '<div class="lp-modal-kopf"><h2 id="lp-modal-titel"><span class="fm-zeichen">' + FM_ZUSTAND[z] + '</span> <span class="mono">' + esc(w.id) + "</span>" + (w.titel ? " · " + esc(w.titel) : "") + "</h2>" +
+      '<span class="pfad">' + esc(z) + "</span>" +
+      '<button type="button" class="zu" data-modal-zu aria-label="Schliessen (Esc)" title="Schliessen (Esc)">×</button></div>' +
+      '<div class="fm-details" tabindex="0"><dl class="fm-felder">' + felder + "</dl>" +
+      (offen.length ? '<h3 class="fm-h">Offene Entscheidungen und Blocker</h3><ul class="fm-verlauf">' + offen.map(zeile).join("") + "</ul>" : "") +
+      '<h3 class="fm-h">Statusverlauf <span class="zaehler">' + (w.status ? zahl(w.status.zeilen) : 0) + " Zeilen</span></h3>" +
+      (verlauf.length ? '<ul class="fm-verlauf">' + verlauf.map(zeile).join("") + "</ul>" : '<p class="unbekannt">noch keine Statuszeile</p>') +
+      (befehle.length ? '<h3 class="fm-h">Befehle</h3><ul class="fm-befehle">' + befehle.map(function (b) {
+        return '<li><span class="fm-zweck">' + esc(b.zweck) + '</span><code>' + esc(b.befehl) + '</code><button type="button" class="kopieren" data-kopiere="' + esc(b.befehl) + '">kopieren</button></li>';
+      }).join("") + "</ul>" : "") +
+      '<p class="klein unbekannt">Pane-Inhalte zeigt nur das Cockpit im Terminal.</p></div></div></div>';
+  }
+
   // --- Dokumentation und Handout (#328) -----------------------------------------------------------
   // `doku:` aus der Sitzungsdatei als Teil 2 unter den Sitzungsteilen: Ablauf als SVG-Flowchart, Bausteine,
   // Aufbau der Sitzungsdatei, Regeln, Was die Seite zeigt, Befehle, Aufbau des Registers; Kopf und Ueberblick
@@ -1593,7 +1738,7 @@
     if (handout) return handoutSeite();
     return '<div class="lp-inhalt"' + (modalHtml ? " inert" : "") + ">" + kopf() + fehler() + ueberblickKarten() + teilEins() +
       verbrauchTeil() + agentenAbschnitt() + fortschrittTeil() + blick() + jetzt(true) +
-      '<div class="lp-teil1">' + fragenAnSie() + ueberblick() + "</div>" + doku() + dateien() + fuss() +
+      '<div class="lp-teil1">' + fragenAnSie() + ueberblick() + "</div>" + firstmateTeil() + doku() + dateien() + fuss() +
       '<aside id="lp-drawer" class="lp-drawer' + (sel ? " open" : "") + '" data-testid="sitzung-drawer">' + (sel ? drawerInhalt(sel) : "") + "</aside></div>" +
       (modalHtml || "");
   }
@@ -1614,6 +1759,9 @@
     baumInhalt: baumInhalt,
     diffZeilen: diffZeilen,
     diffModal: diffModal,
+    firstmateTeil: firstmateTeil,
+    fmModal: fmModal,
+    setzeFirstmate: function (f) { FM = f && typeof f === "object" ? f : null; },
     setzeBaum: function (b) { BAUM = b && typeof b === "object" && Array.isArray(b.dateien) ? b : null; },
     setzeBaumModus: setzeBaumModus,
     setzeBaumFilter: function (t) { baumFilter = String(t || ""); },
@@ -1700,14 +1848,15 @@
     if (baum) { baum.innerHTML = baumInhalt(); baum.scrollTop = scroll; }
   }
   function zeichneSeite() {
-    // The open diff keeps its scroll position across a redraw (every SSE event redraws).
-    var diffText = diffAuf && wurzel.querySelector(".lp-diff-text");
-    var diffScroll = diffText ? [diffText.scrollTop, diffText.scrollLeft] : null;
+    // The open modal keeps its scroll position and focus across a redraw (every SSE event and Firstmate poll redraws).
+    var stand = modalStand();
     if (!D.plan) {
       // Nur im Register (S5): Kopf, Live-Block und Dateien, sonst nichts.
       doc.title = ((D.live && D.live.fortschritt && D.live.fortschritt.titel) || D.slug) + " · live-plan";
-      wurzel.innerHTML = '<div class="lp-inhalt"' + (diffAuf ? " inert" : "") + ">" + kopfNurLive() + live() + dateien() + "</div>" + diffModal(diffAuf);
-      nachModal(diffScroll);
+      var nurModal = diffModal(diffAuf) || fmModal(fmAuf);
+      if (!nurModal) fmAuf = null;
+      wurzel.innerHTML = '<div class="lp-inhalt"' + (nurModal ? " inert" : "") + ">" + kopfNurLive() + live() + firstmateTeil() + dateien() + "</div>" + nurModal;
+      nachModal(stand);
       return;
     }
     var drawer = doc.getElementById("lp-drawer");
@@ -1715,19 +1864,31 @@
     var modalHtml = modal ? beweisModal(modal) : "";
     if (!modalHtml) modal = null;
     if (!modalHtml) modalHtml = diffModal(diffAuf);
+    if (!modalHtml) modalHtml = fmModal(fmAuf);
+    if (!modalHtml) fmAuf = null;
     doc.title = (D.plan.titel || D.slug) + " · live-plan";
     wurzel.innerHTML = seite(modalHtml);
     var d = doc.getElementById("lp-drawer");
     if (d) d.scrollTop = scroll;
-    nachModal(diffScroll);
+    nachModal(stand);
   }
 
-  /** Das neue innerHTML nimmt dem Modal den Fokus (er fiele auf BODY); er geht zurueck auf Schliessen. Der Diff behaelt seine Scrollposition. */
-  function nachModal(diffScroll) {
-    var zu = (modal || diffAuf) && wurzel.querySelector(".lp-modal button[data-modal-zu]");
-    if (zu) zu.focus();
-    var diffText = diffScroll && wurzel.querySelector(".lp-diff-text");
-    if (diffText) { diffText.scrollTop = diffScroll[0]; diffText.scrollLeft = diffScroll[1]; }
+  /** Scrollposition und Fokus des offenen Modals vor dem Neuzeichnen. */
+  function modalStand() {
+    var rolle = wurzel.querySelector(".lp-modal .lp-diff-text, .lp-modal .fm-details");
+    return { scroll: rolle ? [rolle.scrollTop, rolle.scrollLeft] : null, fokus: modalZiele().indexOf(doc.activeElement) >= 0 ? modalSchluessel(doc.activeElement) : null };
+  }
+  /** Woran ein Ziel im Modal nach dem Neuzeichnen wiedererkannt wird: Art, Befehl, Link und Klasse, nicht die Stelle. */
+  function modalSchluessel(el) {
+    return [el.tagName, el.getAttribute("data-kopiere"), el.getAttribute("href"), el.getAttribute("class")].join("\n");
+  }
+  /** Das neue innerHTML nimmt dem Modal den Fokus (er fiele auf BODY); er geht zurueck, wo er war, sonst auf Schliessen. Die Scrollposition bleibt. */
+  function nachModal(stand) {
+    if (!(modal || diffAuf || fmAuf)) return;
+    var ziel = (stand.fokus !== null && modalZiele().find(function (el) { return modalSchluessel(el) === stand.fokus; })) || wurzel.querySelector(".lp-modal button[data-modal-zu]");
+    if (ziel) ziel.focus();
+    var rolle = stand.scroll && wurzel.querySelector(".lp-modal .lp-diff-text, .lp-modal .fm-details");
+    if (rolle) { rolle.scrollTop = stand.scroll[0]; rolle.scrollLeft = stand.scroll[1]; }
   }
 
   /**
@@ -1759,6 +1920,20 @@
     zeichne();
     var zeile = p && wurzel.querySelector('.bd-datei[data-pfad="' + (G.CSS && G.CSS.escape ? G.CSS.escape(p) : p) + '"]');
     if (zeile) zeile.focus();
+  }
+
+  /** Die Details eines Workers oeffnen; Schliessen gibt den Fokus an seine Karte zurueck. */
+  function oeffneFm(id) {
+    if (!fmWorker(id)) return;
+    fmAuf = id;
+    zeichne();
+  }
+  function schliesseFm() {
+    var id = fmAuf;
+    fmAuf = null;
+    zeichne();
+    var karte = id && wurzel.querySelector('.fm-karte[data-fm-worker="' + (G.CSS && G.CSS.escape ? G.CSS.escape(id) : id) + '"]');
+    if (karte) karte.focus();
   }
 
   /** Das Modal des Beweisbilds oeffnen; den Fokus auf Schliessen setzt zeichne(). */
@@ -1828,14 +2003,17 @@
         .catch(function (err) { opt.disabled = false; opt.title = "Fehler: " + err.message; });
       return;
     }
-    if (modal || diffAuf) {
-      if (e.target.matches("[data-modal-zu]") || e.target.closest("button[data-modal-zu]")) { if (modal) schliesseModal(); else schliesseDiff(); return; }
-      var mk = diffAuf && e.target.closest("[data-kopiere]");
+    if (modal || diffAuf || fmAuf) {
+      if (e.target.matches("[data-modal-zu]") || e.target.closest("button[data-modal-zu]")) { if (modal) schliesseModal(); else if (diffAuf) schliesseDiff(); else schliesseFm(); return; }
+      var mk = (diffAuf || fmAuf) && e.target.closest("[data-kopiere]");
       if (mk) kopiere(mk);
       return;
     }
     var bw = e.target.closest("[data-beweis]");
     if (bw) { oeffneModal(bw.dataset.beweis); return; }
+    if (e.target.closest(".lp-firstmate a[href]")) return;
+    var fw = e.target.closest("[data-fm-worker]");
+    if (fw) { oeffneFm(fw.dataset.fmWorker); return; }
     var mehr = e.target.closest("[data-mehr]");
     if (mehr) { umschalteMehr(mehr.dataset.mehr); return; }
     var lf = e.target.closest("[data-live-fertig]");
@@ -1903,11 +2081,15 @@
     if (e.key === "Escape") {
       if (modal) { schliesseModal(); return; }
       if (diffAuf) { schliesseDiff(); return; }
+      if (fmAuf) { schliesseFm(); return; }
       if (sel) { sel = null; zeichne(); }
       return;
     }
+    // Eine Worker-Karte oeffnet ihre Details auch mit Enter und Leertaste.
+    var karte = (e.key === "Enter" || e.key === " ") && !modal && !diffAuf && !fmAuf && e.target.closest && !e.target.closest("a[href]") && e.target.closest("[data-fm-worker]");
+    if (karte) { e.preventDefault(); oeffneFm(karte.dataset.fmWorker); return; }
     // Fokusfalle (S29, S3): Tab und Shift-Tab bleiben im Modal.
-    if ((modal || diffAuf) && e.key === "Tab") {
+    if ((modal || diffAuf || fmAuf) && e.key === "Tab") {
       var ziele = modalZiele();
       e.preventDefault();
       if (!ziele.length) return;
@@ -1982,6 +2164,33 @@
     return '<td class="lp-fragenzahl"><a class="offen" href="' + esc(href) + '" title="' + zahl + " " + (zahl === 1 ? "offene Frage" : "offene Fragen") + '">' + zahl + " offen</a></td>";
   }
 
+  // Firstmate aus GET .../firstmate: beim Laden und dann alle FM_TAKT_MS. Ist die Wurzel kein Home
+  // (home: null) oder fehlt der Endpunkt, faellt der Abschnitt still weg und es wird nicht mehr gefragt.
+  var FM_TAKT_MS = 15000, fmUhr = null;
+  function ladeFirstmate() {
+    return fetch(API + "/firstmate", { cache: "no-store" }).then(function (r) {
+      return r.ok ? r.json() : null;
+    }).then(function (b) {
+      var neu = b && typeof b === "object" && b.home ? b : null;
+      if (!neu && fmUhr) { clearInterval(fmUhr); fmUhr = null; }
+      if (!neu && !FM) return;
+      FM = neu;
+      if (D) zeichneFirstmate();
+    }).catch(function () { /* der naechste Takt versucht es wieder */ });
+  }
+  /** Nur den Abschnitt neu; mit offenem Modal oder wenn er erscheint oder wegfaellt, die ganze Seite. */
+  function zeichneFirstmate() {
+    var el = wurzel.querySelector('[data-testid="sitzung-firstmate"]');
+    var html = firstmateTeil();
+    var fokus = doc.activeElement && doc.activeElement.closest && el && el.contains(doc.activeElement) ? doc.activeElement.closest("[data-fm-worker]") : null;
+    var sel = fokus && (fokus.classList.contains("fm-karte") ? ".fm-karte" : ".fm-wid") + '[data-fm-worker="' + (G.CSS && G.CSS.escape ? G.CSS.escape(fokus.dataset.fmWorker) : fokus.dataset.fmWorker) + '"]';
+    var nr = fokus ? Array.prototype.indexOf.call(el.querySelectorAll(sel), fokus) : -1;
+    if (el && html && !modal && !diffAuf && !fmAuf) el.outerHTML = html;
+    else if (el || html) zeichne();
+    var wieder = fokus && wurzel.querySelectorAll(sel)[Math.max(nr, 0)];
+    if (wieder) wieder.focus({ preventScroll: true });
+  }
+
   function nichtGefunden() {
     doc.title = "nicht gefunden · live-plan";
     wurzel.innerHTML = '<header class="lp-kopf"><div class="lp-oben"><a class="lp-zurueck" href="/">alle Sitzungen</a>' + themaSchalter() + "</div><h1>Sitzung nicht gefunden</h1>" +
@@ -2043,4 +2252,6 @@
   lausche();
   ladeAbo();
   setInterval(ladeAbo, ABO_TAKT_MS);
+  fmUhr = setInterval(ladeFirstmate, FM_TAKT_MS);
+  ladeFirstmate();
 })();

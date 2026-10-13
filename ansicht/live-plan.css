@@ -660,3 +660,70 @@ body { margin: 0; background: var(--s1); font-family: var(--font); }
   .lp-teil1 > *, .lp-teil1 .lp-ueberblick > * { margin-top: 8px; }
   .lp-agentenliste { display: none !important; }
 }
+
+/* Firstmate: Worker als Karten wie die Kaesten des Cockpits, Captain-Inbox und Warteschlange, Projekte
+   als Tabelle, Details im Modal. Farbe je Zustand ueber --fm. Nur Variablen des Themas. */
+.lp-firstmate { margin: 30px 0 0; }
+.lp-firstmate .lp-h { margin-top: 0; }
+.fm-z-working { --fm: var(--ok); }
+.fm-z-paused { --fm: var(--l1); }
+.fm-z-blocked, .fm-z-failed { --fm: var(--rot); }
+.fm-z-needs-decision { --fm: var(--warn); }
+.fm-z-done { --fm: var(--l3); }
+.fm-z-dead { --fm: var(--l5); }
+.fm-z-unknown { --fm: var(--st-offen); }
+.fm-meta, .fm-lage { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12.5px; color: var(--ink-3); }
+.fm-lage { margin: 6px 0 0; color: var(--ink-2); }
+.fm-inbox.warten { color: var(--warn); font-weight: 600; }
+.fm-warteschlange { margin: 4px 0 0; padding: 0; list-style: none; font-size: 12.5px; color: var(--ink-2); }
+.fm-warteschlange li { display: flex; gap: 10px; align-items: baseline; padding: 1px 0; }
+.fm-wartet { flex: none; padding: 0 6px; border: 1px solid var(--line-2); border-radius: 999px; font-size: 11px; color: var(--warn); }
+.fm-wartet.bereit { color: var(--ok); }
+.fm-h { display: flex; align-items: baseline; gap: 8px; margin: 18px 0 8px; font-size: 11px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-3); }
+.fm-h .zaehler { font-family: var(--mono); letter-spacing: 0; text-transform: none; }
+.fm-karten { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 10px; }
+.fm-karte { display: grid; gap: 3px; align-content: start; min-width: 0; padding: 8px 10px; border: 1px solid var(--line-2); border-top: 3px solid var(--fm); border-radius: var(--r-s); background: var(--s2); font-size: 12.5px; cursor: pointer; }
+.fm-karte:hover, .fm-karte:focus-visible { border-color: var(--fm); outline: none; }
+.fm-kopf { display: flex; gap: 6px; align-items: baseline; min-width: 0; }
+.fm-kopf b { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink-1); }
+.fm-zeichen { flex: none; color: var(--fm); font-weight: 700; }
+.fm-post { flex: none; margin-left: auto; color: var(--warn); font-size: 11.5px; }
+.fm-zustand { flex: none; margin-left: auto; color: var(--fm); font-family: var(--mono); font-size: 11px; }
+.fm-post + .fm-zustand { margin-left: 6px; }
+.fm-titel { color: var(--ink-1); }
+.fm-zeile, .fm-status { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink-2); }
+.fm-status { color: var(--ink-1); }
+.fm-status .uhr, .fm-verlauf .uhr { font-family: var(--mono); font-size: 11px; color: var(--ink-3); }
+.fm-karte .vz, .fm-projekte .vz { color: var(--ink-3); font-family: var(--mono); font-size: 11px; }
+.lp-firstmate a { color: var(--l1); }
+.lp-firstmate .unbekannt, .lp-fm .unbekannt { color: var(--ink-3); }
+.fm-tabelle { overflow-x: auto; }
+.fm-projekte { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.fm-projekte th { padding: 4px 8px; border-bottom: 1px solid var(--line-2); font-size: 11px; font-weight: 600; text-align: left; white-space: nowrap; color: var(--ink-3); }
+.fm-projekte td { padding: 6px 8px; border-bottom: 1px solid var(--line-1); vertical-align: top; color: var(--ink-2); }
+.fm-projekte td b { color: var(--ink-1); }
+.fm-projekte .klein { font-size: 11.5px; color: var(--ink-3); }
+.fm-haltung { padding: 0 6px; border: 1px solid var(--line-2); border-radius: 999px; font-family: var(--mono); font-size: 10px; color: var(--ink-3); }
+.fm-sauber { color: var(--ok); }
+.fm-prn { color: var(--ink-1); }
+.fm-prs { margin: 2px 0 0; padding: 0; list-style: none; max-width: 340px; }
+.fm-prs li { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fm-wid { cursor: pointer; color: var(--l1); }
+.lp-modal-box.lp-fm { grid-template-rows: auto minmax(0, 1fr); width: min(980px, 94vw); max-height: 90vh; border-top: 3px solid var(--fm); }
+.lp-fm .lp-modal-kopf { align-items: center; }
+.lp-fm .lp-modal-kopf .pfad { flex: none; color: var(--fm); font-family: var(--mono); }
+.fm-details { overflow: auto; padding: 0 4px 6px; font-size: 12.5px; }
+.fm-felder { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 3px 14px; margin: 4px 0 0; }
+.fm-felder dt { color: var(--ink-3); }
+.fm-felder dd { margin: 0; overflow-wrap: anywhere; color: var(--ink-1); }
+.fm-verlauf, .fm-befehle { margin: 0; padding: 0; list-style: none; }
+.fm-verlauf li { padding: 2px 0; color: var(--ink-2); overflow-wrap: anywhere; }
+.fm-verb { display: inline-block; min-width: 120px; margin-right: 8px; font-family: var(--mono); font-size: 11px; color: var(--ink-3); }
+.fm-v-blocked .fm-verb, .fm-v-failed .fm-verb { color: var(--rot); }
+.fm-v-needs-decision .fm-verb { color: var(--warn); }
+.fm-v-done .fm-verb, .fm-v-resolved .fm-verb { color: var(--ok); }
+.fm-befehle li { display: flex; gap: 10px; align-items: baseline; padding: 2px 0; }
+.fm-zweck { flex: none; width: 90px; color: var(--ink-3); }
+.fm-befehle code { flex: 1; min-width: 0; overflow-wrap: anywhere; font-family: var(--mono); font-size: 11.5px; color: var(--ink-2); }
+.fm-befehle .kopieren { flex: none; padding: 1px 8px; border: 1px solid var(--line-2); border-radius: 6px; background: var(--s1); color: var(--ink-2); font-size: 11px; }
+.fm-projekte td.mono { white-space: nowrap; }
