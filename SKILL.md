@@ -51,9 +51,10 @@ bzw. die mergeBase (`git diff`), dazu die dem Stack zugeordneten uncommitteten A
 (nicht zugeordnet); sonst, ohne `but` oder bei einem Fehler `null`. Die Ansicht zeigt je Branch einen
 aufklappbaren Abschnitt ueber dem Baum, mit Warnzeichen bei Ueberschneidung, danach "nicht zugeordnet".
 `GET /api/REPO/<id>/diff?p=PFAD` liefert `{p, art, text, gekappt}` fuer eine Datei, die im Dateibaum
-steht (sonst 404, ein Pfad mit `..` oder fuehrendem `/` 400): geaendert oder geloescht `git diff HEAD`,
-unversioniert der Inhalt als neue Datei, ohne Marke der Inhalt; Binaeres und Symlinks heissen
-`binaer` ohne Inhalt, der Text ist bei 512 KiB `gekappt`. Die Ansicht zeigt ihn im Diff-Modal.
+steht oder die das Register als gelesen oder geschrieben fuehrt (git-ignoriert: der Inhalt, nur fuer
+Loopback, sonst 403, Regeln in README.md; sonst 404, ein Pfad mit `..` oder fuehrendem `/` 400):
+geaendert oder geloescht `git diff HEAD`, unversioniert der Inhalt als neue Datei, ohne Marke der
+Inhalt; Binaeres und Symlinks heissen `binaer` ohne Inhalt, der Text ist bei 512 KiB `gekappt`. Die Ansicht zeigt ihn im Diff-Modal.
 Mit `&branch=NAME` gilt er einer Datei, die dieser but-Branch committet hat: `git diff` von seiner
 Basis zum Branch; sonst 404.
 
