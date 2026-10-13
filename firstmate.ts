@@ -587,10 +587,9 @@ const META_GRUPPEN: [string, string[]][] = [
   ["Lauf", ["harness", "model", "effort", "backend", "remote_host"]],
   ["Liefern", ["mode", "yolo", "pr"]],
 ];
-const META_KOPF = ["kind"];
-// Interne Schluessel, die nur unter "alle" erscheinen.
-const META_INTERN = ["endpoint_task_id", "tasktmp", "busy_gen", "spawn_gen"];
-const META_SICHTBAR = new Set([...META_GRUPPEN.flatMap(([, keys]) => keys), ...META_KOPF, ...META_INTERN]);
+// Interne Schluessel, die nur unter "alle" erscheinen; kind steht zusaetzlich im Kopf der Karte.
+const META_INTERN = ["endpoint_task_id", "tasktmp", "busy_gen", "spawn_gen", "kind"];
+const META_SICHTBAR = new Set([...META_GRUPPEN.flatMap(([, keys]) => keys), ...META_INTERN]);
 // Schluessel, die nach einem Geheimnis aussehen, zeigt die Sicht nie, auch wenn sie bekannt waeren (zweite Sperre).
 const META_GEHEIM = /token|secret|key|pass|auth/i;
 export const VERLAUF_N = 12;
@@ -618,7 +617,7 @@ export function metaGruppen(meta: Meta): MetaGruppe[] {
   const eintrag = (schluessel: string): MetaEintrag => ({ schluessel, wert: sicht[schluessel] });
   const gruppiert = new Set(META_GRUPPEN.flatMap(([, keys]) => keys));
   const gruppen = META_GRUPPEN.map(([name, keys]) => ({ name, eintraege: keys.filter((k) => Object.hasOwn(sicht, k)).map(eintrag) }));
-  const rest = Object.keys(sicht).filter((k) => !gruppiert.has(k) && !META_KOPF.includes(k)).sort();
+  const rest = Object.keys(sicht).filter((k) => !gruppiert.has(k)).sort();
   return [...gruppen, { name: "alle", eintraege: rest.map(eintrag) }];
 }
 

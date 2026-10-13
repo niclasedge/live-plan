@@ -234,7 +234,7 @@ test("firstmateSicht: Zustand, Verlauf, nur sichtbare Meta, Projekte; ohne tmux-
     // nur bekannte Schluessel (unbekanntes "geheim" fehlt); Kind steht im Kopf der Karte, der Rest unter alle
     assert.deepEqual(w.meta, { project: "/p/alpha", kind: "ship", harness: "claude", tasktmp: "/tmp/x", endpoint_task_id: "e-9" });
     assert.deepEqual(w.metaGruppen.find((g) => g.name === "Lauf")?.eintraege, [{ schluessel: "harness", wert: "claude" }]);
-    assert.deepEqual(w.metaGruppen.find((g) => g.name === "alle")?.eintraege, [{ schluessel: "endpoint_task_id", wert: "e-9" }, { schluessel: "tasktmp", wert: "/tmp/x" }]);
+    assert.deepEqual(w.metaGruppen.find((g) => g.name === "alle")?.eintraege, [{ schluessel: "endpoint_task_id", wert: "e-9" }, { schluessel: "kind", wert: "ship" }, { schluessel: "tasktmp", wert: "/tmp/x" }]);
     assert.equal("pane" in w.fenster, false);
     assert.deepEqual(s.warteschlange?.map((a) => [a.id, a.wartet]), [["q-2", "wartet auf t-1"]]);
     assert.deepEqual(s.projekte.map((p) => [p.name, p.worker]), [["alpha", ["t-1"]]]);
@@ -259,7 +259,7 @@ test("befehle: Status mit tail -F, Live-Ansicht mit fm-peek direkt hinter dem Zu
   }
 });
 
-test("metaGruppen: Ort, Lauf, Liefern in fester Reihenfolge, der Rest unter alle; kind steht im Kopf, leere Werte fehlen", () => {
+test("metaGruppen: Ort, Lauf, Liefern in fester Reihenfolge, der Rest unter alle (auch kind), leere Werte fehlen", () => {
   const g = metaGruppen({
     project: "/p/alpha", worktree: "/w/t-1", branch: "fm/t-1", window: "fm:t-1", terminal: "", harness: "claude", model: "claude-opus-5-5", effort: "xhigh",
     backend: "tmux", remote_host: "", mode: "no-mistakes", yolo: "1", pr: "https://github.com/o/r/pull/7", kind: "ship", busy_gen: "g1.2", spawn_gen: "s1700000000.4", tasktmp: "/tmp/x",
@@ -268,7 +268,7 @@ test("metaGruppen: Ort, Lauf, Liefern in fester Reihenfolge, der Rest unter alle
   assert.deepEqual(g[0].eintraege.map((e) => e.schluessel), ["project", "worktree", "branch", "window"]);
   assert.deepEqual(g[1].eintraege.map((e) => e.schluessel), ["harness", "model", "effort", "backend"]);
   assert.deepEqual(g[2].eintraege.map((e) => e.schluessel), ["mode", "yolo", "pr"]);
-  assert.deepEqual(g[3].eintraege.map((e) => e.schluessel), ["busy_gen", "spawn_gen", "tasktmp"]);
+  assert.deepEqual(g[3].eintraege.map((e) => e.schluessel), ["busy_gen", "kind", "spawn_gen", "tasktmp"]);
 });
 
 test("metaGruppen: unbekannte Schluessel fehlen samt ihren Werten, auch ohne Geheimnis im Namen", () => {
