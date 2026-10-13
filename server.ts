@@ -62,6 +62,7 @@ import {
   type Register,
   type Verlaufseintrag,
 } from "./logik.ts";
+import { hostSicht } from "./host.ts";
 import { istFirstmateHome, prVorrat, type FirstmateSicht, type GhLauf } from "./firstmate.ts";
 
 const WURZELN = wurzeln(process.env);
@@ -1095,6 +1096,7 @@ async function antworte(req: Request, server: Bun.Server): Promise<Response> {
     if (lesen && b === "gesund" && teile.length === 2) return json({ pid: process.pid, wurzel: WURZELN[0], wurzeln: WURZELN, port: PORT });
     if (lesen && b === "liste" && teile.length === 2) return json({ wurzel: WURZELN[0], wurzeln: WURZELN, sitzungen: listeSitzungen() });
     if (lesen && b === "abo" && teile.length === 2) return json(await aboAntwort());
+    if (lesen && b === "host" && teile.length === 2) return json(await hostSicht());
     const ort = b && c ? ortVon(b, c) : null;
     if (!ort) return json({ fehler: "Sitzung nicht gefunden" }, 404);
     if (lesen && teile.length === 3) return json(await sitzungsDaten(ort));

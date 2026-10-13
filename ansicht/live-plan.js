@@ -249,6 +249,84 @@
     // With doku.kurz in the head, the goal moves under the heading of part 1.
     return teilKopf(1, "Sitzung und Fortschritt", p.stand && p.stand.thema) + (p.doku && p.doku.kurz ? zielAbsatz(p, fest) : "");
   }
+  // --- Rechner (GET /api/host): die Last des Servers, knapp ueber dem Verbrauch ------------------------
+  var HOST = null, HOST_TAKT_MS = 10000, hostAuf = false;
+  function mb(x) {
+    var n = zahl(x);
+    return n >= 1024 ? (n / 1024).toFixed(1) + " GB" : Math.round(n) + " MB";
+  }
+  function hostProzent(x) {
+    return Math.round(zahl(x)) + "%";
+  }
+  function hostProzesse(titel, liste) {
+    var zeilen = (Array.isArray(liste) ? liste : []).map(function (p) {
+      return "<tr><td>" + hostProzent(p.cpu) + "</td><td>" + mb(p.rssMb) + "</td><td>" + (zahl(p.swapMb) >= 1 ? mb(p.swapMb) : "–") + "</td><td>" + zahl(p.pid) + "</td><td>" + esc(p.laufzeit) +
+        '</td><td class="cwd">' + esc(p.cwd) + '</td><td class="befehl" title="' + esc(p.befehl) + '">' + esc(p.befehl) + "</td></tr>";
+    }).join("");
+    return '<table class="hw-prozesse"><caption>' + esc(titel) + "</caption><thead><tr><th>CPU</th><th>RAM</th><th>Swap</th><th>PID</th><th>Zeit</th><th>cwd</th><th>Befehl</th></tr></thead><tbody>" + zeilen + "</tbody></table>";
+  }
+  /** Der Block Rechner; ohne verfuegbare Daten leer, dann gibt es auch keinen Takt. */
+  function hostTeil(auf) {
+    var H = HOST;
+    if (!H || H.verfuegbar !== true || !H.speicher) return "";
+    var sp = H.speicher, last = Array.isArray(H.last) ? H.last : [0, 0, 0];
+    var zeile1 = '<div class="vb-sitzung"><span><span class="k">CPU</span> <span class="w">' + hostProzent(H.cpu) + "</span></span>" +
+      '<span><span class="k">Last</span> <span class="w">' + last.map(function (x) { return zahl(x).toFixed(2); }).join(" ") + "</span></span>" +
+      '<span><span class="k">RAM</span> <span class="w">' + mb(sp.benutztMb) + "</span> / " + mb(sp.gesamtMb) + ' <span class="k">(frei ' + mb(sp.verfuegbarMb) + ")</span></span>" +
+      '<span><span class="k">Swap</span> <span class="w">' + mb(sp.swapBenutztMb) + "</span> / " + mb(sp.swapGesamtMb) + "</span></div>";
+    var platten = (Array.isArray(H.platten) ? H.platten : []).map(function (d) {
+      return '<span><span class="k mono">' + esc(d.pfad) + '</span> <span class="w">' + mb(d.benutztMb) + "</span> / " + mb(d.gesamtMb) + " (" + hostProzent(d.prozent) + ")</span>";
+    }).join("");
+    var zeile2 = platten ? '<div class="vb-sitzung">' + platten + "</div>" : "";
+    var details = '<details class="hw-details"' + (auf ? " open" : "") + "><summary>Top-Prozesse</summary>" + hostProzesse("nach CPU", H.topCpu) + hostProzesse("nach RAM", H.topRam) + "</details>";
+    return '<section class="lp-host" data-testid="sitzung-host">' + ueberschrift("Rechner") + '<div class="lv-verbrauch lv-host">' + zeile1 + zeile2 + details + "</div></section>";
+  }
+  /**
+   * Ruft lade alle ms auf, solange das Dokument sichtbar ist. Beim Sichtbarwerden sofort einmal, beim
+   * Verbergen Schluss. `zeit` ersetzt setInterval und clearInterval in Tests.
+   */
+  function sichtbarTakt(d, ms, lade, zeit) {
+    var z = zeit || { setze: G.setInterval.bind(G), loesche: G.clearInterval.bind(G) };
+    var id = null, tot = false;
+    function sichtbar() { return d.visibilityState === "visible"; }
+    function start() {
+      if (tot || id !== null || !sichtbar()) return;
+      lade();
+      id = z.setze(lade, ms);
+    }
+    function stopp() {
+      if (id !== null) z.loesche(id);
+      id = null;
+    }
+    function wechsel() { if (sichtbar()) start(); else stopp(); }
+    function ende() {
+      tot = true;
+      stopp();
+      d.removeEventListener("visibilitychange", wechsel);
+    }
+    d.addEventListener("visibilitychange", wechsel);
+    return { start: start, stopp: stopp, ende: ende, laeuft: function () { return id !== null; } };
+  }
+  var hostTaktObj = null;
+  function ladeHost() {
+    return fetch("/api/host", { cache: "no-store" }).then(function (r) {
+      return r.ok ? r.json() : null;
+    }).then(function (b) {
+      var neu = b && typeof b === "object" && b.verfuegbar === true ? b : null;
+      // Linux-only: ohne Daten verschwindet der Block und der Takt endet.
+      if (!neu && hostTaktObj) { hostTaktObj.ende(); hostTaktObj = null; }
+      if (!neu && !HOST) return;
+      HOST = neu;
+      if (D) zeichneHost();
+    }).catch(function () { /* der naechste Takt versucht es wieder */ });
+  }
+  /** Nur den Block neu; er bleibt aufgeklappt, wenn er es war. Erscheint oder verschwindet er, die ganze Seite. */
+  function zeichneHost() {
+    var el = wurzel.querySelector('[data-testid="sitzung-host"]');
+    var html = hostTeil(hostAuf);
+    if (el && html) { if (!modal && !diffAuf && !fmAuf) el.outerHTML = html; }
+    else if (el || html) zeichne();
+  }
   function verbrauchTeil() {
     var L = registerVon();
     return L ? '<section class="lp-verbrauch">' + ueberschrift("Verbrauch") + verbrauch(L) + "</section>" : "";
@@ -1737,7 +1815,7 @@
   function seite(modalHtml) {
     if (handout) return handoutSeite();
     return '<div class="lp-inhalt"' + (modalHtml ? " inert" : "") + ">" + kopf() + fehler() + ueberblickKarten() + teilEins() +
-      verbrauchTeil() + agentenAbschnitt() + fortschrittTeil() + blick() + jetzt(true) +
+      hostTeil(hostAuf) + verbrauchTeil() + agentenAbschnitt() + fortschrittTeil() + blick() + jetzt(true) +
       '<div class="lp-teil1">' + fragenAnSie() + ueberblick() + "</div>" + firstmateTeil() + doku() + dateien() + fuss() +
       '<aside id="lp-drawer" class="lp-drawer' + (sel ? " open" : "") + '" data-testid="sitzung-drawer">' + (sel ? drawerInhalt(sel) : "") + "</aside></div>" +
       (modalHtml || "");
@@ -1770,6 +1848,9 @@
     baumWarte: baumWarte,
     setzeFertigOffen: setzeFertigOffen,
     blick: blick,
+    hostTeil: hostTeil,
+    sichtbarTakt: sichtbarTakt,
+    setzeHost: function (h) { HOST = h && typeof h === "object" ? h : null; },
     verbrauch: function () { return D && D.live && typeof D.live === "object" ? verbrauch(D.live) : ""; },
     kontoKurz: kontoKurz,
     setzeAbo: function (a) { ABO = a && typeof a === "object" ? a : null; },
@@ -2254,4 +2335,8 @@
   setInterval(ladeAbo, ABO_TAKT_MS);
   fmUhr = setInterval(ladeFirstmate, FM_TAKT_MS);
   ladeFirstmate();
+  // toggle steigt nicht auf, wird aber in der Erfassung gesehen.
+  wurzel.addEventListener("toggle", function (e) { if (e.target.classList && e.target.classList.contains("hw-details")) hostAuf = e.target.open; }, true);
+  hostTaktObj = sichtbarTakt(doc, HOST_TAKT_MS, ladeHost);
+  hostTaktObj.start();
 })();

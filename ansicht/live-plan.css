@@ -208,6 +208,16 @@ body { margin: 0; background: var(--s1); font-family: var(--font); }
 .lv-verbrauch .w .uhr { font: inherit; color: inherit; }
 .lv-verbrauch .k { font-size: 10px; }
 .lv-verbrauch .mod { color: var(--ink-2); }
+/* Rechner: Last des Servers, gleiche Dichte wie der Verbrauch; die Prozesslisten klappen auf. */
+.lp-host .lv-verbrauch { padding: 10px 14px; border: 0; border-radius: 12px; background: var(--s2); font-size: 12.5px; }
+.lv-host .vb-sitzung { gap: 14px; }
+.hw-details > summary { cursor: pointer; font-size: 10px; color: var(--ink-3); }
+.hw-prozesse { width: 100%; margin-top: 4px; border-collapse: collapse; font-size: 11px; }
+.hw-prozesse caption { text-align: left; font-size: 10px; color: var(--ink-3); }
+.hw-prozesse th { text-align: left; font-weight: 400; font-size: 10px; color: var(--ink-3); }
+.hw-prozesse th, .hw-prozesse td { padding: 0 8px 0 0; }
+.hw-prozesse td.cwd, .hw-prozesse td.befehl { max-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hw-prozesse td.befehl { width: 40%; font-family: var(--mono); color: var(--ink-2); }
 .vb-trenn { color: var(--line-2); }
 .vb-sitzung { display: flex; gap: 6px; align-items: center; min-width: 0; white-space: nowrap; overflow: hidden; }
 .vb-sitzung > * { flex: none; }
@@ -646,6 +656,7 @@ body { margin: 0; background: var(--s1); font-family: var(--font); }
   .lp-kachel { padding: 2px 6px; }
   .lp-kachel .w { font-size: 13px; }
   .lv-verbrauch { padding: 2px 6px; font-size: 8px; }
+  .lp-host { display: none; }
   .vb-fbar { height: 10px; }
   .vb-fbar .lab { line-height: 10px; font-size: 7px; }
   .lp-dateien { display: none !important; }
