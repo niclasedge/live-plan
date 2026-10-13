@@ -1645,6 +1645,7 @@
     ueberblick: ueberblick,
     umschalteMehr: umschalteMehr,
     beweisModal: beweisModal,
+    fragenZelle: fragenZelle,
   };
 
   if (!wurzel) return;
@@ -1971,6 +1972,16 @@
     else if (el || html) zeichne();
   }
 
+  /**
+   * Die Zelle offener Fragen in der Liste: die Zahl als roter Verweis auf die Sitzung, bei null ein
+   * leiser Strich; ohne Zahl (kaputte Datei, nur Register) bleibt sie leer.
+   */
+  function fragenZelle(zahl, href) {
+    if (typeof zahl !== "number") return '<td class="lp-fragenzahl"></td>';
+    if (zahl === 0) return '<td class="lp-fragenzahl klein">–</td>';
+    return '<td class="lp-fragenzahl"><a class="offen" href="' + esc(href) + '" title="' + zahl + " " + (zahl === 1 ? "offene Frage" : "offene Fragen") + '">' + zahl + " offen</a></td>";
+  }
+
   function nichtGefunden() {
     doc.title = "nicht gefunden · live-plan";
     wurzel.innerHTML = '<header class="lp-kopf"><div class="lp-oben"><a class="lp-zurueck" href="/">alle Sitzungen</a>' + themaSchalter() + "</div><h1>Sitzung nicht gefunden</h1>" +
@@ -1985,13 +1996,13 @@
         // S5: eine Sitzung aus dem Register traegt die Marke live (beendet grau), der volle Repo-Pfad steht im title.
         var marke = e.live ? ' <span class="lv-marke' + (e.beendet ? " aus" : "") + '">' + (e.beendet ? "beendet" : "live") + "</span>" : "";
         return '<tr><td title="' + esc(e.pfad || "") + '"><b>' + esc(e.repo) + '</b></td><td class="mono"><a href="' + esc(href) + '">' + esc(e.slug) + "</a>" + marke + "</td><td>" + esc(e.titel) +
-          '</td><td class="mono klein">' + zeitAngabe(e.geaendert) + "</td></tr>";
+          "</td>" + fragenZelle(e.offeneFragen, href) + '<td class="mono klein">' + zeitAngabe(e.geaendert) + "</td></tr>";
       }).join("");
       doc.title = "Sitzungen · live-plan";
       wurzel.innerHTML = '<header class="lp-kopf"><div class="lp-oben"><h1>Sitzungen</h1>' + themaSchalter() + "</div>" +
         '<p class="lp-ziel">Lebende Dokumente aus <span class="mono">REPO/.live-plan/SLUG.yaml</span> unter <span class="mono">' + esc(daten.wurzel) + "</span> und laufende Claude-Sitzungen aus dem Register</p></header>" +
-        '<table class="lp-liste" data-testid="tabelle-sitzungen"><thead><tr><th>repo</th><th>sitzung</th><th>titel</th><th>geaendert</th></tr></thead><tbody>' +
-        (zeilen || '<tr><td colspan="4" class="leer">Keine Sitzung. <span class="mono">live-plan neu SLUG</span> legt eine an.</td></tr>') + "</tbody></table>";
+        '<table class="lp-liste" data-testid="tabelle-sitzungen"><thead><tr><th>repo</th><th>sitzung</th><th>titel</th><th>fragen</th><th>geaendert</th></tr></thead><tbody>' +
+        (zeilen || '<tr><td colspan="5" class="leer">Keine Sitzung. <span class="mono">live-plan neu SLUG</span> legt eine an.</td></tr>') + "</tbody></table>";
     }).catch(function () { /* der naechste Takt versucht es wieder */ });
   }
 
