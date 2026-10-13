@@ -71,6 +71,11 @@ $LP stop          # Server beenden
 Der Server lauscht auf Port 4410 (`LIVE_PLAN_PORT`) und hat keine Anmeldung. Er ist im LAN
 erreichbar; legen Sie keine Secrets in die Sitzungsdatei.
 
+Der Diff im Abschnitt Dateien zeigt auch eine git-ignorierte Datei, aber nur, wenn die Sitzung sie
+laut Register gelesen oder geschrieben hat und sie in der Wurzel liegt. Typische Secret-Namen
+(`.env`, `.env.*`, `*.pem`, `*.key`, `id_rsa*`, `id_ed25519*`, `*credentials*`, `*secret*`) zeigt er
+dabei nie, sondern meldet eine Ablehnung. Tests: `node --test server.test.ts` (startet `bun server.ts`).
+
 ## Firstmate-Cockpit
 
 `cockpit.ts` zeigt die Worker eines [Firstmate](https://github.com/kunchenguid/firstmate)-Home.

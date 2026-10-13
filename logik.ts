@@ -1201,6 +1201,20 @@ export function diffPfadGueltig(p: unknown): p is string {
   return p.split("/").every((t) => t !== "" && t !== "." && t !== "..");
 }
 
+/** Ob das Register der Sitzung den relativen Pfad `p` als gelesen oder geschrieben fuehrt. */
+export function registerBeruehrt(r: Register | null, p: string): boolean {
+  const dateien: unknown = r?.dateien;
+  return Array.isArray(dateien) && dateien.some((d) => istObjekt(d) && d.pfad === p && (typeof d.gelesen === "number" || typeof d.geschrieben === "number"));
+}
+
+/** Namen, die typisch Secrets tragen: eine git-ignorierte Datei mit so einem Namen zeigt der Server nie. */
+const GEHEIM = [/^\.env$/, /^\.env\./, /\.pem$/, /\.key$/, /^id_rsa/, /^id_ed25519/, /credentials/, /secret/];
+
+/** Ob ein Teil von `p` wie eine Secret-Datei heisst (Gross- und Kleinschreibung egal). */
+export function geheimerName(p: string): boolean {
+  return p.split("/").some((t) => GEHEIM.some((m) => m.test(t.toLowerCase())));
+}
+
 /** Unversioniert: neu; ohne Git-Marke: der Inhalt; sonst der Diff gegen HEAD. */
 export function diffArtVon(s: BaumStatus | undefined): "diff" | "neu" | "datei" {
   return s === "?" ? "neu" : s ? "diff" : "datei";

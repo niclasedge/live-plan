@@ -26,6 +26,7 @@ import {
   diffArtVon,
   diffPfadGueltig,
   DIFF_LESEN_HOECHSTENS,
+  geheimerName,
   type BaumDatei,
   type DiffAntwort,
   gitStand,
@@ -39,6 +40,7 @@ import {
   pruefePlan,
   raster,
   registerAus,
+  registerBeruehrt,
   registerRepo,
   setzeEntscheidungImText,
   spurbild,
@@ -580,6 +582,8 @@ function baumVon(repoPfad: string): Promise<Baum | null> {
 // Nur fuer einen Pfad aus dem Dateibaum: so liest der Server nichts ausserhalb der Wurzel. Geaendert
 // oder geloescht: git diff HEAD; unversioniert: der Inhalt als neue Datei; ohne Marke: der Inhalt.
 // Mit branch= (E3) nur eine Datei, die dieser but-Branch committet hat: der Diff gegen seine Basis.
+// Ausserhalb des Baums (git-ignoriert) nur eine Datei, die das Register dieser Sitzung als gelesen
+// oder geschrieben fuehrt, nach realpath in der Wurzel und nicht mit einem Secret-Namen.
 
 const DIFF_PUFFER = 32 * 1024 * 1024;
 const diffPuffer = Buffer.allocUnsafe(DIFF_LESEN_HOECHSTENS);
@@ -614,6 +618,21 @@ async function diffVon(repoPfad: string, d: BaumDatei): Promise<DiffAntwort | nu
   const datei = liesAnfang(path.join(repoPfad, d.p));
   if (!datei) return { p: d.p, art: "binaer", text: "Keine regulaere Datei (Symlink oder nicht lesbar), Inhalt nicht gelesen", gekappt: false };
   return diffAntwort(d.p, art, datei.inhalt, datei.gekappt);
+}
+
+/** Der Inhalt einer Datei ausserhalb des Baums; null, wenn sie nach realpath nicht in der Wurzel liegt. */
+function ignoriertVon(repoPfad: string, p: string): DiffAntwort | null {
+  try {
+    const wurzel = realpathSync(repoPfad);
+    // The last part stays unresolved: liesAnfang refuses a symlink there itself.
+    const ordner = realpathSync(path.dirname(path.join(wurzel, p)));
+    if (ordner !== wurzel && !ordner.startsWith(wurzel + path.sep)) return null;
+    const datei = liesAnfang(path.join(ordner, path.basename(p)));
+    if (!datei) return { p, art: "binaer", text: "Keine regulaere Datei (Symlink oder nicht lesbar), Inhalt nicht gelesen", gekappt: false };
+    return diffAntwort(p, "datei", datei.inhalt, datei.gekappt);
+  } catch {
+    return null;
+  }
 }
 
 /** Eine in einem but-Branch committete Datei (E3): git diff zwischen seiner Basis und dem Branch. */
@@ -1046,7 +1065,12 @@ async function antworte(req: Request, server: Bun.Server): Promise<Response> {
         return antwort ? json(antwort) : json({ fehler: "git diff fehlgeschlagen" }, 500);
       }
       const eintrag = baum.dateien.find((x) => x.p === p);
-      if (!eintrag) return json({ fehler: "Datei steht nicht im Dateibaum" }, 404);
+      if (!eintrag) {
+        if (!registerBeruehrt(ort.live, p)) return json({ fehler: "Datei steht nicht im Dateibaum" }, 404);
+        if (geheimerName(p)) return json({ fehler: "Git-ignorierte Datei mit Secret-Namen, Inhalt wird nicht gezeigt" }, 403);
+        const antwort = ignoriertVon(ort.repoPfad!, p);
+        return antwort ? json(antwort) : json({ fehler: "Datei nicht lesbar oder nicht in der Wurzel der Sitzung" }, 404);
+      }
       const antwort = await diffVon(ort.repoPfad!, eintrag);
       return antwort ? json(antwort) : json({ fehler: "git diff fehlgeschlagen" }, 500);
     }

@@ -1022,6 +1022,7 @@
     (BAUM && Array.isArray(BAUM.dateien) ? BAUM.dateien : []).forEach(function (d) {
       if (!d || typeof d.p !== "string" || !d.p) return;
       var e = eintrag(d.p);
+      e.imBaum = true;
       if (GIT_KLASSE[d.s]) e.s = d.s;
       if (typeof d.plus === "number" && isFinite(d.plus)) e.plus = d.plus;
       if (typeof d.minus === "number" && isFinite(d.minus)) e.minus = d.minus;
@@ -1087,7 +1088,9 @@
     var e = d.e, t = zuletztBeruehrt(e);
     var frisch = t && jetztMs() - t < FRISCH_MS;
     var auch = e.auch && e.auch.length ? e.auch.join(", ") : "";
-    var titel = e.p + (e.s ? " · Git " + e.s : "") + (e.committet ? " · committet" + (e.branch ? " in " + e.branch : "") : "") + (auch ? " · auch in " + auch : "") +
+    // Touched by the session but missing from a complete tree: git ignores it.
+    var ignoriert = BAUM && !BAUM.gekappt && !e.imBaum && e.p.charAt(0) !== "/";
+    var titel = e.p + (e.s ? " · Git " + e.s : "") + (ignoriert ? " · git-ignoriert" : "") + (e.committet ? " · committet" + (e.branch ? " in " + e.branch : "") : "") + (auch ? " · auch in " + auch : "") +
       (e.gelesen ? " · gelesen " + ortszeit(isoVon(e.gelesen)) : "") +
       (e.geschrieben ? " · geschrieben " + ortszeit(isoVon(e.geschrieben)) : "") + (e.n ? " · " + e.n + "x" : "") + " · Klick zeigt den Diff";
     var diff = (e.plus ? '<i class="plus">+' + e.plus + "</i>" : "") + (e.minus ? '<i class="minus">-' + e.minus + "</i>" : "");
@@ -1125,7 +1128,7 @@
   /** Die Dateien einer Gruppe wie in dateiListe, dazu committet, auch und der Branch fuer den Diff. */
   function gruppenEintraege(dateien, branch, aktivitaet) {
     return (Array.isArray(dateien) ? dateien : []).filter(function (d) { return d && typeof d.p === "string" && d.p; }).map(function (d) {
-      var e = { p: d.p, committet: d.committet === true, uncommittet: d.uncommittet === true };
+      var e = { p: d.p, imBaum: true, committet: d.committet === true, uncommittet: d.uncommittet === true };
       e.auch = Array.isArray(d.auch) ? d.auch.filter(function (x) { return typeof x === "string" && x; }) : [];
       if (GIT_KLASSE[d.s]) e.s = d.s;
       if (typeof d.plus === "number" && isFinite(d.plus)) e.plus = d.plus;
