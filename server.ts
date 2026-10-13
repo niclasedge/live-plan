@@ -65,6 +65,7 @@ import {
   type Register,
   type Verlaufseintrag,
 } from "./logik.ts";
+import { ansagenDatei, leseAnsagen } from "./ansagen.ts";
 import { hostSicht } from "./host.ts";
 import { verlauf } from "./verlauf.ts";
 import { aufgabeDetail, gueltigeAufgabenId, istFirstmateHome, prVorrat, type FirstmateSicht, type GhLauf } from "./firstmate.ts";
@@ -82,6 +83,8 @@ const CACHE = process.env.LIVE_PLAN_CACHE || path.join(os.homedir(), ".cache", "
 const PID_DATEI = path.join(CACHE, `server-${PORT}.pid`);
 /** Das Register der Claude-Sitzungen (S5), ausserhalb jedes Repos; geschrieben von der Mod live-plan-sitzung. */
 const REGISTER = path.join(CACHE, "sitzungen");
+/** Die Ansagen aller Sitzungen (ansagen.ts), geschrieben von `live-plan sage` und der Mod; der Server liest nur. */
+const ANSAGEN = ansagenDatei(CACHE);
 
 // --- Sicher lesen und schreiben (S1) -----------------------------------------------------------
 //
@@ -1105,7 +1108,7 @@ function istApi(req: Request): boolean {
   }
 }
 
-/** Meldet jede Aenderung an YAML und Register-JSON; Schreibschuebe der Mod fasst sie zu einer Meldung je 250 ms zusammen. */
+/** Meldet jede Aenderung an den Dateien (YAML und Register-JSON, in der Uebersicht die Ansagen); Schreibschuebe fasst sie zu einer Meldung je 250 ms zusammen. */
 function ereignisse(pfade: string[], req: Request): Response {
   const frei = belegt();
   let halt = () => {};
@@ -1170,6 +1173,12 @@ async function antworte(req: Request, server: Bun.Server): Promise<Response> {
     if (lesen && b === "gesund" && teile.length === 2) return json({ pid: process.pid, wurzel: WURZELN[0], wurzeln: WURZELN, port: PORT });
     if (lesen && b === "liste" && teile.length === 2) return json({ wurzel: WURZELN[0], wurzeln: WURZELN, sitzungen: listeSitzungen() });
     if (lesen && b === "abo" && teile.length === 2) return json(await aboAntwort());
+    // Die Ansagen aller Sitzungen, neueste zuerst; der Strom der Uebersicht meldet jede neue.
+    if (lesen && b === "ansagen" && teile.length === 2) return json({ ansagen: leseAnsagen(ANSAGEN).reverse() });
+    if (lesen && b === "ereignisse" && teile.length === 2) {
+      server.timeout(req, 0);
+      return ereignisse([ANSAGEN], req);
+    }
     if (lesen && b === "host" && teile.length === 2) {
       try {
         const sicht = await hostSicht();

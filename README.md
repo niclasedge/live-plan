@@ -40,8 +40,8 @@ Der Mod verbindet jede Claude-Code-Sitzung mit dem live-plan. Er legt beim Sitzu
 `live-plan neu --auto` die Sitzung an und führt ein Register nach
 `~/.cache/live-plan/sitzungen/<id>.json` (Kontext, Kosten, Subagenten, Fortschritt), das die
 Ansicht als Live-Block zeigt. Dazu kommen die Werkzeuge `progress` und `step`, Antworten auf
-`AskUserQuestion` direkt im Browser, der Stand im System-Prompt und der Sprengradius, der riskante
-Bash-Befehle bis zur Freigabe anhält. In einer Terminal-Sitzung:
+`AskUserQuestion` direkt im Browser, der Stand im System-Prompt, die Ansagen (siehe unten) und der
+Sprengradius, der riskante Bash-Befehle bis zur Freigabe anhält. In einer Terminal-Sitzung:
 
 ```
 /plugin install live-plan-sitzung --marketplace niclasedge/live-plan
@@ -85,6 +85,33 @@ Register, kein `..`, kein Symlink, git-ignoriert nur für den eigenen Rechner, k
 10 MiB antwortet er 413, jede andere Endung 415. Die Antwort trägt `nosniff` und `Content-Security-Policy:
 sandbox`; ein SVG läuft nur in einem `<img>` und führt dort kein Skript aus. Geändert zeigt es nur die neue Version.
 Tests: `node --test server.test.ts` (startet `bun server.ts`).
+
+## Ansagen
+
+Die Übersicht (`http://localhost:4410/`) liest am Ende eines Agenten-Zugs eine kurze Zusammenfassung vor,
+über alle Sitzungen hinweg, mit der Sprachausgabe des Browsers (Web Speech API, `speechSynthesis`), vorneweg
+das Repo: „live-plan: Der Umbau ist fertig …“.
+
+- **Automatisch:** Die Mod gibt am Ende jedes beantworteten Zugs der Hauptsitzung (nicht der Subagenten) die
+  letzte Antwort an `live-plan sage --auto`. Das Skript entfernt Codeblöcke, Tabellen, Überschriften, Bilder,
+  URLs, HTML, Emoji und Markdown-Zeichen (ein Link wird zu seinem Text) und nimmt die ersten drei Sätze, höchstens
+  300 Zeichen. Eine Antwort unter vier Wörtern („Captain, shipshape.“) wird nicht angesagt.
+- **Selbst formuliert:** `live-plan sage "<2-3 Sätze>"` sagt einen eigenen Text an (gesäubert, bis sechs Sätze und
+  600 Zeichen; Sitzung aus `CLAUDE_SESSION_ID`, Repo aus der Git-Wurzel). Er ersetzt die automatische Ansage
+  desselben Zugs: `--auto` übergeht eine Sitzung, die seit dem Beginn des Zugs selbst angesagt hat.
+
+Die Ansagen stehen als eine JSON-Zeile je Ansage (`zeit`, `id`, `repo`, `text`, `quelle` `auto` oder `sage`) in
+`LIVE_PLAN_CACHE/ansagen.jsonl`. Angehängt wird mit `O_APPEND`; bei mehr als 250 Zeilen schreibt der nächste Schreiber die
+letzten 200 neu. Eine kaputte Zeile oder eine fehlende Datei kostet nur diese Ansagen. Der Server liest die Datei
+nur: `GET /api/ansagen` liefert die letzten 200, neueste zuerst, `GET /api/ereignisse` meldet als Ereignisstrom
+jede Änderung. Schreiben gibt es über HTTP nicht.
+
+In der Übersicht steht über dem Rechner der Block Ansagen: der Schalter **🔊 Vorlesen** (neue Ansagen automatisch
+vorlesen, an oder aus), **▶ Letzte nochmal**, die Wahl der Stimme (deutsche zuerst, Vorgabe Deutsch) und die
+Liste mit Abspielknopf, Uhrzeit, Alter, Repo und Text. Schalter und Stimme merkt sich der Browser (localStorage).
+Browser sprechen erst nach einem Klick auf die Seite; bis dahin steht ein Hinweis da und neue Ansagen werden nur
+gelistet. Weil die Seite ohne Anmeldung im LAN erreichbar ist, liest dort jeder die Ansagen mit.
+Tests: `node --test ansagen.test.ts liste.test.ts server.test.ts` (brauchen bun), Mod: `claude plugin test mod`.
 
 ## Firstmate-Cockpit
 

@@ -1,4 +1,5 @@
-// live-plan (#257): die Ansicht, ohne Bibliothek. "/" zeigt die Liste aus /api/liste, "/REPO/SLUG"
+// live-plan (#257): die Ansicht, ohne Bibliothek. "/" zeigt die Liste aus /api/liste mit den Ansagen aller
+// Sitzungen (GET /api/ansagen, neue per SSE /api/ereignisse, vorgelesen mit speechSynthesis), "/REPO/SLUG"
 // eine Sitzung aus /api/REPO/SLUG, neu gelesen bei jeder Dateiaenderung (SSE /ereignisse). Ein
 // Klick auf eine Option schickt POST .../entscheidung, ebenso eine eigene Antwort (Freitext, mit
 // eigen: true); alles andere aendert nur der Agent.
@@ -2177,7 +2178,64 @@
       (modalHtml || "");
   }
 
+  // --- Ansagen (Uebersicht): kurze Zusammenfassungen aller Sitzungen aus GET /api/ansagen, vorgelesen ---------
+  /** So viele Ansagen zeigt die Liste ohne Aufklappen. */
+  var ANSAGEN_N = 8;
+  /** Der Sprechtext einer Ansage: erst das Repo, aus dem sie kommt, dann der Text. */
+  function ansageSprechtext(a) {
+    var repo = a && a.repo ? String(a.repo) : "", text = a && a.text ? String(a.text) : "";
+    return repo ? repo + ": " + text : text;
+  }
+  /** Die Uhrzeit einer Ansage, an einem anderen Tag mit Datum. */
+  function ansageUhr(ms, jetzt) {
+    var d = new Date(ms), n = new Date(jetzt === undefined ? jetztMs() : jetzt);
+    if (isNaN(d.getTime())) return "";
+    var tag = d.toDateString() === n.toDateString() ? "" : zwei(d.getDate()) + "." + zwei(d.getMonth() + 1) + ". ";
+    return tag + zwei(d.getHours()) + ":" + zwei(d.getMinutes());
+  }
+  /** Die Stimmen, deutsche zuerst, je { id, name, lang }. */
+  function ansageStimmen(stimmen) {
+    var de = function (s) { return /^de\b/i.test(String(s.lang || "")) ? 0 : 1; };
+    return (Array.isArray(stimmen) ? stimmen : []).filter(function (s) { return s && s.voiceURI; })
+      .map(function (s) { return { id: String(s.voiceURI), name: String(s.name || s.voiceURI), lang: String(s.lang || "") }; })
+      .sort(function (a, b) { return de(a) - de(b) || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0); });
+  }
+  /**
+   * Der Block Ansagen der Uebersicht: der Schalter Vorlesen (neue Ansagen automatisch), die letzte nochmal, die
+   * Stimme und die Liste, neueste zuerst, je Ansage Abspielen, Uhrzeit, Alter, Repo und Text. `z`: { kann, auto,
+   * frei, stimmen, stimme, alle }; `kann` false, wenn der Browser nicht spricht, `frei` erst nach einem Klick.
+   */
+  function ansagenTeil(liste, z) {
+    var L = Array.isArray(liste) ? liste : [];
+    z = z || {};
+    var zu = z.kann ? "" : " disabled";
+    var hinweis = !z.kann ? "Dieser Browser kann nicht vorlesen." : z.auto && !z.frei ? "Ein Klick auf die Seite schaltet den Ton frei." : "";
+    var stimmen = '<option value="">Standard (Deutsch)</option>' + (z.stimmen || []).map(function (s) {
+      return '<option value="' + esc(s.id) + '"' + (s.id === z.stimme ? " selected" : "") + ">" + esc(s.name + (s.lang ? " · " + s.lang : "")) + "</option>";
+    }).join("");
+    var steuer = '<div class="an-steuer">' +
+      '<button type="button" class="an-auto' + (z.auto ? " an" : "") + '" data-ansage-auto aria-pressed="' + (z.auto ? "true" : "false") + '" title="Neue Ansagen automatisch vorlesen"' + zu + ">🔊 Vorlesen: " + (z.auto ? "an" : "aus") + "</button>" +
+      '<button type="button" data-ansage-letzte' + (L.length && z.kann ? "" : " disabled") + ">▶ Letzte nochmal</button>" +
+      '<label class="an-stimme">Stimme <select data-ansage-stimme' + zu + ">" + stimmen + "</select></label>" +
+      (hinweis ? '<span class="an-hinweis">' + esc(hinweis) + "</span>" : "") + "</div>";
+    var zeigen = z.alle ? L : L.slice(0, ANSAGEN_N);
+    var zeilen = zeigen.map(function (a, i) {
+      var uhr = ansageUhr(a.zeit), iso = isoVon(a.zeit);
+      return '<li><button type="button" class="an-spiel" data-ansage-spiele="' + i + '" title="Vorlesen" aria-label="' + esc("Vorlesen: " + a.repo + " " + uhr) + '"' + zu + ">▶</button>" +
+        '<span class="an-uhr mono" title="' + esc(ortszeit(iso)) + '">' + esc(uhr) + "</span>" + zeitAngabe(iso, "an-alter") +
+        '<b class="an-repo">' + esc(a.repo) + '</b><span class="an-text">' + esc(a.text) + "</span>" +
+        (a.quelle === "sage" ? '<span class="lv-marke" title="vom Agenten selbst formuliert">selbst</span>' : "") + "</li>";
+    }).join("");
+    var mehr = L.length > ANSAGEN_N ? '<button type="button" class="mehr" data-ansage-mehr aria-expanded="' + (z.alle ? "true" : "false") + '">' + (z.alle ? "weniger" : "alle " + L.length) + "</button>" : "";
+    return '<section class="lp-ansagen" data-testid="ansagen">' + ueberschrift("Ansagen", L.length ? String(L.length) : "") + steuer +
+      (zeilen ? '<ol class="an-liste">' + zeilen + "</ol>" + mehr : '<p class="an-leer">Noch keine Ansage. Am Ende eines Zugs sagt die Mod an; ein Agent selbst mit <span class="mono">live-plan sage "…"</span>.</p>') +
+      "</section>";
+  }
+
   G.LivePlanAnsicht = {
+    ansagenTeil: ansagenTeil,
+    ansageSprechtext: ansageSprechtext,
+    ansageStimmen: ansageStimmen,
     ablaufSvg: ablaufSvg,
     doku: doku,
     seite: seite,
@@ -2442,6 +2500,7 @@
   wurzel.addEventListener("click", function (e) {
     var th = e.target.closest(".lp-thema button[data-thema]");
     if (th) { setzeThema(th.dataset.thema); return; }
+    if (!API && ansageKlick(e)) return;
     if (!D) return;
     var opt = e.target.closest(".lp-frage .opt button[data-frage]");
     if (opt) {
@@ -2667,6 +2726,85 @@
       '<p class="lp-ziel mono">' + esc((REPO || "") + "/.live-plan/" + (SLUG || "") + ".yaml") + "</p></header>";
   }
 
+  // --- Ansagen auf der Uebersicht -------------------------------------------------------------
+  // Neue Ansagen meldet GET /api/ereignisse. Vorgelesen wird eine neue nur, solange Vorlesen an ist und die Seite
+  // einen Klick oder eine Taste hatte, denn erst danach lassen Browser sie sprechen. Schalter und Stimme merkt
+  // sich localStorage; die Ansagen selbst kommen jedes Mal vom Server.
+  var ANSAGEN = [], ansagenBekannt = null, ansagenAlle = false, ansageFrei = false;
+  var SPRACHE = G.speechSynthesis && G.SpeechSynthesisUtterance ? G.speechSynthesis : null;
+  function ansageZustand() {
+    return {
+      kann: !!SPRACHE,
+      auto: lies("live-plan.ansagen.auto") === "an",
+      frei: ansageFrei,
+      stimmen: SPRACHE ? ansageStimmen(SPRACHE.getVoices()) : [],
+      stimme: lies("live-plan.ansagen.stimme") || "",
+      alle: ansagenAlle,
+    };
+  }
+  function zeichneAnsagen() {
+    var el = wurzel.querySelector(".lp-ansagen");
+    if (el) el.outerHTML = ansagenTeil(ANSAGEN, ansageZustand());
+  }
+  /** Spricht eine Ansage; `sofort` bricht ab, was gerade laeuft, sonst reiht der Browser sie hinten an. */
+  function sprich(a, sofort) {
+    if (!SPRACHE || !a) return;
+    if (sofort) SPRACHE.cancel();
+    var u = new G.SpeechSynthesisUtterance(ansageSprechtext(a));
+    var id = lies("live-plan.ansagen.stimme");
+    var stimme = id && SPRACHE.getVoices().find(function (v) { return v.voiceURI === id; });
+    if (stimme) { u.voice = stimme; u.lang = stimme.lang; } else u.lang = "de-DE";
+    SPRACHE.speak(u);
+  }
+  /** Laedt die Ansagen; was seit dem letzten Laden dazukam, liest sie bei Vorlesen an der Reihe nach vor. */
+  function ladeAnsagen() {
+    return fetch("/api/ansagen", { cache: "no-store" }).then(function (r) {
+      return r.ok ? r.json() : null;
+    }).then(function (b) {
+      if (!b || !Array.isArray(b.ansagen)) return;
+      var liste = b.ansagen.filter(function (a) { return a && typeof a.zeit === "number" && typeof a.text === "string"; });
+      var bekannt = ansagenBekannt;
+      var neu = bekannt === null ? [] : liste.filter(function (a) { return a.zeit > bekannt; }).reverse();
+      ansagenBekannt = liste.reduce(function (m, a) { return Math.max(m, a.zeit); }, bekannt || 0);
+      ANSAGEN = liste;
+      zeichneAnsagen();
+      var z = ansageZustand();
+      if (z.auto && z.frei) neu.forEach(function (a) { sprich(a, false); });
+    }).catch(function () { /* das naechste Ereignis versucht es wieder */ });
+  }
+  function lauscheAnsagen() {
+    if (!G.EventSource) return;
+    var quelle = new EventSource("/api/ereignisse");
+    quelle.addEventListener("geaendert", ladeAnsagen);
+    quelle.onerror = function () {
+      quelle.close();
+      setTimeout(function () { ladeAnsagen(); lauscheAnsagen(); }, 3000);
+    };
+  }
+  /** Ein Klick im Block Ansagen; true, wenn er ihm galt. */
+  function ansageKlick(e) {
+    var t = e.target.closest && e.target.closest("[data-ansage-auto], [data-ansage-letzte], [data-ansage-spiele], [data-ansage-mehr]");
+    if (!t) return false;
+    if (t.hasAttribute("data-ansage-auto")) {
+      var an = lies("live-plan.ansagen.auto") !== "an";
+      merke("live-plan.ansagen.auto", an ? "an" : "aus");
+      // Gesprochen im Klick selbst: so schaltet auch Safari die Sprachausgabe fuer spaeter frei.
+      if (an) sprich({ repo: "", text: "Vorlesen an." }, true);
+      else if (SPRACHE) SPRACHE.cancel();
+    } else if (t.hasAttribute("data-ansage-letzte")) sprich(ANSAGEN[0], true);
+    else if (t.hasAttribute("data-ansage-spiele")) sprich(ANSAGEN[Number(t.getAttribute("data-ansage-spiele"))], true);
+    else ansagenAlle = !ansagenAlle;
+    zeichneAnsagen();
+    return true;
+  }
+  /** Der erste Klick oder Tastendruck der Seite gibt die Sprachausgabe frei; der Hinweis geht danach weg. */
+  function ansageFreigeben() {
+    if (ansageFrei) return;
+    ansageFrei = true;
+    // Erst nach dem Klick neu zeichnen, sonst ersetzte das Neuzeichnen den Knopf, bevor der Klick ihn erreicht.
+    if (wurzel.querySelector(".an-hinweis")) setTimeout(zeichneAnsagen, 0);
+  }
+
   // --- Liste aller Sitzungen ------------------------------------------------------------------
   function liste() {
     return fetch("/api/liste", { cache: "no-store" }).then(function (r) { return r.json(); }).then(function (daten) {
@@ -2678,10 +2816,15 @@
           "</td>" + fragenZelle(e.offeneFragen, href) + '<td class="mono klein">' + zeitAngabe(e.geaendert) + "</td></tr>";
       }).join("");
       doc.title = "Sitzungen · live-plan";
+      // Der Block Ansagen bleibt beim Neuzeichnen der Liste derselbe Knoten (offene Stimmenwahl, Fokus).
+      var ansagen = wurzel.querySelector(".lp-ansagen");
       wurzel.innerHTML = '<header class="lp-kopf"><div class="lp-oben"><h1>Sitzungen</h1>' + themaSchalter() + "</div>" +
-        '<p class="lp-ziel">Lebende Dokumente aus <span class="mono">REPO/.live-plan/SLUG.yaml</span> unter <span class="mono">' + esc(daten.wurzel) + "</span> und laufende Claude-Sitzungen aus dem Register</p></header>" + hostTeil(hostAuf) +
+        '<p class="lp-ziel">Lebende Dokumente aus <span class="mono">REPO/.live-plan/SLUG.yaml</span> unter <span class="mono">' + esc(daten.wurzel) + "</span> und laufende Claude-Sitzungen aus dem Register</p></header>" +
+        (ansagen ? '<div data-ansagen-platz></div>' : ansagenTeil(ANSAGEN, ansageZustand())) + hostTeil(hostAuf) +
         '<table class="lp-liste" data-testid="tabelle-sitzungen"><thead><tr><th>repo</th><th>sitzung</th><th>titel</th><th>fragen</th><th>geaendert</th></tr></thead><tbody>' +
         (zeilen || '<tr><td colspan="5" class="leer">Keine Sitzung. <span class="mono">live-plan neu SLUG</span> legt eine an.</td></tr>') + "</tbody></table>";
+      var platz = wurzel.querySelector("[data-ansagen-platz]");
+      if (platz) platz.replaceWith(ansagen);
     }).catch(function () { /* der naechste Takt versucht es wieder */ });
   }
 
@@ -2716,6 +2859,17 @@
   if (!API) {
     liste();
     setInterval(liste, 15000);
+    ladeAnsagen();
+    lauscheAnsagen();
+    doc.addEventListener("click", ansageFreigeben, true);
+    doc.addEventListener("keydown", ansageFreigeben, true);
+    wurzel.addEventListener("change", function (e) {
+      if (!e.target.matches || !e.target.matches("[data-ansage-stimme]")) return;
+      merke("live-plan.ansagen.stimme", e.target.value);
+      sprich({ repo: "", text: "Diese Stimme liest die Ansagen vor." }, true);
+    });
+    // Die Stimmen kommen in Chrome erst nach dem Laden.
+    if (SPRACHE && SPRACHE.addEventListener) SPRACHE.addEventListener("voiceschanged", zeichneAnsagen);
     hostTaktObj = sichtbarTakt(doc, HOST_TAKT_MS, ladeHost);
     hostTaktObj.start();
     return;

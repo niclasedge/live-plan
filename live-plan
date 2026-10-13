@@ -19,6 +19,9 @@
 //                              REPO/.live-plan/handouts/JJJJ-MM-TT-HHMM-TITEL.png und .html; Chrome aus
 //                              LIVE_PLAN_CHROME, sonst macOS-App, google-chrome, chromium; SLUG fehlt:
 //                              CLAUDE_SESSION_ID
+//   live-plan sage "TEXT"      Ansage fuer die Uebersicht (vorgelesen im Browser), nach CACHE/ansagen.jsonl; Sitzung
+//                              aus CLAUDE_SESSION_ID. --auto --id ID --seit MS [--repo REPO]: die Antwort von stdin
+//                              gekuerzt (die Mod am Ende eines Zugs), nichts, wenn die Sitzung seit MS selbst ansagte
 //   live-plan stop             Server auf dem Port beenden
 //
 // REPO ist der Ordnername der Git-Wurzel des aktuellen Ordners. Port LIVE_PLAN_PORT (4410),
@@ -28,6 +31,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { chmodSync, closeSync, constants, existsSync, fstatSync, ftruncateSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync, writeSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { ansagenDatei, ansageText, leseAnsagen, schonAngesagt, schreibeAnsage } from "./ansagen.ts";
 import { CHROME_MAC, chromePfad, fragenEingabe, fuegeFragenAnImText, handoutName, kurzStand, naechsteFrageIds, pruefeAngehaengt, pruefePlan, yamlWert } from "./logik.ts";
 
 const SKILL = import.meta.dir;
@@ -408,6 +412,46 @@ function stand(slug: string): void {
   process.stdout.write(kurzStand(pruefePlan(roh).plan));
 }
 
+/** Die Optionen von sage, die einen Wert nehmen; alles andere ist Text. */
+const SAGE_WERTE = ["--id", "--repo", "--seit"];
+
+/**
+ * Eine Ansage fuer die Uebersicht (ansagen.ts). Ohne --auto der Text der Argumente, die Sitzung aus --id oder
+ * CLAUDE_SESSION_ID (sonst keine), REPO aus --repo oder der Git-Wurzel, sonst der Ordnername. Mit --auto (die Mod
+ * am Ende eines Zugs) die Antwort von stdin, gekuerzt; still nichts, wenn sie trivial ist oder die Sitzung seit
+ * --seit (ms) schon selbst angesagt hat.
+ */
+async function sage(rest: string[]): Promise<void> {
+  const wert = (name: string) => {
+    const i = rest.indexOf(name);
+    return i >= 0 ? rest[i + 1] : undefined;
+  };
+  const auto = rest.includes("--auto");
+  const id = (wert("--id") ?? process.env.CLAUDE_SESSION_ID)?.trim() || null;
+  if (id !== null && !NAME.test(id)) abbruch(`ungueltige Sitzung ${JSON.stringify(id)}, erlaubt a-z A-Z 0-9 . _ -`);
+  const repo = wert("--repo")?.trim() || repoName();
+  const datei = ansagenDatei(CACHE);
+  if (auto) {
+    const seit = Number.parseInt(wert("--seit") ?? "", 10);
+    if (!id || !Number.isFinite(seit)) abbruch("sage --auto braucht --id und --seit");
+    const text = ansageText(await Bun.stdin.text(), "auto");
+    if (!text || schonAngesagt(leseAnsagen(datei), id, seit)) return;
+    schreibeAnsage(datei, { v: 1, zeit: Date.now(), id, repo, text, quelle: "auto" });
+    return;
+  }
+  const worte = rest.filter((a, i) => !SAGE_WERTE.includes(a) && !SAGE_WERTE.includes(rest[i - 1] ?? ""));
+  const text = ansageText(worte.join(" "), "sage");
+  if (!text) abbruch('sage braucht einen Text: live-plan sage "<2-3 Saetze>"');
+  schreibeAnsage(datei, { v: 1, zeit: Date.now(), id, repo, text, quelle: "sage" });
+  console.log(`angesagt: ${repo}: ${text}`);
+}
+
+/** Der Ordnername der Git-Wurzel, ausserhalb eines Repos der des aktuellen Ordners. */
+function repoName(): string {
+  const lauf = spawnSync("git", ["rev-parse", "--show-toplevel"], { encoding: "utf8" });
+  return path.basename(lauf.status === 0 && lauf.stdout.trim() ? lauf.stdout.trim() : process.cwd());
+}
+
 /** Beendet nur den Prozess, den /api/gesund auf dem Port nennt; eine PID-Datei allein reicht nie (S2). */
 async function stop(): Promise<void> {
   const g = await gesund();
@@ -686,10 +730,13 @@ switch (befehl) {
     }
     break;
   }
+  case "sage":
+    await sage(rest);
+    break;
   case "stop":
     await stop();
     break;
   default:
-    console.error("Aufruf: live-plan start | open [SLUG] | neu [SLUG] [--auto] | warte SLUG [--hoechstens MS] | frage [SLUG] | stand [SLUG] --kurz | handout [SLUG] | stop");
+    console.error("Aufruf: live-plan start | open [SLUG] | neu [SLUG] [--auto] | warte SLUG [--hoechstens MS] | frage [SLUG] | stand [SLUG] --kurz | handout [SLUG] | sage TEXT | stop");
     process.exit(befehl === undefined || befehl === "-h" || befehl === "--help" ? 0 : 2);
 }
