@@ -270,6 +270,8 @@ schreibt dafuer nichts.
   eigene Antwort in den Grenzen oben.
 - `GET /api/host` (Block Rechner der Ansicht, Beschreibung in README.md) nennt ohne Anmeldung Befehlszeilen
   samt Argumenten und Arbeitsverzeichnisse der Prozesse des Rechners; Argumente werden nicht geschwaerzt.
+  Dieselbe Antwort traegt `verlauf` (`takt`, `vor`, `cpu`, `ram`): CPU und RAM der letzten 60 Minuten aus einem
+  Ringpuffer im Speicher (240 Proben je 15 s, nur /proc/stat und /proc/meminfo), den die erste Anfrage startet.
 - Der Ordner `.live-plan` muss im Repo liegen; Symlinks darin liest und schreibt der Server nicht,
   auch nicht im Belegordner und nicht als Belegordner selbst. Belege liefert er nur, solange
   `SLUG.yaml` besteht. Kopieren Sie Belege, statt sie zu verlinken. `neu` legt nichts durch einen

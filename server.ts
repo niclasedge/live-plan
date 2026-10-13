@@ -63,6 +63,7 @@ import {
   type Verlaufseintrag,
 } from "./logik.ts";
 import { hostSicht } from "./host.ts";
+import { verlauf } from "./verlauf.ts";
 import { istFirstmateHome, prVorrat, type FirstmateSicht, type GhLauf } from "./firstmate.ts";
 
 const WURZELN = wurzeln(process.env);
@@ -1098,7 +1099,10 @@ async function antworte(req: Request, server: Bun.Server): Promise<Response> {
     if (lesen && b === "abo" && teile.length === 2) return json(await aboAntwort());
     if (lesen && b === "host" && teile.length === 2) {
       try {
-        return json(await hostSicht());
+        const sicht = await hostSicht();
+        if (!sicht.verfuegbar) return json(sicht);
+        verlauf.beruehre(); // startet den Takt der Verlaufsproben, falls er ruht
+        return json({ ...sicht, verlauf: verlauf.sicht() });
       } catch (e) {
         return json({ fehler: `Messung fehlgeschlagen: ${e instanceof Error ? e.message : String(e)}` }, 503);
       }

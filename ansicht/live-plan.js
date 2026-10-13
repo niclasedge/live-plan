@@ -277,6 +277,53 @@
     }).join("");
     return '<table class="hw-prozesse"><caption>' + esc(titel) + "</caption><thead><tr><th>CPU</th><th>RAM</th><th>Swap</th><th>PID</th><th>Zeit</th><th>cwd</th><th>Befehl</th></tr></thead><tbody>" + zeilen + "</tbody></table>";
   }
+  var VERLAUF_BUCKETS = 60, VERLAUF_BUCKET_S = 60;
+  /**
+   * Die Proben (vor = Sekunden vor der Antwort) in Minuten-Eimer, je Eimer das Maximum, damit kurze Spitzen
+   * sichtbar bleiben. Rueckgabe: aelteste zuerst, hoechstens 60, nur ab dem aeltesten Eimer mit Daten
+   * (weniger Verlauf heisst: weniger Balken, rechts bündig); Luecken sind null.
+   */
+  function verlaufEimer(vor, werte) {
+    if (!Array.isArray(vor) || !Array.isArray(werte)) return [];
+    var eimer = [], aelteste = -1, n = Math.min(vor.length, werte.length);
+    for (var i = 0; i < n; i++) {
+      var k = Math.floor(zahl(vor[i]) / VERLAUF_BUCKET_S);
+      if (k < 0 || k >= VERLAUF_BUCKETS || !isFinite(Number(werte[i]))) continue;
+      var w = Math.max(0, Math.min(100, Number(werte[i])));
+      if (eimer[k] === undefined || w > eimer[k]) eimer[k] = w;
+      if (k > aelteste) aelteste = k;
+    }
+    var aus = [];
+    for (var j = aelteste; j >= 0; j--) aus.push(eimer[j] === undefined ? null : eimer[j]);
+    return aus;
+  }
+  function uhrzeit(ms) {
+    var d = new Date(ms);
+    return ("0" + d.getHours()).slice(-2) + ":" + ("0" + d.getMinutes()).slice(-2);
+  }
+  /** Eine Verlaufszeile: Name, Balkenreihe der letzten 60 Minuten (gelb ab 60 %, rot ab 80 %), aktueller Wert. */
+  function verlaufZeile(name, eimer, jetzt, aktuell) {
+    var balkenHtml = eimer.map(function (w, i) {
+      var k = eimer.length - 1 - i;
+      if (w === null) return '<i class="leer"></i>';
+      var farbe = w >= 80 ? "rot" : w >= 60 ? "gelb" : "";
+      var bis = zahl(jetzt) - k * VERLAUF_BUCKET_S * 1000;
+      var tip = uhrzeit(bis - VERLAUF_BUCKET_S * 1000) + "–" + uhrzeit(bis) + " · max " + Math.round(w) + " %";
+      return '<i' + (farbe ? ' class="' + farbe + '"' : "") + ' style="height:' + Math.max(w, 2).toFixed(1) + '%" title="' + esc(tip) + '"></i>';
+    }).join("");
+    var p = Math.max(0, Math.min(100, zahl(aktuell)));
+    var f = p >= 80 ? "rot" : p >= 60 ? "gelb" : "";
+    return '<div class="hw-reihe hw-verlauf' + (f ? " " + f : "") + '"><span class="k">' + esc(name) + '</span><span class="hw-spur" data-testid="host-verlauf-' + esc(name.toLowerCase()) + '">' + balkenHtml +
+      '</span><span class="w">' + hostProzent(p) + "</span></div>";
+  }
+  /** Die zwei Verlaufszeilen (CPU, RAM) aus H.verlauf; ohne Proben leer, dann bleibt der Block wie zuvor. */
+  function verlaufTeil(H, ram) {
+    var V = H.verlauf;
+    if (!V || typeof V !== "object") return "";
+    var c = verlaufEimer(V.vor, V.cpu), r = verlaufEimer(V.vor, V.ram);
+    if (!c.length && !r.length) return "";
+    return '<div class="hw-balken hw-verlaeufe" data-testid="host-verlauf">' + verlaufZeile("CPU", c, H.um, H.cpu) + verlaufZeile("RAM", r, H.um, ram) + "</div>";
+  }
   /** Der Block Rechner; ohne verfuegbare Daten leer, dann gibt es auch keinen Takt. */
   function hostTeil(auf) {
     var H = HOST;
@@ -291,7 +338,8 @@
     (Array.isArray(H.platten) ? H.platten : []).forEach(function (d) {
       reihen.push(hostBalken(d.pfad === "/" ? "Platte" : d.pfad, zahl(d.prozent), mbPaar(d.benutztMb, d.gesamtMb), d.pfad));
     });
-    var balkenBlock = '<div class="hw-balken">' + reihen.join("") + "</div>";
+    var ramProzent = sp.gesamtMb > 0 ? zahl(sp.benutztMb) / zahl(sp.gesamtMb) * 100 : 0;
+    var balkenBlock = '<div class="hw-balken">' + reihen.join("") + "</div>" + verlaufTeil(H, ramProzent);
     var details = '<details class="hw-details"' + (auf ? " open" : "") + "><summary>Top-Prozesse</summary>" + hostProzesse("nach CPU", H.topCpu) + hostProzesse("nach RAM", H.topRam) + "</details>";
     return '<section class="lp-host" data-testid="sitzung-host">' + ueberschrift("Rechner") + '<div class="lv-verbrauch lv-host">' + balkenBlock + details + "</div></section>";
   }
@@ -332,13 +380,20 @@
       if (!neu && b && b.verfuegbar === false && hostTaktObj) { hostTaktObj.ende(); hostTaktObj = null; }
       if (!neu && !HOST) return;
       HOST = neu;
-      if (D) zeichneHost();
+      if (D || !API) zeichneHost();
     }).catch(function () { /* der naechste Takt versucht es wieder */ });
   }
   /** Nur den Block neu; er bleibt aufgeklappt, wenn er es war. Erscheint oder verschwindet er, die ganze Seite. */
   function zeichneHost() {
     var el = wurzel.querySelector('[data-testid="sitzung-host"]');
     var html = hostTeil(hostAuf);
+    if (!API) {
+      // Liste aller Sitzungen: der Block sitzt unter dem Kopf, ohne dass die Liste neu geladen wird.
+      if (el && html) el.outerHTML = html;
+      else if (el) el.remove();
+      else if (html) { var kopf = wurzel.querySelector(".lp-kopf"); if (kopf) kopf.insertAdjacentHTML("afterend", html); }
+      return;
+    }
     if (el && html) { if (!modal && !diffAuf && !fmAuf) el.outerHTML = html; }
     else if (el || html) zeichne();
   }
@@ -1864,6 +1919,7 @@
     setzeFertigOffen: setzeFertigOffen,
     blick: blick,
     hostTeil: hostTeil,
+    verlaufEimer: verlaufEimer,
     sichtbarTakt: sichtbarTakt,
     setzeHost: function (h) { HOST = h && typeof h === "object" ? h : null; },
     verbrauch: function () { return D && D.live && typeof D.live === "object" ? verbrauch(D.live) : ""; },
@@ -2337,9 +2393,13 @@
   }
   setInterval(takt, 30000);
 
+  // toggle steigt nicht auf, wird aber in der Erfassung gesehen.
+  wurzel.addEventListener("toggle", function (e) { if (e.target.classList && e.target.classList.contains("hw-details")) hostAuf = e.target.open; }, true);
   if (!API) {
     liste();
     setInterval(liste, 15000);
+    hostTaktObj = sichtbarTakt(doc, HOST_TAKT_MS, ladeHost);
+    hostTaktObj.start();
     return;
   }
   laden();
@@ -2350,8 +2410,6 @@
   setInterval(ladeAbo, ABO_TAKT_MS);
   fmUhr = setInterval(ladeFirstmate, FM_TAKT_MS);
   ladeFirstmate();
-  // toggle steigt nicht auf, wird aber in der Erfassung gesehen.
-  wurzel.addEventListener("toggle", function (e) { if (e.target.classList && e.target.classList.contains("hw-details")) hostAuf = e.target.open; }, true);
   hostTaktObj = sichtbarTakt(doc, HOST_TAKT_MS, ladeHost);
   hostTaktObj.start();
 })();
