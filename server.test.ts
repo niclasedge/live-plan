@@ -1,8 +1,8 @@
-// live-plan: Tests der Endpunkte .../diff und .../bild (Pfadregeln, git-ignorierte Dateien, Bilder, eigene Plan-Datei) und der Ansagen (/api/ansagen, /api/ereignisse), `node --test server.test.ts` (startet `bun server.ts`).
+// live-plan: Tests der Endpunkte .../diff und .../bild (Pfadregeln, git-ignorierte Dateien, Bilder, eigene Plan-Datei) und der Ansagen (/api/ansagen, /api/ereignisse, /api/einstellungen), `node --test server.test.ts` (startet `bun server.ts`).
 
 import assert from "node:assert/strict";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { BILD_HOECHSTENS } from "./logik.ts";
 import net from "node:net";
 import os from "node:os";
@@ -316,4 +316,44 @@ test("ansagen: nur lesen, fremde Herkunft 403, Schreiben gibt es nicht", async (
   assert.equal(fremdStrom.status, 403);
   const post = await fetch(`${seite}/api/ansagen`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
   assert.equal(post.status, 404);
+});
+
+// --- GET und POST /api/einstellungen: Vorlesen und Stimme in LIVE_PLAN_CACHE/einstellungen.yaml -------------
+
+const einstellungen = (body: unknown, kopf: Record<string, string> = {}) =>
+  fetch(`${seite}/api/einstellungen`, { method: "POST", headers: { "content-type": "application/json", ...kopf }, body: typeof body === "string" ? body : JSON.stringify(body) });
+
+test("einstellungen: Vorgabe ohne Datei, POST schreibt die YAML, GET und der Strom sehen sie", async () => {
+  assert.deepEqual(await (await fetch(`${seite}/api/einstellungen`)).json(), { vorlesen: false, stimme: null });
+  const strom = await fetch(`${seite}/api/ereignisse`);
+  const gelesen = liesStrom(strom, "event: geaendert", 8000);
+  await new Promise((r) => setTimeout(r, 300));
+  const r = await einstellungen({ vorlesen: true, stimme: 'Anna "de"' });
+  assert.equal(r.status, 200);
+  assert.deepEqual(await r.json(), { vorlesen: true, stimme: 'Anna "de"' });
+  assert.match(await gelesen, /event: geaendert/);
+  const yaml = readFileSync(path.join(cacheOrdner, "einstellungen.yaml"), "utf8");
+  assert.match(yaml, /^vorlesen: true$/m);
+  assert.match(yaml, /^stimme: "Anna \\"de\\""$/m);
+  // Ein Feld allein aendert nur sich.
+  assert.deepEqual(await (await einstellungen({ vorlesen: false })).json(), { vorlesen: false, stimme: 'Anna "de"' });
+  assert.deepEqual(await (await fetch(`${seite}/api/einstellungen`)).json(), { vorlesen: false, stimme: 'Anna "de"' });
+  assert.deepEqual(await (await einstellungen({ stimme: null })).json(), { vorlesen: false, stimme: null });
+});
+
+test("einstellungen: falsche Felder 422, kein JSON 400 oder 415, fremde Herkunft 403, alles ohne Schreiben", async () => {
+  await einstellungen({ vorlesen: true, stimme: "Petra" });
+  for (const falsch of [{ vorlesen: "ja" }, { stimme: 7 }, [], "null"]) assert.equal((await einstellungen(falsch)).status, 422, JSON.stringify(falsch));
+  assert.equal((await einstellungen("{kaputt")).status, 400);
+  assert.equal((await fetch(`${seite}/api/einstellungen`, { method: "POST", headers: { "content-type": "text/plain" }, body: "{}" })).status, 415);
+  assert.equal((await einstellungen({ stimme: "x".repeat(3000) })).status, 413);
+  assert.equal((await einstellungen({ vorlesen: false }, { Origin: "http://evil.example" })).status, 403);
+  assert.deepEqual(await (await fetch(`${seite}/api/einstellungen`)).json(), { vorlesen: true, stimme: "Petra" });
+});
+
+test("einstellungen: eine kaputte YAML gilt als Vorgabe und wird beim naechsten POST ersetzt", async () => {
+  writeFileSync(path.join(cacheOrdner, "einstellungen.yaml"), "vorlesen: [kaputt\n");
+  assert.deepEqual(await (await fetch(`${seite}/api/einstellungen`)).json(), { vorlesen: false, stimme: null });
+  assert.deepEqual(await (await einstellungen({ vorlesen: true })).json(), { vorlesen: true, stimme: null });
+  assert.match(readFileSync(path.join(cacheOrdner, "einstellungen.yaml"), "utf8"), /^vorlesen: true$/m);
 });

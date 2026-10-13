@@ -280,11 +280,13 @@ Zwei bis drei gesprochene Saetze, ohne Pfade, Befehle oder URLs. Diese Ansage er
 dieses Zugs (Sitzung aus `CLAUDE_SESSION_ID`, REPO aus der Git-Wurzel); auch sie wird gesaeubert, bis sechs
 Saetze und 600 Zeichen. Alle Ansagen stehen in `${LIVE_PLAN_CACHE:-~/.cache/live-plan}/ansagen.jsonl`
 (die letzten 200, kaputte Zeilen ueberspringt der Server). `GET /api/ansagen` liefert sie neueste zuerst,
-`GET /api/ereignisse` meldet jede neue.
+`GET /api/ereignisse` meldet jede neue. In der Tabelle der Uebersicht steht je Sitzung ▶ mit der Uhrzeit ihrer
+neuesten Ansage; Vorlesen an/aus und die Stimme stehen im Menue ⚙ und zentral in
+`${LIVE_PLAN_CACHE:-~/.cache/live-plan}/einstellungen.yaml` (`GET`/`POST /api/einstellungen`).
 
 ## Grenzen
 
-- Der Browser schreibt nur `fragen[].entscheidung`. Status, Schritte, Belege: nur Sie.
+- Der Browser schreibt nur `fragen[].entscheidung` und die Einstellungen der Sprachausgabe. Status, Schritte, Belege: nur Sie.
 - Keine Anmeldung; der Server lauscht auf `0.0.0.0` und ist im LAN erreichbar. Keine Secrets in die Datei.
   Er antwortet nur unter einem Host dieses Rechners (localhost, Rechnername, eigene Adresse,
   dazu `LIVE_PLAN_HOSTS`, durch Komma getrennt), `/api/` nur ohne fremden `Origin`, und eine
@@ -301,6 +303,7 @@ Saetze und 600 Zeichen. Alle Ansagen stehen in `${LIVE_PLAN_CACHE:-~/.cache/live
 - Die Ansicht laesst sich nicht in fremde Seiten einbetten; Belege nur in die eigene.
 - `SLUG.verlauf.jsonl`, `SLUG.stand.json` und `SLUG.seit` daneben gehoeren Server und Skript. Nicht anfassen.
 - Ansagen schreibt nur `live-plan sage` auf diesem Rechner, nie der Browser; wer die Seite erreicht, liest
-  sie (`GET /api/ansagen`). Nichts Vertrauliches ansagen.
+  sie (`GET /api/ansagen`). Nichts Vertrauliches ansagen. Der Browser schreibt nur `einstellungen.yaml`
+  (`POST /api/einstellungen`, JSON bis 2 KB, ohne fremden `Origin`).
 - `frage` schreibt nur neue Eintraege hinten an `fragen:`, nie durch einen Symlink und nie in eine
   Flow-Liste mit Inhalt.

@@ -5,8 +5,11 @@
 // Antwort ruft. Beide haengen eine Zeile an LIVE_PLAN_CACHE/ansagen.jsonl; der Server liest die Datei nur
 // (GET /api/ansagen, GET /api/ereignisse) und die Uebersicht liest sie mit der Sprachausgabe des Browsers vor.
 // Eine kaputte Zeile oder eine fehlende Datei ergibt weniger oder keine Ansagen, nie einen Fehler.
+//
+// Daneben liegen die Einstellungen der Sprachausgabe (LIVE_PLAN_CACHE/einstellungen.yaml): Vorlesen an oder aus
+// und die Stimme. Die Uebersicht liest sie mit GET und schreibt sie mit POST /api/einstellungen.
 
-import { closeSync, constants, fstatSync, mkdirSync, openSync, readSync, renameSync, rmSync, writeSync } from "node:fs";
+import { closeSync, constants, fstatSync, mkdirSync, openSync, readSync, renameSync, rmSync, statSync, writeSync } from "node:fs";
 import path from "node:path";
 
 export type Quelle = "auto" | "sage";
@@ -237,36 +240,126 @@ export function leseAnsagen(datei: string, n = ANSAGEN_HOECHSTENS): Ansage[] {
   return inhalt === null ? [] : ansagenAus(inhalt, n);
 }
 
+/** So lange wartet ein Schreiber hoechstens auf die Sperre; eine aeltere Sperre gilt als verwaist. */
+const SPERRE_WARTEN_MS = 2000;
+const SPERRE_VERWAIST_MS = 10_000;
+
+const schlafe = (ms: number) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+
+/**
+ * Die Sperre `DATEI.sperre` (O_EXCL), wartend bis SPERRE_WARTEN_MS; eine verwaiste nimmt sie weg. Gibt die
+ * Freigabe zurueck, null ohne Sperre.
+ */
+function sperre(datei: string): (() => void) | null {
+  const pfad = `${datei}.sperre`;
+  const bis = Date.now() + SPERRE_WARTEN_MS;
+  for (;;) {
+    try {
+      closeSync(openSync(pfad, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o644));
+      return () => rmSync(pfad, { force: true });
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== "EEXIST") return null;
+    }
+    try {
+      if (Date.now() - statSync(pfad).mtimeMs > SPERRE_VERWAIST_MS) rmSync(pfad, { force: true });
+    } catch {
+      /* eben freigegeben */
+    }
+    if (Date.now() >= bis) return null;
+    schlafe(10);
+  }
+}
+
 /**
  * Haengt eine Ansage an (O_APPEND, eine Zeile in einem write, ohne Symlink). Hat die Datei danach mehr als
  * `n + KUERZEN_PUFFER` Zeilen, ersetzt sie eine Fassung mit den letzten `n` (neue Datei, dann rename).
+ * Anhaengen und Kuerzen laufen unter der Sperre, damit kein Kuerzen eine gleichzeitig angehaengte Ansage
+ * verliert. Ohne Sperre (sie bleibt laenger besetzt) haengt sie trotzdem an, kuerzt dann aber nicht.
  */
 export function schreibeAnsage(datei: string, a: Ansage, n = ANSAGEN_HOECHSTENS): void {
   mkdirSync(path.dirname(datei), { recursive: true });
-  const fd = openSync(datei, constants.O_WRONLY | constants.O_APPEND | constants.O_CREAT | constants.O_NOFOLLOW, 0o644);
+  const frei = sperre(datei);
   try {
-    if (!fstatSync(fd).isFile()) throw new Error(`${datei} ist keine regulaere Datei`);
-    writeSync(fd, `${JSON.stringify(a)}\n`);
-  } finally {
-    closeSync(fd);
-  }
-  const inhalt = liesEnde(datei);
-  if (inhalt === null || inhalt.split("\n").filter((z) => z.trim()).length <= n + KUERZEN_PUFFER) return;
-  const neu = `${datei}.${process.pid}.neu`;
-  try {
-    const tmp = openSync(neu, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o644);
+    const fd = openSync(datei, constants.O_WRONLY | constants.O_APPEND | constants.O_CREAT | constants.O_NOFOLLOW, 0o644);
     try {
-      writeSync(tmp, ansagenAus(inhalt, n).map((x) => `${JSON.stringify(x)}\n`).join(""));
+      if (!fstatSync(fd).isFile()) throw new Error(`${datei} ist keine regulaere Datei`);
+      writeSync(fd, `${JSON.stringify(a)}\n`);
     } finally {
-      closeSync(tmp);
+      closeSync(fd);
     }
-    renameSync(neu, datei);
-  } catch {
-    rmSync(neu, { force: true });
+    if (!frei) return;
+    const inhalt = liesEnde(datei);
+    if (inhalt === null || inhalt.split("\n").filter((z) => z.trim()).length <= n + KUERZEN_PUFFER) return;
+    const neu = `${datei}.${process.pid}.neu`;
+    try {
+      const tmp = openSync(neu, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o644);
+      try {
+        writeSync(tmp, ansagenAus(inhalt, n).map((x) => `${JSON.stringify(x)}\n`).join(""));
+      } finally {
+        closeSync(tmp);
+      }
+      renameSync(neu, datei);
+    } catch {
+      rmSync(neu, { force: true });
+    }
+  } finally {
+    frei?.();
   }
 }
 
 /** Ob die Sitzung `id` seit `seit` (ms) selbst etwas angesagt hat; dann entfaellt die automatische Ansage dieses Zugs. */
 export function schonAngesagt(liste: readonly Ansage[], id: string, seit: number): boolean {
   return liste.some((a) => a.quelle === "sage" && a.id === id && a.zeit >= seit);
+}
+
+// --- Einstellungen der Sprachausgabe ---------------------------------------------------------------
+
+export interface Einstellungen {
+  /** Neue Ansagen automatisch vorlesen. */
+  vorlesen: boolean;
+  /** Name der Stimme; null oder eine Stimme, die der Browser nicht hat: die deutsche Vorgabe. */
+  stimme: string | null;
+}
+
+export const EINSTELLUNGEN_VORGABE: Einstellungen = { vorlesen: false, stimme: null };
+const STIMME_HOECHSTENS = 200;
+
+export const einstellungenDatei = (cache: string) => path.join(cache, "einstellungen.yaml");
+
+const stimmeAus = (x: unknown): string | null => (typeof x === "string" && x.trim() && x.length <= STIMME_HOECHSTENS && !/[\u0000-\u001f\u007f]/.test(x) ? x.trim() : null);
+
+/** Die Einstellungen aus einer gelesenen YAML; was fehlt oder nicht passt, gilt als Vorgabe. */
+export function einstellungenAus(roh: unknown): Einstellungen {
+  const r = roh && typeof roh === "object" && !Array.isArray(roh) ? (roh as Record<string, unknown>) : {};
+  return { vorlesen: r.vorlesen === true, stimme: stimmeAus(r.stimme) };
+}
+
+/**
+ * Eine Aenderung aus dem Browser (`{ vorlesen?, stimme? }`) ueber die bisherigen Einstellungen; null, wenn ein
+ * Feld da ist, aber nicht passt. `stimme: null` oder `""` setzt die Vorgabe.
+ */
+export function einstellungenMit(alt: Einstellungen, aenderung: unknown): Einstellungen | null {
+  if (!aenderung || typeof aenderung !== "object" || Array.isArray(aenderung)) return null;
+  const a = aenderung as Record<string, unknown>;
+  const neu = { ...alt };
+  if ("vorlesen" in a) {
+    if (typeof a.vorlesen !== "boolean") return null;
+    neu.vorlesen = a.vorlesen;
+  }
+  if ("stimme" in a) {
+    if (a.stimme === null || a.stimme === "") neu.stimme = null;
+    else if (stimmeAus(a.stimme) === null) return null;
+    else neu.stimme = stimmeAus(a.stimme);
+  }
+  return neu;
+}
+
+/** Die Einstellungen als YAML; Texte als JSON-Strings, die YAML ebenso liest. */
+export function einstellungenYaml(e: Einstellungen): string {
+  return [
+    "# live-plan: Sprachausgabe der Uebersicht, geschrieben vom Server (POST /api/einstellungen)",
+    `vorlesen: ${e.vorlesen ? "true" : "false"}`,
+    `stimme: ${e.stimme === null ? "null" : JSON.stringify(e.stimme)}`,
+    "",
+  ].join("\n");
 }

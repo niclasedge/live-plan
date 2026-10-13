@@ -1,12 +1,12 @@
-// live-plan: Tests der Ansagen (Sprechtext, Kuerzen, Speicher, `live-plan sage`), `node --test ansagen.test.ts` (sage braucht bun).
+// live-plan: Tests der Ansagen (Sprechtext, Kuerzen, Speicher, Sperre, Einstellungen, `live-plan sage`), `node --test ansagen.test.ts` (sage braucht bun).
 
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { spawn, spawnSync } from "node:child_process";
+import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { ANSAGEN_HOECHSTENS, ansageText, ansagenAus, ansagenDatei, istTrivial, kurzAnsage, leseAnsagen, saetze, schonAngesagt, schreibeAnsage, sprechText, type Ansage } from "./ansagen.ts";
+import { ANSAGEN_HOECHSTENS, EINSTELLUNGEN_VORGABE, einstellungenAus, einstellungenMit, einstellungenYaml, ansageText, ansagenAus, ansagenDatei, istTrivial, kurzAnsage, leseAnsagen, saetze, schonAngesagt, schreibeAnsage, sprechText, type Ansage } from "./ansagen.ts";
 
 const ANTWORT = `## Ergebnis
 
@@ -125,6 +125,70 @@ test("schonAngesagt: nur eine eigene Ansage derselben Sitzung seit dem Start des
   assert.equal(schonAngesagt(liste, "s-1", 150), false);
   assert.equal(schonAngesagt(liste, "s-2", 250), true);
   assert.equal(schonAngesagt(liste, "s-3", 0), false);
+});
+
+test("schreibeAnsage: wartet auf eine besetzte Sperre, haengt danach ohne Kuerzen an und gibt sie frei", () => {
+  const tmp = mkdtempSync(path.join(os.tmpdir(), "live-plan-ansagen-"));
+  try {
+    const datei = ansagenDatei(tmp);
+    for (let i = 1; i <= 75; i++) schreibeAnsage(datei, A(i), 20);
+    const vorher = readFileSync(datei, "utf8").trim().split("\n").length;
+    writeFileSync(`${datei}.sperre`, "");
+    const start = Date.now();
+    schreibeAnsage(datei, A(76), 20);
+    assert.ok(Date.now() - start >= 1500, "wartet auf die Sperre");
+    // Angehaengt, aber nicht gekuerzt; die fremde Sperre bleibt.
+    assert.equal(readFileSync(datei, "utf8").trim().split("\n").length, vorher + 1);
+    assert.ok(existsSync(`${datei}.sperre`));
+    // Eine verwaiste Sperre (aelter als 10 s) wird genommen und wieder freigegeben; nichts ging verloren.
+    utimesSync(`${datei}.sperre`, new Date(Date.now() - 60_000), new Date(Date.now() - 60_000));
+    schreibeAnsage(datei, A(77), 20);
+    assert.ok(!existsSync(`${datei}.sperre`));
+    assert.deepEqual(leseAnsagen(datei, 100).map((a) => a.zeit), Array.from({ length: 26 }, (_, i) => 52 + i));
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("schreibeAnsage: gleichzeitige Schreiber verlieren beim Kuerzen keine Ansage", async () => {
+  const tmp = mkdtempSync(path.join(os.tmpdir(), "live-plan-ansagen-"));
+  try {
+    const datei = ansagenDatei(tmp);
+    const modul = path.join(import.meta.dirname, "ansagen.ts");
+    const schreiber = (p: number) =>
+      new Promise<void>((ok, fehler) => {
+        const code = `const m = await import(${JSON.stringify(modul)}); for (let i = 0; i < 60; i++) m.schreibeAnsage(${JSON.stringify(datei)}, { v: 1, zeit: Date.now(), id: "p${p}", repo: "proj", text: "Nummer " + i + ".", quelle: "auto" }, 20);`;
+        const k = spawn(process.execPath, ["--input-type=module", "-e", code], { stdio: "inherit" });
+        k.on("exit", (c) => (c === 0 ? ok() : fehler(new Error(`Schreiber ${p}: Exit ${c}`))));
+      });
+    await Promise.all([1, 2, 3, 4].map(schreiber));
+    // Kuerzen nimmt nur vorne weg: je Schreiber bleibt eine lueckenlose Folge, die mit seiner letzten Nummer endet.
+    // Ohne die Sperre faellt der Test nicht jedes Mal (das Fenster ist kurz), aber oft.
+    const liste = leseAnsagen(datei, 1000);
+    assert.ok(liste.length >= 20, String(liste.length));
+    for (const p of [1, 2, 3, 4]) {
+      const nummern = liste.filter((a) => a.id === `p${p}`).map((a) => Number(/Nummer (\d+)/.exec(a.text)![1]));
+      nummern.forEach((n, i) => assert.equal(n, nummern[0]! + i, `p${p}: ${nummern.join(",")}`));
+      if (nummern.length) assert.equal(nummern.at(-1), 59, `p${p}: ${nummern.join(",")}`);
+    }
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("Einstellungen: Vorgabe bei Fehlendem und Kaputtem, Aenderung nur mit passenden Feldern, YAML", () => {
+  assert.deepEqual(EINSTELLUNGEN_VORGABE, { vorlesen: false, stimme: null });
+  for (const roh of [null, undefined, "kaputt", [1], {}, { vorlesen: "ja", stimme: 3 }]) assert.deepEqual(einstellungenAus(roh), EINSTELLUNGEN_VORGABE, JSON.stringify(roh));
+  assert.deepEqual(einstellungenAus({ vorlesen: true, stimme: " Anna " }), { vorlesen: true, stimme: "Anna" });
+  assert.deepEqual(einstellungenAus({ stimme: "x".repeat(201) }), EINSTELLUNGEN_VORGABE);
+  const alt = { vorlesen: true, stimme: "Anna" };
+  assert.deepEqual(einstellungenMit(alt, { vorlesen: false }), { vorlesen: false, stimme: "Anna" });
+  assert.deepEqual(einstellungenMit(alt, { stimme: "Petra" }), { vorlesen: true, stimme: "Petra" });
+  assert.deepEqual(einstellungenMit(alt, { stimme: null }), { vorlesen: true, stimme: null });
+  assert.deepEqual(einstellungenMit(alt, { stimme: "" }), { vorlesen: true, stimme: null });
+  for (const falsch of [null, [], "x", { vorlesen: 1 }, { stimme: 5 }, { stimme: "a\nb" }]) assert.equal(einstellungenMit(alt, falsch), null, JSON.stringify(falsch));
+  assert.equal(einstellungenYaml({ vorlesen: true, stimme: 'Anna "de"' }).split("\n").slice(1).join("\n"), 'vorlesen: true\nstimme: "Anna \\"de\\""\n');
+  assert.match(einstellungenYaml(EINSTELLUNGEN_VORGABE), /^vorlesen: false\nstimme: null$/m);
 });
 
 // --- live-plan sage gegen echte Dateien (bun) ---------------------------------------------------

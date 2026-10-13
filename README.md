@@ -102,15 +102,24 @@ das Repo: „live-plan: Der Umbau ist fertig …“.
 
 Die Ansagen stehen als eine JSON-Zeile je Ansage (`zeit`, `id`, `repo`, `text`, `quelle` `auto` oder `sage`) in
 `LIVE_PLAN_CACHE/ansagen.jsonl`. Angehängt wird mit `O_APPEND`; bei mehr als 250 Zeilen schreibt der nächste Schreiber die
-letzten 200 neu. Eine kaputte Zeile oder eine fehlende Datei kostet nur diese Ansagen. Der Server liest die Datei
-nur: `GET /api/ansagen` liefert die letzten 200, neueste zuerst, `GET /api/ereignisse` meldet als Ereignisstrom
-jede Änderung. Schreiben gibt es über HTTP nicht.
+letzten 200 neu. Anhängen und Kürzen laufen unter der Sperre `ansagen.jsonl.sperre` (O_EXCL, höchstens 2 s Warten,
+eine Sperre älter als 10 s gilt als verwaist), damit kein Kürzen eine gleichzeitig angehängte Ansage verliert; ohne
+Sperre wird trotzdem angehängt, nur nicht gekürzt. Eine kaputte Zeile oder eine fehlende Datei kostet nur diese
+Ansagen. Der Server liest die Datei nur: `GET /api/ansagen` liefert die letzten 200, neueste zuerst,
+`GET /api/ereignisse` meldet als Ereignisstrom jede Änderung an Ansagen und Einstellungen. Ansagen schreiben gibt es
+über HTTP nicht.
 
-In der Übersicht steht über dem Rechner der Block Ansagen: der Schalter **🔊 Vorlesen** (neue Ansagen automatisch
-vorlesen, an oder aus), **▶ Letzte nochmal**, die Wahl der Stimme (deutsche zuerst, Vorgabe Deutsch) und die
-Liste mit Abspielknopf, Uhrzeit, Alter, Repo und Text. Schalter und Stimme merkt sich der Browser (localStorage).
-Browser sprechen erst nach einem Klick auf die Seite; bis dahin steht ein Hinweis da und neue Ansagen werden nur
-gelistet. Weil die Seite ohne Anmeldung im LAN erreichbar ist, liest dort jeder die Ansagen mit.
+In der Tabelle der Übersicht zeigt die Spalte **ansage** je Sitzung ▶ und die Uhrzeit ihrer neuesten Ansage (der
+Text steht im Tooltip); ▶ liest sie vor. Sitzungen ohne Ansage bleiben dort leer. Das Menü **⚙** im Kopf enthält
+den Schalter **🔊 Vorlesen** (jede neue Ansage aus allen Sitzungen automatisch vorlesen, an oder aus), die Wahl der
+Stimme (deutsche zuerst, Vorgabe Deutsch) und **▶ Letzte Ansage nochmal**. Beides steht zentral in
+`LIVE_PLAN_CACHE/einstellungen.yaml` (`vorlesen: true|false`, `stimme: "<Name>"` oder `null`) und gilt damit für
+jeden Browser: `GET /api/einstellungen` liest sie, `POST /api/einstellungen` (JSON `{ vorlesen?, stimme? }`, bis
+2 KB) schreibt sie, unter denselben Regeln wie eine Entscheidung (nur von der eigenen Seite, kein fremder `Origin`).
+Eine kaputte oder fehlende YAML gilt als Vorgabe (aus, deutsche Stimme). Die Stimme steht als Name; hat ein Browser
+sie nicht, spricht er mit seiner ersten deutschen Stimme. Browser sprechen erst nach einem Klick auf die Seite; bis
+dahin steht bei Vorlesen an ein Hinweis neben ⚙ und neue Ansagen werden nur gelistet. Weil die Seite ohne Anmeldung
+im LAN erreichbar ist, liest dort jeder die Ansagen mit und kann Vorlesen und Stimme umstellen.
 Tests: `node --test ansagen.test.ts liste.test.ts server.test.ts` (brauchen bun), Mod: `claude plugin test mod`.
 
 ## Firstmate-Cockpit
