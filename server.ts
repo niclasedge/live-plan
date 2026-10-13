@@ -1096,7 +1096,13 @@ async function antworte(req: Request, server: Bun.Server): Promise<Response> {
     if (lesen && b === "gesund" && teile.length === 2) return json({ pid: process.pid, wurzel: WURZELN[0], wurzeln: WURZELN, port: PORT });
     if (lesen && b === "liste" && teile.length === 2) return json({ wurzel: WURZELN[0], wurzeln: WURZELN, sitzungen: listeSitzungen() });
     if (lesen && b === "abo" && teile.length === 2) return json(await aboAntwort());
-    if (lesen && b === "host" && teile.length === 2) return json(await hostSicht());
+    if (lesen && b === "host" && teile.length === 2) {
+      try {
+        return json(await hostSicht());
+      } catch (e) {
+        return json({ fehler: `Messung fehlgeschlagen: ${e instanceof Error ? e.message : String(e)}` }, 503);
+      }
+    }
     const ort = b && c ? ortVon(b, c) : null;
     if (!ort) return json({ fehler: "Sitzung nicht gefunden" }, 404);
     if (lesen && teile.length === 3) return json(await sitzungsDaten(ort));

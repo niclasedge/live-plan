@@ -310,11 +310,12 @@
   var hostTaktObj = null;
   function ladeHost() {
     return fetch("/api/host", { cache: "no-store" }).then(function (r) {
-      return r.ok ? r.json() : null;
+      if (!r.ok) throw new Error("host " + r.status);
+      return r.json();
     }).then(function (b) {
       var neu = b && typeof b === "object" && b.verfuegbar === true ? b : null;
-      // Linux-only: ohne Daten verschwindet der Block und der Takt endet.
-      if (!neu && hostTaktObj) { hostTaktObj.ende(); hostTaktObj = null; }
+      // Linux-only: meldet der Server ausdruecklich "nicht verfuegbar", verschwindet der Block und der Takt endet.
+      if (!neu && b && b.verfuegbar === false && hostTaktObj) { hostTaktObj.ende(); hostTaktObj = null; }
       if (!neu && !HOST) return;
       HOST = neu;
       if (D) zeichneHost();

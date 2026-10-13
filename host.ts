@@ -9,6 +9,7 @@ export const HOST_VORHALTEN_MS = 5000;
 export const HOST_TOP = 5;
 const TICKS = 100; // CLK_TCK; auf Linux praktisch immer 100
 const SEITE = 4096;
+const BASIS_MAX_MS = 3 * HOST_VORHALTEN_MS; // aelter, und das CPU-Delta waere ein Mittel ueber die ganze Pause
 
 export type Cpu = { gesamt: number; leer: number };
 export type Speicher = { gesamtMb: number; benutztMb: number; verfuegbarMb: number; swapGesamtMb: number; swapBenutztMb: number };
@@ -108,7 +109,7 @@ export function oberste<T extends { pid: number }>(liste: T[], schluessel: (x: T
 
 function lies(pfad: string): string | null {
   try {
-    return readFileSync(pfad, "latin1");
+    return readFileSync(pfad, "utf8");
   } catch {
     return null; // der Prozess ist weg oder gehoert niemandem, den wir lesen duerfen
   }
@@ -136,7 +137,7 @@ async function messe(): Promise<HostSicht> {
   const last = parseLoadavg(lies("/proc/loadavg") ?? "");
   const speicher = parseMeminfo(lies("/proc/meminfo") ?? "");
   if (!stat || !last || !speicher) return { verfuegbar: false };
-  if (!vorherCpu) {
+  if (!vorherCpu || Date.now() - vorherUm > BASIS_MAX_MS) {
     vorherCpu = stat;
     vorherUm = Date.now();
     vorherProzess = new Map();
@@ -200,11 +201,16 @@ async function messe(): Promise<HostSicht> {
   };
 }
 
-/** Die Sicht fuer GET /api/host; Aufrufer innerhalb von HOST_VORHALTEN_MS bekommen dieselbe. Ohne /proc: verfuegbar false. */
+/** Die Sicht fuer GET /api/host; Aufrufer innerhalb von HOST_VORHALTEN_MS bekommen dieselbe. Ohne /proc: verfuegbar false; ein Messfehler wirft. */
 export async function hostSicht(): Promise<HostSicht> {
   if (process.platform !== "linux") return { verfuegbar: false };
   if (vorrat && Date.now() - vorrat.um < HOST_VORHALTEN_MS) return vorrat.sicht;
   // Das Versprechen selbst liegt im Vorrat, damit gleichzeitige Aufrufe nicht doppelt messen.
-  vorrat = { um: Date.now(), sicht: messe().catch((): HostSicht => ({ verfuegbar: false })) };
-  return vorrat.sicht;
+  const eintrag = { um: Date.now(), sicht: messe() };
+  vorrat = eintrag;
+  // Ein Messfehler ist kein "nicht verfuegbar": nicht vorhalten, der Aufrufer sieht den Fehler.
+  eintrag.sicht.catch(() => {
+    if (vorrat === eintrag) vorrat = null;
+  });
+  return eintrag.sicht;
 }
