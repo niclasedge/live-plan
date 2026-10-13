@@ -368,6 +368,45 @@ test("mdHtml: snake_case und Sternchen im Wort werden nicht zu Hervorhebung; Lee
   assert.equal(mdHtml(null as never), "");
 });
 
+/** Eine laufende Aufgabe mit genau dieser Statusdatei in einem Wegwerf-Home; ein fertiger Median-Auftrag von 60 min liegt dabei. */
+function eineLaufendeAufgabe(status: string[]) {
+  const home = mkdtempSync(path.join(os.tmpdir(), "flotte-zustand-"));
+  try {
+    for (const d of ["state", "data"]) mkdirSync(path.join(home, d));
+    writeFileSync(path.join(home, "data", "backlog.md"), "## Done\n- [x] z-0 - alt (repo: alpha) (kind: ship) (merged 2027-01-15)\n");
+    mkdirSync(path.join(home, "data", "z-0"));
+    writeFileSync(path.join(home, "data", "z-0", "launch-brief.md"), "# Launch\n");
+    setzeZeit(path.join(home, "data", "z-0", "launch-brief.md"), JETZT - 100 * MIN);
+    writeFileSync(path.join(home, "data", "z-0", "report.md"), "# Bericht\n");
+    setzeZeit(path.join(home, "data", "z-0", "report.md"), JETZT - 40 * MIN);
+    writeFileSync(path.join(home, "state", "z-1.meta"), `project=/h/projects/alpha\nkind=ship\nspawn_gen=s${JETZT - 20 * MIN}.1.2\n`);
+    writeFileSync(path.join(home, "state", "z-1.status"), status.join("\n") + "\n");
+    return flotte(home, { jetzt: JETZT, seit: JETZT - 86400 }).repos.flatMap((r) => r.aufgaben).find((a) => a.id === "z-1")!;
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+}
+
+test("flotte: paused zählt als läuft (Balken, Text, Schätzung wie working); blocked und needs-decision bleiben angehalten", () => {
+  const pausiert = eineLaufendeAufgabe([`working [at=${JETZT - 19 * MIN}]: baut`, `paused [at=${JETZT - 5 * MIN}]: warte auf Test`]);
+  assert.equal(pausiert.zustand, "lauf");
+  assert.equal(pausiert.zustandText, "läuft");
+  assert.equal(pausiert.schaetzung?.minuten, 40, "Median 60 min ab Start vor 20 min");
+  const blockiert = eineLaufendeAufgabe([`working [at=${JETZT - 19 * MIN}]: baut`, `blocked [at=${JETZT - 5 * MIN}] [key=k]: wartet`]);
+  assert.equal(blockiert.zustand, "stopp");
+  assert.equal(blockiert.zustandText, "blockiert");
+  const frage = eineLaufendeAufgabe([`needs-decision [at=${JETZT - 5 * MIN}] [key=k]: ja oder nein?`]);
+  assert.equal(frage.zustand, "stopp");
+  assert.equal(frage.zustandText, "wartet auf Entscheidung");
+});
+
+test("flotte: captain-held bleibt angehalten, auch wenn die Aufgabe danach paused wirkt", () => {
+  const gehalten = eineLaufendeAufgabe([`working [at=${JETZT - 19 * MIN}]: baut`, `captain-held [at=${JETZT - 5 * MIN}]: fuer den Captain gehalten`]);
+  assert.equal(gehalten.zustand, "stopp");
+  assert.equal(gehalten.zustandText, "pausiert");
+  assert.equal(gehalten.schaetzung, null, "angehalten: keine Schätzung");
+});
+
 // --- Zeichnen der Flotte und des Aufgaben-Modals ----------------------------------------------
 
 const BOESE = '<img src=x onerror=alert(1)>"\'';
@@ -389,6 +428,31 @@ test("flotteTeil: eine Linie je Repo mit Balken in Prozent; Ids, Titel und Repo-
   assert.doesNotMatch(h, /<img/i);
   assert.doesNotMatch(h, /href="javascript/i);
   assert.match(h, /&lt;img src=x onerror=alert\(1\)&gt;/);
+});
+
+test("flotteTeil: ein Repo ohne laufende Aufgabe ist ausgegraut und bleibt aufklappbar; mit Lauf nicht; die KPI sagt läuft: nichts", () => {
+  const a = ansicht();
+  const aufgabe = (id: string, zustand: string) => aufgabeFuerAnsicht({ id, repo: "x", titel: "t", zustand, zustandText: zustand === "lauf" ? "läuft" : "gemergt" });
+  a.setzeFirstmate({
+    home: "/h",
+    zeit: JETZT,
+    flotte: {
+      jetzt: JETZT, t0: JETZT - 7200, t1: JETZT + 1800, jetztProzent: 80, achse: [],
+      repos: [
+        { repo: "ruhend", aufgaben: [aufgabe("r-1", "fertig")], median: 40, gemergt: 1, laeuft: [] },
+        { repo: "aktiv", aufgaben: [aufgabe("a-1", "lauf")], median: 40, gemergt: 0, laeuft: ["a-1"] },
+      ],
+    },
+    worker: [],
+    projekte: [],
+  });
+  const h = a.flotteTeil();
+  const [ruhend, aktiv] = [...h.matchAll(/<section class="([^"]*)" data-testid="flotte-repo">([\s\S]*?)<div class="fl-strahl">/g)];
+  assert.match(ruhend[1], /fl-repo.*fl-ruht/);
+  assert.match(ruhend[2], /läuft: nichts/);
+  assert.doesNotMatch(aktiv[1], /fl-ruht/);
+  assert.match(aktiv[2], /läuft: a-1/);
+  assert.match(ruhend[0], /data-fl-repo="ruhend"/, "aufklappbar bleibt der Kopf");
 });
 
 test("flAufgabeModal: Zeitleiste fehlt -> Hinweis; Anweisungen, Bericht und Zeitleiste ohne rohes HTML; lazy: ohne Detail steht lädt", () => {
