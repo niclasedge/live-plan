@@ -114,7 +114,7 @@ Datei geht. `--json` enthält dasselbe (`notizen`, `warteschlange`, je Worker `i
 Skript liest nur; es braucht node >= 22.18 (eingebautes Type-Stripping) oder bun.
 
 ```bash
-./cockpit.ts                       # Live-Ansicht, Home aus FM_HOME, sonst /work/firstmate
+./cockpit.ts                       # Live-Ansicht, Home aus FM_HOME, sonst FIRSTMATE_HOME, sonst /work/firstmate
 ./cockpit.ts --home ~/firstmate --watch 10
 ./cockpit.ts --once                # alle Details und Befehle je Worker
 ./cockpit.ts --json

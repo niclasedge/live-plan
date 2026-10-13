@@ -6,7 +6,7 @@
 //
 //   cockpit [--home PFAD] [--watch [SEK] | --once | --json] [--keine-pane]
 //
-//   --home PFAD    Firstmate-Home; sonst FM_HOME, sonst /work/firstmate
+//   --home PFAD    Firstmate-Home; sonst FM_HOME, sonst FIRSTMATE_HOME, sonst /work/firstmate
 //   --watch [SEK]  Live-Ansicht alle SEK Sekunden (Vorgabe 5) neu aufbauen, Ende mit q oder Strg-C
 //   --once         einmal alle Details und Befehle als Klartext (Vorgabe, wenn stdout kein Terminal ist)
 //   --json         einmal alles als JSON
@@ -726,7 +726,7 @@ function hilfe(code: number): never {
 }
 
 async function main(argv: string[]): Promise<void> {
-  let home = process.env.FM_HOME || "/work/firstmate";
+  let home = process.env.FM_HOME || process.env.FIRSTMATE_HOME || "/work/firstmate";
   let json = false;
   let once = false;
   let watch: number | null = null;
