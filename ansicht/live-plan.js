@@ -1875,12 +1875,16 @@
   /** Scrollposition und Fokus des offenen Modals vor dem Neuzeichnen. */
   function modalStand() {
     var rolle = wurzel.querySelector(".lp-modal .lp-diff-text, .lp-modal .fm-details");
-    return { scroll: rolle ? [rolle.scrollTop, rolle.scrollLeft] : null, fokus: modalZiele().indexOf(doc.activeElement) };
+    return { scroll: rolle ? [rolle.scrollTop, rolle.scrollLeft] : null, fokus: modalZiele().indexOf(doc.activeElement) >= 0 ? modalSchluessel(doc.activeElement) : null };
+  }
+  /** Woran ein Ziel im Modal nach dem Neuzeichnen wiedererkannt wird: Art, Befehl, Link und Klasse, nicht die Stelle. */
+  function modalSchluessel(el) {
+    return [el.tagName, el.getAttribute("data-kopiere"), el.getAttribute("href"), el.getAttribute("class")].join("\n");
   }
   /** Das neue innerHTML nimmt dem Modal den Fokus (er fiele auf BODY); er geht zurueck, wo er war, sonst auf Schliessen. Die Scrollposition bleibt. */
   function nachModal(stand) {
     if (!(modal || diffAuf || fmAuf)) return;
-    var ziel = modalZiele()[stand.fokus] || wurzel.querySelector(".lp-modal button[data-modal-zu]");
+    var ziel = (stand.fokus !== null && modalZiele().find(function (el) { return modalSchluessel(el) === stand.fokus; })) || wurzel.querySelector(".lp-modal button[data-modal-zu]");
     if (ziel) ziel.focus();
     var rolle = stand.scroll && wurzel.querySelector(".lp-modal .lp-diff-text, .lp-modal .fm-details");
     if (rolle) { rolle.scrollTop = stand.scroll[0]; rolle.scrollLeft = stand.scroll[1]; }
