@@ -27,6 +27,7 @@ import {
   diffPfadGueltig,
   DIFF_LESEN_HOECHSTENS,
   geheimerName,
+  istLoopback,
   type BaumDatei,
   type DiffAntwort,
   gitStand,
@@ -583,7 +584,8 @@ function baumVon(repoPfad: string): Promise<Baum | null> {
 // oder geloescht: git diff HEAD; unversioniert: der Inhalt als neue Datei; ohne Marke: der Inhalt.
 // Mit branch= (E3) nur eine Datei, die dieser but-Branch committet hat: der Diff gegen seine Basis.
 // Ausserhalb des Baums (git-ignoriert) nur eine Datei, die das Register dieser Sitzung als gelesen
-// oder geschrieben fuehrt, nach realpath in der Wurzel und nicht mit einem Secret-Namen.
+// oder geschrieben fuehrt, nur an eine Verbindung vom eigenen Rechner (Loopback), nach realpath in
+// der Wurzel und nicht mit einem Secret-Namen.
 
 const DIFF_PUFFER = 32 * 1024 * 1024;
 const diffPuffer = Buffer.allocUnsafe(DIFF_LESEN_HOECHSTENS);
@@ -1067,6 +1069,7 @@ async function antworte(req: Request, server: Bun.Server): Promise<Response> {
       const eintrag = baum.dateien.find((x) => x.p === p);
       if (!eintrag) {
         if (!registerBeruehrt(ort.live, p)) return json({ fehler: "Datei steht nicht im Dateibaum" }, 404);
+        if (!istLoopback(server.requestIP(req)?.address)) return json({ fehler: "Git-ignorierte Datei, Inhalt nur fuer Aufrufe vom eigenen Rechner" }, 403);
         if (geheimerName(p)) return json({ fehler: "Git-ignorierte Datei mit Secret-Namen, Inhalt wird nicht gezeigt" }, 403);
         const antwort = ignoriertVon(ort.repoPfad!, p);
         return antwort ? json(antwort) : json({ fehler: "Datei nicht lesbar oder nicht in der Wurzel der Sitzung" }, 404);

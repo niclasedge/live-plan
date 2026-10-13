@@ -72,7 +72,9 @@ Der Server lauscht auf Port 4410 (`LIVE_PLAN_PORT`) und hat keine Anmeldung. Er 
 erreichbar; legen Sie keine Secrets in die Sitzungsdatei.
 
 Der Diff im Abschnitt Dateien zeigt auch eine git-ignorierte Datei, aber nur, wenn die Sitzung sie
-laut Register gelesen oder geschrieben hat und sie in der Wurzel liegt. Typische Secret-Namen
+laut Register gelesen oder geschrieben hat, sie in der Wurzel liegt und der Aufruf vom eigenen Rechner
+kommt (Quell-IP der Verbindung 127.0.0.0/8 oder ::1, kein Header). Jedem anderen Aufruf, etwa aus dem LAN,
+meldet er für eine git-ignorierte Datei eine Ablehnung (403) statt des Inhalts. Typische Secret-Namen
 (`.env`, `.env.*`, `*.pem`, `*.key`, `id_rsa*`, `id_ed25519*`, `*credentials*`, `*secret*`) zeigt er
 dabei nie, sondern meldet eine Ablehnung. Tests: `node --test server.test.ts` (startet `bun server.ts`).
 

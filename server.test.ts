@@ -7,12 +7,17 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { after, before, test } from "node:test";
-import { geheimerName, registerBeruehrt } from "./logik.ts";
+import { geheimerName, istLoopback, registerBeruehrt } from "./logik.ts";
 import type { Register } from "./logik.ts";
 
 test("geheimerName: typische Secret-Namen, auch in einem Ordner", () => {
   for (const p of [".env", "a/.env.local", "x.pem", "tls/server.KEY", ".ssh/id_rsa", "id_ed25519.pub", "aws/credentials", "my-secret.txt", "secrets/notiz.md"]) assert.equal(geheimerName(p), true, p);
   for (const p of ["data/brief.md", "README.md", "env.md", "keys.md", "src/pemmican.ts"]) assert.equal(geheimerName(p), false, p);
+});
+
+test("istLoopback: 127.0.0.0/8 und ::1, auch als IPv4 in IPv6, sonst nicht", () => {
+  for (const ip of ["127.0.0.1", "127.1.2.3", "::1", "::ffff:127.0.0.1", "::FFFF:127.0.0.5"]) assert.equal(istLoopback(ip), true, ip);
+  for (const ip of ["192.168.178.65", "10.0.0.1", "::ffff:192.168.0.1", "fe80::1", "128.0.0.1", "127.0.0.1.evil", "", null, undefined]) assert.equal(istLoopback(ip), false, String(ip));
 });
 
 test("registerBeruehrt: nur ein gelesener oder geschriebener Pfad, Kaputtes faellt weg", () => {
@@ -31,6 +36,7 @@ const ID = "sitzung-1";
 let tmp: string;
 let server: ChildProcess;
 let basis: string;
+let lanBasis: string | null;
 
 function freierPort(): Promise<number> {
   return new Promise((ok, fehler) => {
@@ -68,6 +74,8 @@ before(async () => {
 
   const port = await freierPort();
   basis = `http://localhost:${port}/api/proj/${ID}/diff?p=`;
+  const lan = Object.values(os.networkInterfaces()).flat().find((n) => n && n.family === "IPv4" && !n.internal);
+  lanBasis = lan ? `http://${lan.address}:${port}/api/proj/${ID}/diff?p=` : null;
   server = spawn("bun", [path.join(import.meta.dirname, "server.ts")], {
     env: { ...process.env, LIVE_PLAN_PORT: String(port), LIVE_PLAN_CACHE: cache, LIVE_PLAN_WURZEL: path.join(tmp, "wurzel") },
     stdio: "ignore",
@@ -88,8 +96,8 @@ after(() => {
   rmSync(tmp, { recursive: true, force: true });
 });
 
-const hole = async (p: string) => {
-  const r = await fetch(basis + encodeURIComponent(p));
+const hole = async (p: string, von = basis, kopf: Record<string, string> = {}) => {
+  const r = await fetch(von + encodeURIComponent(p), { headers: kopf });
   return { status: r.status, body: (await r.json()) as { art?: string; text?: string; fehler?: string } };
 };
 
@@ -98,6 +106,18 @@ test("diff: eine git-ignorierte Datei, die die Sitzung gelesen hat, zeigt ihren 
   assert.equal(status, 200);
   assert.equal(body.art, "datei");
   assert.equal(body.text, "# Brief\nInhalt\n");
+});
+
+test("diff: eine git-ignorierte Datei von einem anderen Rechner wird verweigert, auch mit X-Forwarded-For", async (t) => {
+  if (!lanBasis) return t.skip("keine Nicht-Loopback-Adresse an diesem Rechner");
+  for (const kopf of [{}, { "X-Forwarded-For": "127.0.0.1", "X-Real-IP": "127.0.0.1" }]) {
+    const { status, body } = await hole("data/brief.md", lanBasis, kopf);
+    assert.equal(status, 403);
+    assert.match(body.fehler ?? "", /eigenen Rechner/);
+    assert.doesNotMatch(JSON.stringify(body), /Inhalt\n/);
+  }
+  const imBaum = await hole("README.md", lanBasis);
+  assert.equal(imBaum.status, 200);
 });
 
 test("diff: eine git-ignorierte Datei ohne Eintrag im Register bleibt 404", async () => {

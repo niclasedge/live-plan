@@ -1215,6 +1215,12 @@ export function geheimerName(p: string): boolean {
   return p.split("/").some((t) => GEHEIM.some((m) => m.test(t.toLowerCase())));
 }
 
+/** Ob die Quell-IP `ip` einer Verbindung der eigene Rechner ist: 127.0.0.0/8 oder ::1, auch IPv4 in IPv6. */
+export function istLoopback(ip: string | null | undefined): boolean {
+  const v4 = ip?.toLowerCase().replace(/^::ffff:/, "");
+  return v4 === "::1" || /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(v4 ?? "");
+}
+
 /** Unversioniert: neu; ohne Git-Marke: der Inhalt; sonst der Diff gegen HEAD. */
 export function diffArtVon(s: BaumStatus | undefined): "diff" | "neu" | "datei" {
   return s === "?" ? "neu" : s ? "diff" : "datei";
