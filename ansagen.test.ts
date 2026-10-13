@@ -198,6 +198,12 @@ function sage(cache: string, args: string[], opts: { stdin?: string; env?: Recor
   return spawnSync("bun", [path.join(import.meta.dirname, "live-plan"), "sage", ...args], { cwd: import.meta.dirname, env, input: opts.stdin ?? "", encoding: "utf8" });
 }
 
+/** Das Repo, das sage ohne --repo nennt: der Ordnername der Git-Wurzel dieses Checkouts (nicht immer "live-plan"). */
+function eigenesRepo(): string {
+  const lauf = spawnSync("git", ["rev-parse", "--show-toplevel"], { cwd: import.meta.dirname, encoding: "utf8" });
+  return path.basename(lauf.status === 0 && lauf.stdout.trim() ? lauf.stdout.trim() : import.meta.dirname);
+}
+
 test("live-plan sage: eigene Ansage mit Sitzung und Repo; danach entfaellt die automatische dieses Zugs", (t) => {
   if (spawnSync("bun", ["--version"]).status !== 0) return t.skip("bun fehlt");
   const tmp = mkdtempSync(path.join(os.tmpdir(), "live-plan-sage-"));
@@ -205,14 +211,15 @@ test("live-plan sage: eigene Ansage mit Sitzung und Repo; danach entfaellt die a
     const seit = Date.now() - 1000;
     const eigen = sage(tmp, ["Der **Build** ist grün, siehe https://x.y/z."], { env: { CLAUDE_SESSION_ID: "s-1" } });
     assert.equal(eigen.status, 0, eigen.stderr);
-    assert.match(eigen.stdout, /^angesagt: live-plan: Der Build ist grün, siehe\.$/m);
+    const repo = eigenesRepo();
+    assert.ok(eigen.stdout.split("\n").includes(`angesagt: ${repo}: Der Build ist grün, siehe.`), eigen.stdout);
     const antwort = "Die Arbeit ist erledigt und der PR wartet. Zweiter Satz der Antwort.";
     assert.equal(sage(tmp, ["--auto", "--id", "s-1", "--seit", String(seit), "--repo", "proj"], { stdin: antwort }).status, 0);
     assert.equal(sage(tmp, ["--auto", "--id", "s-2", "--seit", String(seit), "--repo", "proj"], { stdin: antwort }).status, 0);
     assert.equal(sage(tmp, ["--auto", "--id", "s-3", "--seit", String(seit)], { stdin: "Captain, shipshape." }).status, 0);
     const liste = leseAnsagen(ansagenDatei(tmp));
     assert.deepEqual(liste.map((a) => [a.id, a.repo, a.quelle, a.text]), [
-      ["s-1", "live-plan", "sage", "Der Build ist grün, siehe."],
+      ["s-1", repo, "sage", "Der Build ist grün, siehe."],
       ["s-2", "proj", "auto", antwort],
     ]);
   } finally {
