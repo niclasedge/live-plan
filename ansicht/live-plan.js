@@ -6,7 +6,7 @@
 // Aufbau nach der Vorlage im Things-Stil: Kopf mit Icon, Kurztext und Tags, Ueberblick in drei Karten,
 // Teil 1 Sitzung und Fortschritt (Verbrauch, Fortschritt mit Phasen, vier Kacheln aus Issue 320, genau eine
 // Jetzt-Zeile, dann in zwei Spalten Agenten, Fragen an Sie, Offen, Anforderungen, Entscheidungen; die
-// Abschnitte aus ueberblick in logik.ts), in einem Firstmate-Home der Abschnitt Firstmate (Worker-Karten,
+// Abschnitte aus ueberblick in logik.ts), in einem Firstmate-Home der Abschnitt Firstmate (Flotte als Linie je Repo,
 // Captain-Inbox, Warteschlange, Projekte aus GET .../firstmate), Teil 2 Dokumentation, darunter Dateien und der Fuss. Verbrauch,
 // Fortschritt und Agenten kommen aus der Register-JSON (S8).
 // Die Zeichenfunktionen haengen nicht am DOM und stehen unter globalThis.LivePlanAnsicht, damit
@@ -1467,21 +1467,6 @@
     if (!s) return '<span class="unbekannt">noch keine Statuszeile</span>';
     return (s.at ? zeitAngabe(isoAus(s.at)) + " " : '<span class="unbekannt">?</span> ') + esc(s.text);
   }
-  function fmKarte(w) {
-    var z = fmZustand(w), m = w.meta || {};
-    var post = w.inbox && w.inbox.wartend && w.inbox.wartend.length ? '<span class="fm-post" title="ungelesene Nachrichten von Firstmate">✉ ' + w.inbox.wartend.length + "</span>" : "";
-    var zeilen = [
-      [fmProjektName(m.project), [m.kind, m.mode].filter(Boolean).join("/")].filter(Boolean).map(esc).join(" · "),
-      esc([m.harness, m.model, m.effort].filter(Boolean).join("/")),
-    ].filter(Boolean).map(function (t) { return '<div class="fm-zeile">' + t + "</div>"; }).join("");
-    var pr = m.pr ? '<div class="fm-zeile">PR ' + fmLink(m.pr, prKurz(m.pr)) + "</div>" : "";
-    var zweig = fmZweig(w);
-    return '<div class="fm-karte fm-z-' + z + '" role="button" tabindex="0" data-fm-worker="' + esc(w.id) + '" title="Details zu ' + esc(w.id) + '">' +
-      '<div class="fm-kopf"><span class="fm-zeichen">' + FM_ZUSTAND[z] + '</span><b class="mono">' + esc(w.id) + "</b>" + post + '<span class="fm-zustand">' + esc(z) + "</span></div>" +
-      (w.titel ? '<div class="fm-titel">' + esc(w.titel) + "</div>" : "") + zeilen +
-      '<div class="fm-status">' + fmStatusZeile(w.status && w.status.letzte) + "</div>" + pr +
-      (zweig ? '<div class="fm-zeile mono">' + zweig + "</div>" : "") + "</div>";
-  }
   function fmLage() {
     var n = Array.isArray(FM.notizen) ? FM.notizen.length : 0;
     var ws = Array.isArray(FM.warteschlange) ? FM.warteschlange : null;
@@ -1515,6 +1500,298 @@
     var worker = (p.worker || []).map(function (id) { return '<span class="mono fm-wid" data-fm-worker="' + esc(id) + '" role="button" tabindex="0">' + esc(id) + "</span>"; }).join(" ");
     return "<tr><td>" + name + '</td><td class="mono">' + zweig + "</td><td>" + stand + "</td><td>" + commit + "</td><td>" + abgerufen + "</td><td>" + fmPrs(p) + "</td><td>" + worker + "</td></tr>";
   }
+  // --- Markdown ohne rohes HTML (fuer Anweisungen und Berichte der Flotte) ----------------------
+  // Nur die benoetigte Teilmenge: Ueberschriften, Listen, Code, Tabellen, Zitate, Hervorhebung, Links.
+  // Jeder Text geht durch esc(); es gibt keinen Durchlass fuer HTML, Links nur auf https-Adressen.
+  var MD_LI = /^(\s*)([-*+]|\d+[.)])\s+(.*)$/;
+  var MD_TRENNER = /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/;
+  var MD_INLINE = /`([^`\n]+)`|\[([^\]\n]+)\]\((https:\/\/[^\s)]+)\)|\*\*([^*\n]+?)\*\*|(^|[^\w*])\*([^\s*][^*\n]*?)\*(?![\w*])|(^|[^\w])_([^\s_][^_\n]*?)_(?!\w)|(https:\/\/[^\s<>"'`)\]]+)/g;
+  function mdInline(s) {
+    var re = new RegExp(MD_INLINE.source, "g"), out = "", letzte = 0, m;
+    s = String(s);
+    while ((m = re.exec(s))) {
+      out += esc(s.slice(letzte, m.index));
+      letzte = re.lastIndex;
+      if (m[1] !== undefined) out += "<code>" + esc(m[1]) + "</code>";
+      else if (m[2] !== undefined) out += '<a href="' + esc(m[3]) + '" target="_blank" rel="noopener noreferrer">' + esc(m[2]) + "</a>";
+      else if (m[4] !== undefined) out += "<strong>" + mdInline(m[4]) + "</strong>";
+      else if (m[6] !== undefined) out += esc(m[5]) + "<em>" + mdInline(m[6]) + "</em>";
+      else if (m[8] !== undefined) out += esc(m[7]) + "<em>" + mdInline(m[8]) + "</em>";
+      else {
+        var url = m[9], rest = /[.,;:!?]+$/.exec(url);
+        if (rest) { url = url.slice(0, -rest[0].length); letzte = re.lastIndex = m.index + url.length; }
+        out += '<a href="' + esc(url) + '" target="_blank" rel="noopener noreferrer">' + esc(url) + "</a>";
+      }
+    }
+    return out + esc(s.slice(letzte));
+  }
+  function mdZellen(zeile) {
+    var z = zeile.trim().replace(/\\\|/g, "\u0000");
+    if (z.charAt(0) === "|") z = z.slice(1);
+    if (z.charAt(z.length - 1) === "|") z = z.slice(0, -1);
+    return z.split("|").map(function (c) { return c.replace(/\u0000/g, "|").trim(); });
+  }
+  /** Eine Liste ab Zeile i, Unterlisten nach Einrueckung; gibt [html, naechste Zeile] zurueck. */
+  function mdListe(zeilen, i) {
+    var n = zeilen.length, erste = MD_LI.exec(zeilen[i]), basis = erste[1].length, geordnet = /\d/.test(erste[2]);
+    var punkte = [], cur = null;
+    while (i < n) {
+      var l = zeilen[i], mm = MD_LI.exec(l);
+      if (!mm) {
+        if (/^\s*$/.test(l)) {
+          var j = i + 1;
+          while (j < n && /^\s*$/.test(zeilen[j])) j++;
+          var nx = j < n ? MD_LI.exec(zeilen[j]) : null;
+          if (nx && nx[1].length >= basis) { i = j; continue; }
+          break;
+        }
+        if (/^\s+\S/.test(l) && cur) { cur.text += " " + l.trim(); i++; continue; }
+        break;
+      }
+      var ein = mm[1].length;
+      if (ein < basis) break;
+      if (ein > basis) { var r = mdListe(zeilen, i); cur.sub += r[0]; i = r[1]; continue; }
+      if (/\d/.test(mm[2]) !== geordnet) break;
+      cur = { text: mm[3], sub: "" };
+      punkte.push(cur);
+      i++;
+    }
+    var tag = geordnet ? "ol" : "ul";
+    return ["<" + tag + ">" + punkte.map(function (p) { return "<li>" + mdInline(p.text) + p.sub + "</li>"; }).join("") + "</" + tag + ">", i];
+  }
+  function mdHtml(text) {
+    if (text === null || text === undefined) return "";
+    var zeilen = String(text).replace(/\r\n?/g, "\n").split("\n"), n = zeilen.length, i = 0, out = [];
+    var blockStart = function (k) {
+      var l = zeilen[k];
+      return /^\s*(```|~~~)/.test(l) || /^#{1,6}\s/.test(l) || MD_LI.test(l) || /^\s*>/.test(l) || (l.indexOf("|") >= 0 && k + 1 < n && MD_TRENNER.test(zeilen[k + 1]) && zeilen[k + 1].indexOf("-") >= 0);
+    };
+    while (i < n) {
+      var l = zeilen[i], m;
+      if (/^\s*$/.test(l)) { i++; continue; }
+      if ((m = /^\s*(```|~~~)/.exec(l))) {
+        var code = [];
+        i++;
+        while (i < n && zeilen[i].replace(/^\s+/, "").indexOf(m[1]) !== 0) code.push(zeilen[i++]);
+        i++;
+        out.push("<pre><code>" + esc(code.join("\n") + "\n") + "</code></pre>");
+        continue;
+      }
+      if ((m = /^(#{1,6})\s+(.*?)\s*#*\s*$/.exec(l))) { out.push("<h" + m[1].length + ">" + mdInline(m[2]) + "</h" + m[1].length + ">"); i++; continue; }
+      if (l.indexOf("|") >= 0 && i + 1 < n && MD_TRENNER.test(zeilen[i + 1]) && zeilen[i + 1].indexOf("-") >= 0) {
+        var kopf = mdZellen(l), koerper = [];
+        i += 2;
+        while (i < n && zeilen[i].indexOf("|") >= 0 && !/^\s*$/.test(zeilen[i])) koerper.push(mdZellen(zeilen[i++]));
+        out.push("<table><thead><tr>" + kopf.map(function (c) { return "<th>" + mdInline(c) + "</th>"; }).join("") + "</tr></thead><tbody>" +
+          koerper.map(function (z) { return "<tr>" + z.map(function (c) { return "<td>" + mdInline(c) + "</td>"; }).join("") + "</tr>"; }).join("") + "</tbody></table>");
+        continue;
+      }
+      if (/^\s*([-*_])(\s*\1){2,}\s*$/.test(l)) { out.push("<hr>"); i++; continue; }
+      if (/^\s*>/.test(l)) {
+        var zitat = [];
+        while (i < n && /^\s*>/.test(zeilen[i])) zitat.push(zeilen[i++].replace(/^\s*> ?/, ""));
+        out.push("<blockquote>" + mdHtml(zitat.join("\n")) + "</blockquote>");
+        continue;
+      }
+      if (MD_LI.test(l)) { var r = mdListe(zeilen, i); out.push(r[0]); i = r[1]; continue; }
+      var absatz = [];
+      while (i < n && !/^\s*$/.test(zeilen[i]) && (absatz.length === 0 || !blockStart(i))) absatz.push(zeilen[i++].trim());
+      out.push("<p>" + mdInline(absatz.join(" ")) + "</p>");
+    }
+    return out.join("");
+  }
+
+  // --- Flotte: eine Linie je Repo, aufklappbar zu einer Zeile je Aufgabe, Klick fuer alle Details ----
+  // Die Daten stammen aus FM.flotte (firstmate.ts): Lage und Breite aller Balken in Prozent des
+  // gemeinsamen Zeitfensters, dazu die Marke fuer jetzt. Der Hover zeigt jede Aufgabe unter dem Zeiger,
+  // ein Klick auf den Kopf klappt das Repo auf, ein Klick auf eine Aufgabe oeffnet das Modal; dessen
+  // Anweisungen, Bericht, Zeitleiste und Dateien holt GET .../firstmate/aufgabe/ID erst dann.
+  var flOffen = {};
+  var flDetail = {};
+  var flDetailOffen = {};
+  var FL_ZUSTAND_KLASSE = { lauf: "working", stopp: "paused", fertig: "done" };
+  function flZeit(sek) {
+    var d = new Date(zahl(sek) * 1000);
+    return zwei(d.getHours()) + ":" + zwei(d.getMinutes());
+  }
+  function flDauer(min) {
+    var m = Math.max(0, Math.round(zahl(min)));
+    return m >= 60 ? Math.floor(m / 60) + " h " + (m % 60 ? zwei(m % 60) + " min" : "").trim() : m + " min";
+  }
+  function flKosten(a) {
+    return a.kosten === null || a.kosten === undefined ? "—" : zahl(a.kosten).toFixed(2) + " $";
+  }
+  function flBis(a) {
+    return a.ende ? flZeit(a.ende) : a.zustandText;
+  }
+  function flTip(a) {
+    return a.id + (a.titel ? " · " + a.titel : "") + " · " + flZeit(a.start) + "–" + flBis(a) + " (" + flDauer(a.minuten) + ")";
+  }
+  function flAufgabe(id) {
+    var repos = FM && FM.flotte && Array.isArray(FM.flotte.repos) ? FM.flotte.repos : [];
+    for (var i = 0; i < repos.length; i++) {
+      var a = (repos[i].aufgaben || []).find(function (x) { return x && x.id === id; });
+      if (a) return a;
+    }
+    return null;
+  }
+  function flBalken(a) {
+    var art = a.kind === "scout" ? "scout" : "ship";
+    var h = '<i class="fl-seg fl-' + art + " fl-" + esc(a.zustand) + '" style="left:' + zahl(a.von) + "%;width:" + zahl(a.breit) + '%" data-fl-id="' + esc(a.id) + '" data-fl-von="' + zahl(a.von) + '" data-fl-breit="' + zahl(a.breit) + '" data-fl-tip="' + esc(flTip(a)) + '"></i>';
+    var s = a.schaetzung;
+    if (s) h += '<i class="fl-seg fl-plan" style="left:' + zahl(s.von) + "%;width:" + zahl(s.breit) + '%" data-fl-von="' + zahl(s.von) + '" data-fl-breit="' + zahl(s.breit) + '" data-fl-tip="' + esc("Schätzung " + a.id + ": noch ~" + s.minuten + " min (Median " + s.median + " min)") + '"></i>';
+    return h;
+  }
+  function flZeile(a) {
+    var pr = a.pr ? fmLink(a.pr, "#" + String(a.pr).split("/").pop()) : a.ausgang === "reported" ? "Bericht" : "—";
+    var rest = a.schaetzung ? " · noch ~" + a.schaetzung.minuten + " min" : "";
+    return '<div class="fl-zeile fm-z-' + FL_ZUSTAND_KLASSE[a.zustand] + '" role="button" tabindex="0" data-fl-task="' + esc(a.id) + '" title="Details zu ' + esc(a.id) + '">' +
+      '<div class="fl-lbl"><b>' + esc(a.id) + "</b><span>" + esc(a.titel || "") + "</span></div>" +
+      '<div class="fl-bahn">' + flBalken(a) + "</div>" +
+      '<div class="fl-meta">' + esc(flZeit(a.start) + "–" + flBis(a) + " · " + flDauer(a.minuten)) + " · " + pr + esc(" · " + flKosten(a) + rest) + "</div></div>";
+  }
+  function flAchse(f) {
+    var marken = (f.achse || []).map(function (m) { return '<span style="left:' + zahl(m.prozent) + '%">' + esc(flZeit(m.t)) + "</span>"; }).join("");
+    return '<div class="fl-achse">' + marken + '<em class="fl-jetzt" style="left:' + zahl(f.jetztProzent) + '%"></em></div>';
+  }
+  function flRepo(r, f) {
+    var offen = !!flOffen[r.repo], laeuft = (r.laeuft || []).join(", ");
+    var kpi = r.aufgaben.length + (r.aufgaben.length === 1 ? " Aufgabe" : " Aufgaben") + " · " + zahl(r.gemergt) + " gemergt · läuft: " + (laeuft || "nichts") + (r.median !== null && r.median !== undefined ? " · Median " + r.median + " min" : "");
+    return '<section class="fl-repo' + (offen ? " offen" : "") + '" data-testid="flotte-repo">' +
+      '<div class="fl-kopf" role="button" tabindex="0" aria-expanded="' + offen + '" data-fl-repo="' + esc(r.repo) + '"><span class="fl-pfeil">▸</span><b>' + esc(r.repo) + '</b><span class="fl-kpi">' + esc(kpi) + "</span></div>" +
+      '<div class="fl-strahl"><div class="fl-linie" data-fl-linie>' + r.aufgaben.map(flBalken).join("") + '<em class="fl-jetzt" style="left:' + zahl(f.jetztProzent) + '%"></em></div></div>' +
+      '<div class="fl-auf">' + flAchse(f) + r.aufgaben.map(flZeile).join("") + "</div></section>";
+  }
+  /** Der Block Flotte heute: Legende, Achse und ein Repo je Linie. */
+  function flotteTeil() {
+    var f = FM && FM.flotte;
+    if (!f || !Array.isArray(f.repos)) return '<p class="unbekannt">keine Flottendaten</p>';
+    if (!f.repos.length) return '<p class="unbekannt">keine Aufgaben heute</p>';
+    return '<div class="fl-leg"><i class="fl-seg fl-ship"></i>Umsetzung<i class="fl-seg fl-scout"></i>Scout/Review<i class="fl-seg fl-lauf"></i>läuft<i class="fl-seg fl-plan"></i>Schätzung<i class="fl-seg fl-stopp"></i>angehalten<i class="fl-jetzt-leg"></i>jetzt</div>' +
+      '<div class="fl-gachse">' + flAchse(f) + '</div><div class="fl-repos" data-testid="firstmate-flotte">' + f.repos.map(function (r) { return flRepo(r, f); }).join("") + "</div>";
+  }
+  /** Die Aufgaben unter dem Zeiger einer Linie: alle Balken, die x (Prozent der Linienbreite) tragen. */
+  function flTreffer(linie, clientX) {
+    var r = linie.getBoundingClientRect();
+    if (!(r.width > 0)) return [];
+    var x = (clientX - r.left) / r.width * 100;
+    return Array.prototype.filter.call(linie.querySelectorAll("[data-fl-tip]"), function (el) {
+      var l = parseFloat(el.getAttribute("data-fl-von")), w = parseFloat(el.getAttribute("data-fl-breit"));
+      return x >= l - 0.4 && x <= l + w + 0.4;
+    });
+  }
+  var flTipEl = null;
+  function flTipAus() {
+    if (flTipEl) flTipEl.style.display = "none";
+  }
+  function flTipZeige(treffer, e) {
+    if (!flTipEl) {
+      flTipEl = doc.createElement("div");
+      flTipEl.className = "fl-tip";
+      flTipEl.setAttribute("role", "tooltip");
+      doc.body.appendChild(flTipEl);
+    }
+    var mitId = treffer.filter(function (el) { return el.hasAttribute("data-fl-id"); }).length;
+    flTipEl.innerHTML = treffer.map(function (el) { return "<div>" + esc(el.getAttribute("data-fl-tip")) + "</div>"; }).join("") +
+      (mitId ? '<div class="h">' + (mitId > 1 ? "Klick: aufklappen und markieren" : "Klick: Details") + "</div>" : "");
+    flTipEl.style.display = "block";
+    flTipEl.style.left = Math.max(4, Math.min(e.clientX + 12, G.innerWidth - flTipEl.offsetWidth - 8)) + "px";
+    flTipEl.style.top = e.clientY + 14 + "px";
+  }
+  function flHover(e) {
+    var li = e.target && e.target.closest ? e.target.closest("[data-fl-linie]") : null;
+    if (!li || fmAuf) { flTipAus(); return; }
+    var t = flTreffer(li, e.clientX);
+    Array.prototype.forEach.call(li.querySelectorAll("[data-fl-id]"), function (el) { el.classList.toggle("hl", t.indexOf(el) >= 0); });
+    if (!t.length) { flTipAus(); return; }
+    flTipZeige(t, e);
+  }
+  function flHoverEnde(e) {
+    if (e.target && e.target.closest && e.target.closest("[data-fl-linie]") && !(e.relatedTarget && e.relatedTarget.closest && e.relatedTarget.closest("[data-fl-linie]") === e.target.closest("[data-fl-linie]"))) {
+      flTipAus();
+      Array.prototype.forEach.call(e.target.closest("[data-fl-linie]").querySelectorAll(".hl"), function (el) { el.classList.remove("hl"); });
+    }
+  }
+  /** Repo auf- oder zuklappen, ohne die Seite neu zu zeichnen; der Zustand bleibt in flOffen. */
+  function flUmschalten(kopf, offen) {
+    var s = kopf.closest(".fl-repo");
+    if (!s) return;
+    var neu = offen === undefined ? !s.classList.contains("offen") : offen;
+    s.classList.toggle("offen", neu);
+    kopf.setAttribute("aria-expanded", String(neu));
+    flOffen[kopf.dataset.flRepo] = neu;
+    if (!neu) Array.prototype.forEach.call(s.querySelectorAll(".fl-zeile.hl"), function (el) { el.classList.remove("hl"); });
+  }
+  function flKlickLinie(li, e) {
+    var ids = flTreffer(li, e.clientX).map(function (el) { return el.getAttribute("data-fl-id"); }).filter(Boolean);
+    flTipAus();
+    if (ids.length === 1) { oeffneAufgabe(ids[0]); return; }
+    if (!ids.length) return;
+    var s = li.closest(".fl-repo");
+    flUmschalten(s.querySelector("[data-fl-repo]"), true);
+    Array.prototype.forEach.call(s.querySelectorAll(".fl-zeile"), function (el) { el.classList.toggle("hl", ids.indexOf(el.dataset.flTask) >= 0); });
+  }
+
+  /** Die Details einer Aufgabe oeffnen und, falls noetig, Brief, Bericht, Zeitleiste und Dateien nachladen. */
+  function oeffneAufgabe(id) {
+    if (!flAufgabe(id)) return;
+    fmAuf = "t:" + id;
+    flTipAus();
+    var d = flDetail[id];
+    if (!d || d.art === "fehler") {
+      flDetail[id] = { art: "laedt" };
+      fetch(API + "/firstmate/aufgabe/" + encodeURIComponent(id), { cache: "no-store" })
+        .then(function (r) {
+          return r.json().catch(function () { return {}; }).then(function (b) {
+            if (!r.ok) throw new Error((b && b.fehler) || "HTTP " + r.status);
+            return b;
+          });
+        })
+        .then(function (b) { flDetail[id] = { art: "ok", daten: b }; }, function (err) { flDetail[id] = { art: "fehler", fehler: err.message }; })
+        .then(function () { if (fmAuf === "t:" + id) zeichne(); });
+    }
+    zeichne();
+  }
+  function flTeil(id, schluessel, titel, inhalt, standardOffen) {
+    var k = id + "/" + schluessel, auf = flDetailOffen[k] === undefined ? !!standardOffen : flDetailOffen[k];
+    return '<div class="fl-teil"><details data-fl-det="' + esc(k) + '"' + (auf ? " open" : "") + "><summary>" + titel + '</summary><div class="md">' + inhalt + "</div></details></div>";
+  }
+  function flAufgabeModal(id) {
+    var a = flAufgabe(id);
+    if (!a) return "";
+    var det = flDetail[id] || { art: "laedt" }, d = det.art === "ok" ? det.daten : null;
+    var w = fmWorker(id), z = FL_ZUSTAND_KLASSE[a.zustand];
+    var laedt = '<p class="unbekannt">lädt …</p>', fehler = '<p class="unbekannt">' + esc(det.fehler || "") + "</p>";
+    var stand = function (inhalt) { return det.art === "ok" ? inhalt : det.art === "fehler" ? fehler : laedt; };
+    var feld = function (name, wert, breit) { return '<div' + (breit ? ' class="breit"' : "") + '><span class="lab">' + esc(name) + "</span><b>" + wert + "</b></div>"; };
+    var fakten = '<div class="fl-fakten">' +
+      feld("Zeit", esc(flZeit(a.start) + "–" + flBis(a))) + feld("Dauer", esc(flDauer(a.minuten))) +
+      feld("Kosten · Züge", esc(flKosten(a) + " · " + (a.zuege === null || a.zuege === undefined ? "—" : a.zuege))) + feld("Ergebnis", a.pr ? fmLink(a.pr, "#" + String(a.pr).split("/").pop()) : "—") +
+      feld("Modell", esc(a.modell || "—")) + feld("Effort", esc(a.effort || "—")) + feld("Quelle", '<span class="mono">' + esc("data/" + id + "/brief.md") + "</span>", true) + "</div>";
+    var intent = stand(d && d.intent ? mdHtml(d.intent) : '<p class="unbekannt">Kein Abschnitt „Captain\'s intent“ (ältere Anweisung).</p>');
+    var spec = d && d.spec ? flTeil(id, "spec", "Bauvorgaben von Firstmate (Firstmate spec)", mdHtml(d.spec), false) : "";
+    var voll = d && d.brief ? flTeil(id, "voll", "Volle Anweisungen · " + esc("data/" + id + "/brief.md"), mdHtml(d.brief) + (d.briefGekuerzt ? '<p class="unbekannt">… gekürzt, die volle Datei liegt in ' + esc("data/" + id + "/brief.md") + "</p>" : ""), false) : "";
+    var bericht = d && d.bericht ? flTeil(id, "bericht", "Bericht · " + esc("data/" + id + "/report.md"), mdHtml(d.bericht) + (d.berichtGekuerzt ? '<p class="unbekannt">… gekürzt, der volle Bericht liegt in ' + esc("data/" + id + "/report.md") + "</p>" : ""), true) : "";
+    var zeitleiste = !d ? stand("") : Array.isArray(d.zeitleiste) && d.zeitleiste.length
+      ? '<table class="fl-zl">' + d.zeitleiste.slice().reverse().map(function (s) {
+        return '<tr class="fm-v-' + esc(s.verb) + '"><td>' + (s.at ? esc(flZeit(s.at)) : "?") + '</td><td><span class="fl-marke">' + esc(s.verb + (s.key ? " [" + s.key + "]" : "")) + "</span></td><td>" + esc(s.text) + "</td></tr>";
+      }).join("") + "</table>"
+      : Array.isArray(d.zeitleiste) ? '<p class="unbekannt">noch keine Statuszeile</p>' : '<p class="unbekannt">Zeitleiste beim Abräumen gelöscht</p>';
+    var dateien = d ? (d.dateien && d.dateien.length ? '<div class="mono fl-dateien">' + d.dateien.map(esc).join(" · ") + "</div>" : "—") : stand("");
+    var offen = w && w.status && Array.isArray(w.status.offen) ? w.status.offen : [];
+    return '<div class="lp-modal" data-modal-zu><div class="lp-modal-box lp-fm lp-fl fm-z-' + z + '" role="dialog" aria-modal="true" aria-labelledby="lp-modal-titel" data-testid="flotte-details">' +
+      '<div class="lp-modal-kopf"><h2 id="lp-modal-titel"><span class="mono">' + esc(a.id) + "</span></h2>" +
+      '<span class="fl-marke fl-m-' + esc(a.zustand) + '">' + esc(a.zustandText) + '</span><span class="fl-marke">' + esc(a.repo + " · " + (a.kind === "scout" ? "Scout" : a.kind === "ship" ? "Umsetzung" : a.kind)) + "</span>" +
+      '<button type="button" class="zu" data-modal-zu aria-label="Schliessen (Esc)" title="Schliessen (Esc)">×</button></div>' +
+      '<div class="fm-details" tabindex="0">' + (a.titel ? '<p class="fl-titel">' + esc(a.titel) + "</p>" : "") + fakten +
+      '<h3 class="fm-h">Anforderung (Captain\'s intent)</h3><div class="md">' + intent + "</div>" + spec + voll + bericht +
+      (offen.length ? '<h3 class="fm-h">Offene Entscheidungen und Blocker</h3><ul class="fm-verlauf">' + offen.map(function (s) {
+        return '<li class="fm-v-' + esc(s.verb) + '"><span class="fm-verb">' + esc(s.verb + (s.key ? " [" + s.key + "]" : "")) + "</span>" + esc(s.text) + "</li>";
+      }).join("") + "</ul>" : "") +
+      '<h3 class="fm-h">Zeitleiste</h3>' + zeitleiste + '<h3 class="fm-h">' + esc("Dateien in data/" + id + "/") + "</h3>" + dateien +
+      (w && Array.isArray(w.befehle) && w.befehle.length ? '<h3 class="fm-h">Befehle</h3>' + fmBefehle(w.befehle) : "") + "</div></div></div>";
+  }
+
   /** Der Abschnitt Firstmate; leer, solange kein Home da ist. */
   function firstmateTeil() {
     if (!FM || !FM.home) return "";
@@ -1526,13 +1803,19 @@
     return '<section class="lp-firstmate" data-testid="sitzung-firstmate">' + kopf + worker.length + " Worker · " + esc(zahlen) + "</span></h2>" +
       '<div class="fm-meta"><span class="mono">' + esc(FM.home) + "</span>" + (FM.tmux === false ? '<span class="unbekannt">tmux nicht erreichbar</span>' : "") +
       (FM.zeit ? "<span>Stand " + zeitAngabe(isoAus(FM.zeit)) + "</span>" : "") + "</div>" + fmLage() +
-      '<h3 class="fm-h">Aktive Worker</h3>' + (worker.length ? '<div class="fm-karten" data-testid="firstmate-worker">' + worker.map(fmKarte).join("") + "</div>" : '<p class="unbekannt">keine Worker (kein state/*.meta)</p>') +
+      '<h3 class="fm-h">Flotte heute <span class="zaehler">' + (FM.flotte && Array.isArray(FM.flotte.repos) ? FM.flotte.repos.reduce(function (n, r) { return n + r.aufgaben.length; }, 0) : 0) + " Aufgaben</span></h3>" + flotteTeil() +
       '<h3 class="fm-h">Projekte <span class="zaehler">' + projekte.length + "</span></h3>" +
       (projekte.length ? '<div class="fm-tabelle"><table class="fm-projekte" data-testid="firstmate-projekte"><thead><tr><th>Projekt</th><th>Zweig</th><th>Stand</th><th>Letzter Commit</th><th>zuletzt aktualisiert</th><th>PRs</th><th>Worker</th></tr></thead><tbody>' +
         projekte.map(fmProjektZeile).join("") + "</tbody></table></div>" : '<p class="unbekannt">keine Klone unter projects/</p>') + "</section>";
   }
-  /** Die Details eines Workers im Modal: wie `cockpit --once`, ohne Pane-Zeilen. */
+  function fmBefehle(befehle) {
+    return '<ul class="fm-befehle">' + befehle.map(function (b) {
+      return '<li><span class="fm-zweck">' + esc(b.zweck) + '</span><code>' + esc(b.befehl) + '</code><button type="button" class="kopieren" data-kopiere="' + esc(b.befehl) + '">kopieren</button></li>';
+    }).join("") + "</ul>";
+  }
+  /** Die Details eines Workers im Modal: wie `cockpit --once`, ohne Pane-Zeilen; "t:ID" ist eine Aufgabe der Flotte. */
   function fmModal(id) {
+    if (typeof id === "string" && id.indexOf("t:") === 0) return flAufgabeModal(id.slice(2));
     var w = id && fmWorker(id);
     if (!w) return "";
     var m = w.meta || {}, z = fmZustand(w), fe = w.fenster || {}, wt = w.worktree;
@@ -1565,9 +1848,7 @@
       (offen.length ? '<h3 class="fm-h">Offene Entscheidungen und Blocker</h3><ul class="fm-verlauf">' + offen.map(zeile).join("") + "</ul>" : "") +
       '<h3 class="fm-h">Statusverlauf <span class="zaehler">' + (w.status ? zahl(w.status.zeilen) : 0) + " Zeilen</span></h3>" +
       (verlauf.length ? '<ul class="fm-verlauf">' + verlauf.map(zeile).join("") + "</ul>" : '<p class="unbekannt">noch keine Statuszeile</p>') +
-      (befehle.length ? '<h3 class="fm-h">Befehle</h3><ul class="fm-befehle">' + befehle.map(function (b) {
-        return '<li><span class="fm-zweck">' + esc(b.zweck) + '</span><code>' + esc(b.befehl) + '</code><button type="button" class="kopieren" data-kopiere="' + esc(b.befehl) + '">kopieren</button></li>';
-      }).join("") + "</ul>" : "") +
+      (befehle.length ? '<h3 class="fm-h">Befehle</h3>' + fmBefehle(befehle) : "") +
       '<p class="klein unbekannt">Pane-Inhalte zeigt nur das Cockpit im Terminal.</p></div></div></div>';
   }
 
@@ -1912,6 +2193,10 @@
     diffModal: diffModal,
     firstmateTeil: firstmateTeil,
     fmModal: fmModal,
+    flotteTeil: flotteTeil,
+    flAufgabeModal: flAufgabeModal,
+    mdHtml: mdHtml,
+    setzeAufgabeDetail: function (id, d) { flDetail[id] = { art: "ok", daten: d }; },
     setzeFirstmate: function (f) { FM = f && typeof f === "object" ? f : null; },
     setzeBaum: function (b) { BAUM = b && typeof b === "object" && Array.isArray(b.dateien) ? b : null; },
     setzeBaumModus: setzeBaumModus,
@@ -2091,7 +2376,9 @@
     var id = fmAuf;
     fmAuf = null;
     zeichne();
-    var karte = id && wurzel.querySelector('.fm-karte[data-fm-worker="' + (G.CSS && G.CSS.escape ? G.CSS.escape(id) : id) + '"]');
+    var task = id && id.indexOf("t:") === 0;
+    var wert = task ? id.slice(2) : id;
+    var karte = id && wurzel.querySelector((task ? "[data-fl-task" : ".fm-wid[data-fm-worker") + '="' + (G.CSS && G.CSS.escape ? G.CSS.escape(wert) : wert) + '"]');
     if (karte) karte.focus();
   }
 
@@ -2171,6 +2458,12 @@
     var bw = e.target.closest("[data-beweis]");
     if (bw) { oeffneModal(bw.dataset.beweis); return; }
     if (e.target.closest(".lp-firstmate a[href]")) return;
+    var fli = e.target.closest("[data-fl-linie]");
+    if (fli) { flKlickLinie(fli, e); return; }
+    var flk = e.target.closest("[data-fl-repo]");
+    if (flk) { flUmschalten(flk); return; }
+    var flt = e.target.closest("[data-fl-task]");
+    if (flt) { oeffneAufgabe(flt.dataset.flTask); return; }
     var fw = e.target.closest("[data-fm-worker]");
     if (fw) { oeffneFm(fw.dataset.fmWorker); return; }
     var mehr = e.target.closest("[data-mehr]");
@@ -2236,6 +2529,15 @@
     return Array.prototype.slice.call(wurzel.querySelectorAll(".lp-modal button, .lp-modal [href], .lp-modal [tabindex]:not([tabindex=\"-1\"])"));
   }
 
+  // Hover ueber einer Linie der Flotte: Tooltip mit jeder Aufgabe unter dem Zeiger.
+  wurzel.addEventListener("mousemove", flHover);
+  wurzel.addEventListener("mouseout", flHoverEnde);
+  // Der Zustand der <details> im Aufgaben-Modal ueberlebt das Neuzeichnen (toggle blubbert nicht auf).
+  wurzel.addEventListener("toggle", function (e) {
+    var k = e.target && e.target.getAttribute && e.target.getAttribute("data-fl-det");
+    if (k) flDetailOffen[k] = e.target.open;
+  }, true);
+
   doc.addEventListener("keydown", function (e) {
     if (e.key === "Escape") {
       if (modal) { schliesseModal(); return; }
@@ -2245,8 +2547,14 @@
       return;
     }
     // Eine Worker-Karte oeffnet ihre Details auch mit Enter und Leertaste.
-    var karte = (e.key === "Enter" || e.key === " ") && !modal && !diffAuf && !fmAuf && e.target.closest && !e.target.closest("a[href]") && e.target.closest("[data-fm-worker]");
-    if (karte) { e.preventDefault(); oeffneFm(karte.dataset.fmWorker); return; }
+    var karte = (e.key === "Enter" || e.key === " ") && !modal && !diffAuf && !fmAuf && e.target.closest && !e.target.closest("a[href]") && e.target.closest("[data-fm-worker], [data-fl-task], [data-fl-repo]");
+    if (karte) {
+      e.preventDefault();
+      if (karte.dataset.flRepo !== undefined) flUmschalten(karte);
+      else if (karte.dataset.flTask !== undefined) oeffneAufgabe(karte.dataset.flTask);
+      else oeffneFm(karte.dataset.fmWorker);
+      return;
+    }
     // Fokusfalle (S29, S3): Tab und Shift-Tab bleiben im Modal.
     if ((modal || diffAuf || fmAuf) && e.key === "Tab") {
       var ziele = modalZiele();
@@ -2341,8 +2649,9 @@
   function zeichneFirstmate() {
     var el = wurzel.querySelector('[data-testid="sitzung-firstmate"]');
     var html = firstmateTeil();
-    var fokus = doc.activeElement && doc.activeElement.closest && el && el.contains(doc.activeElement) ? doc.activeElement.closest("[data-fm-worker]") : null;
-    var sel = fokus && (fokus.classList.contains("fm-karte") ? ".fm-karte" : ".fm-wid") + '[data-fm-worker="' + (G.CSS && G.CSS.escape ? G.CSS.escape(fokus.dataset.fmWorker) : fokus.dataset.fmWorker) + '"]';
+    var fokus = doc.activeElement && doc.activeElement.closest && el && el.contains(doc.activeElement) ? doc.activeElement.closest("[data-fm-worker], [data-fl-task], [data-fl-repo]") : null;
+    var attr = fokus && ["data-fm-worker", "data-fl-task", "data-fl-repo"].find(function (x) { return fokus.hasAttribute(x); });
+    var sel = fokus && "[" + attr + '="' + (G.CSS && G.CSS.escape ? G.CSS.escape(fokus.getAttribute(attr)) : fokus.getAttribute(attr)) + '"]';
     var nr = fokus ? Array.prototype.indexOf.call(el.querySelectorAll(sel), fokus) : -1;
     if (el && html && !modal && !diffAuf && !fmAuf) el.outerHTML = html;
     else if (el || html) zeichne();

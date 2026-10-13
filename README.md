@@ -135,7 +135,7 @@ Skript liest nur; es braucht node >= 22.18 (eingebautes Type-Stripping) oder bun
 ./cockpit.ts --json
 ```
 
-Tests: `node --test cockpit.test.ts firstmate.test.ts`.
+Tests: `node --test cockpit.test.ts firstmate.test.ts flotte.test.ts`.
 
 ### Firstmate in der Ansicht
 
@@ -149,16 +149,39 @@ im Cockpit.
 
 - **Kopf:** Home, Zahl der Worker, Abschnitte des Backlogs, Captain-Inbox und die Warteschlange mit
   dem, worauf jeder Auftrag wartet.
-- **Aktive Worker:** eine Karte je Worker wie ein Kasten des Cockpits (id, Zustand mit Farbe, Projekt,
-  Art/Modus, Harness/Modell, letzte Statuszeile mit Alter, PR, Zweig mit ahead/behind und geänderten
-  Dateien, `✉ N` für ungelesene Nachrichten). Ein Klick (oder Enter) öffnet die Details wie
-  `cockpit --once`: Statusverlauf, offene Entscheidungen und Blocker, Worktree, letzter Commit,
-  Inbox und die Befehle zum Kopieren.
+- **Flotte heute:** die Aufgaben des Tages (laufende aus `state/<id>.meta` und `.status`, abgeschlossene
+  aus den Done-Einträgen von `data/backlog.md` und `data/done-archive.md` samt `data/<id>/`) in drei Stufen:
+  1. *Eingeklappt:* eine Linie je Repo (Tag `(repo: X)` im Backlog, sonst `project=` der Meta) auf einer
+     gemeinsamen Zeitachse mit Marke für „jetzt“. Der Hover nennt jede Aufgabe unter dem Zeiger mit
+     Zeit von–bis; ein Klick auf einen einzelnen Balken öffnet die Details, bei mehreren klappt er das
+     Repo auf und markiert sie.
+  2. *Aufgeklappt* (Klick auf den Kopf): eine Zeile je Aufgabe mit Balken, Zeit, Dauer, PR, Kosten.
+     Für laufende Aufgaben zeigt ein gestrichelter Abschnitt die Schätzung: Start plus Median der
+     abgeschlossenen Umsetzungen des Repos, mindestens 5 Minuten ab jetzt; ohne abgeschlossene
+     Umsetzung gibt es keine Schätzung.
+  3. *Details* (Klick auf eine Aufgabe): Zeit, Dauer, Kosten und Züge, Modell, PR, die sauber
+     gerenderten Anweisungen (`## Captain's intent`, einklappbar `## Firstmate spec` und die volle
+     `data/<id>/brief.md`), der Bericht (ab 9000 Zeichen gekürzt, mit Hinweis), die Zeitleiste aus
+     `state/<id>.status` („Zeitleiste beim Abräumen gelöscht“, wenn der Auftrag abgeräumt ist) und die
+     Dateiliste von `data/<id>/`; bei laufenden Workern dazu offene Blocker und die Befehle zum Kopieren.
+
+  ![Flotte: ein Repo aufgeklappt](docs/firstmate.png)
+
+  ![Details einer Aufgabe](docs/flotte-details.png)
+
+  Kosten, Züge und Modell stammen aus dem Sitzungsregister (`LIVE_PLAN_CACHE/sitzungen/*.json`, nur
+  Einträge in einem Treehouse-Worktree, zugeordnet über den Start innerhalb von 240 s nach dem
+  Auftrag); ohne passende Sitzung steht `—`. Das Ende einer abgeschlossenen Aufgabe ist das Ende der
+  Sitzung, sonst die letzte Änderung in `data/<id>/`. Das Markdown wird im Browser ohne rohes HTML
+  gerendert (alles maskiert, Links nur auf `https://`).
 - **Projekte:** je Klon unter `projects/` Beschreibung und Haltung aus `data/projects.md`, Zweig,
   sauber oder geändert, ahead/behind, letzter Commit, „zuletzt aktualisiert“ (letzter `git fetch`,
   mtime von `FETCH_HEAD`), die Worker auf dem Projekt und die offenen PRs.
 
-Die Daten kommen aus `GET /api/REPO/SLUG/firstmate`; die Seite fragt alle 15 Sekunden. Der Server
+Die Daten kommen aus `GET /api/REPO/SLUG/firstmate`; die Seite fragt alle 15 Sekunden. Die Details
+einer Aufgabe holt die Seite erst beim Klick aus `GET /api/REPO/SLUG/firstmate/aufgabe/ID` (Id nur
+`[A-Za-z0-9._-]+`, gelesen wird nur in `data/ID/` ohne Symlinks, außerdem `state/ID.status`; nur für
+Aufrufe vom eigenen Rechner, sonst 403, weil Anweisungen und Berichte mehr preisgeben als der Status). Der Server
 liest das Home mit `firstmate.ts` in einem eigenen Prozess (10 s vorgehalten) und fragt `gh pr list`
 je Projekt im Hintergrund (10 s Abbruch, 60 s vorgehalten); was fehlschlägt, steht als
 „PRs unbekannt“ da, ohne die übrige Seite aufzuhalten. Gehört das Repo einem Konto, für das `gh`

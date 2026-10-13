@@ -3,7 +3,8 @@
 // (cockpit.ts) und vom Abschnitt Firstmate der Ansicht (server.ts). Laeuft mit node >= 22.18
 // (eingebautes Type-Stripping) und bun.
 //
-//   firstmate.ts --json HOME   einmal Worker, Captain-Inbox, Warteschlange und Projekte als JSON
+//   firstmate.ts --json HOME [REGISTER]   einmal Worker, Captain-Inbox, Warteschlange, Projekte und
+//                                         Flotte als JSON; REGISTER ist der Ordner der Sitzungsregister
 //
 // Den Aufruf mit --json nutzt der Server in einem eigenen Prozess, damit git und tmux seine
 // Anfragen nicht aufhalten. Die Ausgabe enthaelt keine Zeilen aus tmux-Panes.
@@ -12,7 +13,7 @@
 // git laeuft ohne optionale Index-Sperren, bin/fm-crew-state.sh wird nicht aufgerufen.
 
 import { spawnSync } from "node:child_process";
-import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -424,9 +425,9 @@ export type Zustand = "working" | "paused" | "blocked" | "needs-decision" | "don
 
 // Ein Zustand je Worker: offene Frage vor offenem Blocker vor letzter Statuszeile; ein fehlendes
 // tmux-Fenster heisst "dead", solange der Worker nicht fertig oder gescheitert ist.
-export function zustand(w: Worker): Zustand {
-  const offen = w.status.offen.map((o) => o.verb);
-  const verb = w.status.letzte?.verb;
+export function zustandAus(status: Worker["status"], lebt: boolean | null): Zustand {
+  const offen = status.offen.map((o) => o.verb);
+  const verb = status.letzte?.verb;
   let z: Zustand = offen.includes("needs-decision")
     ? "needs-decision"
     : offen.includes("blocked")
@@ -438,8 +439,12 @@ export function zustand(w: Worker): Zustand {
           : verb === "resolved"
             ? "working"
             : "unknown";
-  if (w.fenster.lebt === false && z !== "done" && z !== "failed") z = "dead";
+  if (lebt === false && z !== "done" && z !== "failed") z = "dead";
   return z;
+}
+
+export function zustand(w: Worker): Zustand {
+  return zustandAus(w.status, w.fenster.lebt);
 }
 
 // https://github.com/o/r/pull/7 -> o/r#7, sonst die Adresse wie sie ist.
@@ -580,11 +585,12 @@ export interface WorkerSicht extends Omit<Worker, "fenster"> {
 export interface FirstmateSicht extends Omit<Lagebild, "worker"> {
   worker: WorkerSicht[];
   projekte: Projekt[];
+  flotte: Flotte;
 }
 
 // Worker samt Zustand und den letzten VERLAUF_N Statuszeilen, ohne Pane-Zeilen und ohne Meta
-// ausserhalb von META_SICHTBAR, dazu die Projekte. Fragt tmux nie nach dem Inhalt eines Panes.
-export function firstmateSicht(home: string): FirstmateSicht {
+// ausserhalb von META_SICHTBAR, dazu die Projekte und die Flotte (Aufgaben des Tages je Repo). Fragt tmux nie nach dem Inhalt eines Panes.
+export function firstmateSicht(home: string, o: { register?: string } = {}): FirstmateSicht {
   const l = lagebild({ home, pane: false });
   const worker = l.worker.map((w): WorkerSicht => {
     const { pane: _, ...fenster } = w.fenster;
@@ -593,7 +599,350 @@ export function firstmateSicht(home: string): FirstmateSicht {
     const verlauf = parseStatus(lies(path.join(home, "state", `${w.id}.status`)) ?? "").slice(-VERLAUF_N);
     return { ...w, meta, fenster, zustand: zustand(w), verlauf };
   });
-  return { ...l, worker, projekte: leseProjekte(home, l.worker) };
+  const zustaende = new Map(worker.map((w) => [w.id, w.zustand] as const));
+  return { ...l, worker, projekte: leseProjekte(home, l.worker), flotte: flotte(home, { register: o.register, jetzt: l.zeit, zustaende }) };
+}
+
+// --- Flotte: die Aufgaben des Tages je Repo auf einem Zeitstrahl ---------------------------------
+
+// Lage auf dem Zeitstrahl in Prozent, ausserhalb des Fensters auf 0 und 100 geklemmt.
+export function prozent(t: number, t0: number, t1: number): number {
+  if (!(t1 > t0)) return 0;
+  return Math.max(0, Math.min(100, ((t - t0) / (t1 - t0)) * 100));
+}
+
+const MIN_BREITE = 0.6;
+
+// Anfang und Breite eines Balkens; ein kurzer Auftrag bleibt sichtbar, der Balken ragt nie ueber den Rand.
+export function balken(von: number, bis: number, t0: number, t1: number): { von: number; breit: number } {
+  const v = prozent(von, t0, t1);
+  const breit = Math.max(MIN_BREITE, prozent(bis, t0, t1) - v);
+  return { von: Math.min(v, 100 - breit), breit };
+}
+
+// Median in ganzen Minuten; ohne Werte null.
+export function medianMinuten(xs: number[]): number | null {
+  if (!xs.length) return null;
+  const s = [...xs].sort((a, b) => a - b);
+  const m = s.length >> 1;
+  return Math.round(s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2);
+}
+
+// Wann ein laufender Auftrag nach dem Median seines Repos fertig waere: Start plus Median, mindestens
+// 5 Minuten ab jetzt. Ohne Median keine Schaetzung.
+export function schaetzungBis(start: number, jetzt: number, median: number | null): number | null {
+  if (median === null) return null;
+  return jetzt + Math.max(5 * 60, median * 60 - (jetzt - start));
+}
+
+// Ordner- und Dateiname einer Aufgabe unter data/ und state/.
+export function gueltigeAufgabenId(id: string): boolean {
+  return /^[A-Za-z0-9._-]+$/.test(id) && !/^\.+$/.test(id);
+}
+
+// Der Inhalt unter `## Name` bis zur naechsten Ueberschrift der Ebene 1 oder 2; null ohne den Abschnitt.
+export function abschnittAus(text: string, kopf: string): string | null {
+  const zeilen = text.split("\n");
+  const i = zeilen.findIndex((z) => z.replace(/\r$/, "").trimEnd() === `## ${kopf}`);
+  if (i < 0) return null;
+  let j = i + 1;
+  while (j < zeilen.length && !/^#{1,2} /.test(zeilen[j])) j++;
+  return zeilen.slice(i + 1, j).join("\n").trim();
+}
+
+export interface Sitzungsregister {
+  id: string;
+  cwd: string;
+  gestartet: number;
+  beendet: number | null;
+  modell: string | null;
+  kostenUsd: number | null;
+  zuege: number | null;
+}
+
+// Das Register der Claude-Sitzungen (LIVE_PLAN_CACHE/sitzungen/*.json), nur die Felder der Flotte;
+// Kaputtes und Fremdes faellt weg.
+export function leseRegister(ordner: string | undefined): Sitzungsregister[] {
+  if (!ordner) return [];
+  let namen: string[] = [];
+  try {
+    namen = readdirSync(ordner).filter((n) => n.endsWith(".json") && !n.startsWith("."));
+  } catch {
+    return [];
+  }
+  const aus: Sitzungsregister[] = [];
+  for (const n of namen) {
+    try {
+      const d = JSON.parse(readFileSync(path.join(ordner, n), "utf8")) as Record<string, unknown>;
+      if (!d || typeof d !== "object" || typeof d.cwd !== "string" || typeof d.gestartet !== "number") continue;
+      const haupt = d.haupt && typeof d.haupt === "object" ? (d.haupt as Record<string, unknown>) : {};
+      aus.push({
+        id: typeof d.id === "string" ? d.id : n,
+        cwd: d.cwd,
+        gestartet: d.gestartet,
+        beendet: typeof d.beendet === "number" ? d.beendet : null,
+        modell: typeof d.modell === "string" ? d.modell : null,
+        kostenUsd: typeof haupt.kostenUsd === "number" ? haupt.kostenUsd : null,
+        zuege: typeof haupt.zuege === "number" ? haupt.zuege : null,
+      });
+    } catch {}
+  }
+  return aus;
+}
+
+// Die Sitzung eines Auftrags: ein Treehouse-Worktree, der bis 240 s nach dem Start des Auftrags
+// begann, die fruehste; jede Sitzung gehoert nur einem Auftrag (`benutzt`).
+export function sitzungZuordnen(regs: Sitzungsregister[], start: number, benutzt: Set<string>): Sitzungsregister | null {
+  let beste: Sitzungsregister | null = null;
+  for (const r of regs) {
+    if (benutzt.has(r.id) || !r.cwd.includes(".treehouse/")) continue;
+    const diff = r.gestartet / 1000 - start;
+    if (diff >= 0 && diff < 240 && (!beste || r.gestartet < beste.gestartet)) beste = r;
+  }
+  if (beste) benutzt.add(beste.id);
+  return beste;
+}
+
+export interface Aufgabe {
+  id: string;
+  repo: string;
+  kind: string;
+  titel: string | null;
+  zustand: "lauf" | "stopp" | "fertig";
+  zustandText: string;
+  start: number;
+  ende: number | null;
+  minuten: number;
+  von: number;
+  breit: number;
+  schaetzung: { von: number; breit: number; bis: number; minuten: number; median: number } | null;
+  pr: string | null;
+  ausgang: string | null;
+  kosten: number | null;
+  zuege: number | null;
+  modell: string | null;
+  effort: string | null;
+  live: boolean;
+  zeitleiste: boolean;
+  dateien: number;
+}
+
+export interface FlottenRepo {
+  repo: string;
+  aufgaben: Aufgabe[];
+  median: number | null;
+  gemergt: number;
+  laeuft: string[];
+}
+
+export interface Flotte {
+  jetzt: number;
+  t0: number;
+  t1: number;
+  jetztProzent: number;
+  achse: { t: number; prozent: number }[];
+  repos: FlottenRepo[];
+}
+
+export interface FlotteOptionen {
+  register?: string;
+  jetzt?: number;
+  // Beginn des Tages (Epoche in s); aeltere abgeschlossene Aufgaben fehlen, laufende bleiben.
+  seit?: number;
+  // Zustaende der Worker mit tmux-Wissen (Fenster fehlt); ohne sie zaehlt nur die Statusdatei.
+  zustaende?: Map<string, Zustand>;
+}
+
+const AUSGAENGE = ["merged", "reported", "done", "cancelled", "failed"];
+const AUSGANG_TEXT: Record<string, string> = { merged: "gemergt", reported: "Bericht", done: "fertig", cancelled: "abgebrochen", failed: "fehlgeschlagen" };
+const STOPP_TEXT: Partial<Record<Zustand, string>> = { paused: "pausiert", blocked: "blockiert", "needs-decision": "wartet auf Entscheidung", dead: "Fenster fehlt" };
+
+function tagesbeginn(jetzt: number): number {
+  const d = new Date(jetzt * 1000);
+  d.setHours(0, 0, 0, 0);
+  return Math.floor(d.getTime() / 1000);
+}
+
+function mtimeSek(datei: string): number | null {
+  try {
+    return Math.floor(statSync(datei).mtimeMs / 1000);
+  } catch {
+    return null;
+  }
+}
+
+// Eine Achsenmarke je Stunde (bei kurzem Fenster je halbe, bei langem je zwei oder vier), nach Ortszeit.
+function achseFuer(t0: number, t1: number): { t: number; prozent: number }[] {
+  const spanne = t1 - t0;
+  const schritt = [1800, 3600, 7200, 14400].find((s) => spanne / s <= 12) ?? 14400;
+  const versatz = -new Date(t0 * 1000).getTimezoneOffset() * 60;
+  const marken: { t: number; prozent: number }[] = [];
+  for (let t = Math.ceil((t0 + versatz) / schritt) * schritt - versatz; t < t1; t += schritt) marken.push({ t, prozent: prozent(t, t0, t1) });
+  return marken;
+}
+
+// Die Aufgaben des Tages je Repo: laufende aus state/<id>.meta (+ .status), abgeschlossene aus dem
+// Backlog (Done, Archiv) und data/<id>/ (Start = Aenderungszeit von launch-brief.md). Kosten, Zuege
+// und Modell aus dem Sitzungsregister, soweit eine Sitzung zum Start passt. Nur lesend.
+export function flotte(home: string, o: FlotteOptionen = {}): Flotte {
+  const jetzt = o.jetzt ?? Math.floor(Date.now() / 1000);
+  const seit = o.seit ?? tagesbeginn(jetzt);
+  const state = path.join(home, "state");
+  const daten = path.join(home, "data");
+  const eintraege = new Map<string, Eintrag>();
+  for (const datei of ["backlog.md", "done-archive.md"]) for (const e of backlogEintraege(lies(path.join(daten, datei)) ?? "")) if (!eintraege.has(e.id)) eintraege.set(e.id, e);
+
+  const metas = new Map<string, Meta>();
+  try {
+    for (const n of readdirSync(state)) if (n.endsWith(".meta") && !n.startsWith(".")) metas.set(n.slice(0, -5), parseMeta(lies(path.join(state, n)) ?? ""));
+  } catch {}
+  const ids = new Set(metas.keys());
+  try {
+    for (const d of readdirSync(daten, { withFileTypes: true })) if (d.isDirectory() && gueltigeAufgabenId(d.name) && existsSync(path.join(daten, d.name, "launch-brief.md"))) ids.add(d.name);
+  } catch {}
+
+  const regs = leseRegister(o.register);
+  const benutzt = new Set<string>();
+  type Roh = Omit<Aufgabe, "von" | "breit" | "schaetzung" | "minuten"> & { endeBis: number };
+  const roh: Roh[] = [];
+  for (const id of [...ids].sort()) {
+    const meta = metas.get(id) ?? null;
+    const e = eintraege.get(id) ?? null;
+    const kind = meta?.kind || e?.tags.kind || "?";
+    if (kind === "captain") continue;
+    const statusText = meta ? lies(path.join(state, `${id}.status`)) : null;
+    const zeilen = parseStatus(statusText ?? "");
+    const briefZeit = mtimeSek(path.join(daten, id, "launch-brief.md"));
+    const gen = /^s(\d+)\./.exec(meta?.spawn_gen ?? "");
+    const start = (gen ? Number(gen[1]) : null) ?? briefZeit ?? (meta ? mtimeSek(path.join(state, `${id}.meta`)) : null);
+    if (start === null) continue;
+    const z = meta ? o.zustaende?.get(id) ?? zustandAus({ letzte: zeilen.at(-1) ?? null, zeilen: zeilen.length, offen: offeneFragen(zeilen) }, null) : null;
+    const laeuftNoch = z !== null && z !== "done" && z !== "failed";
+    if (!laeuftNoch && start < seit) continue;
+    const reg = sitzungZuordnen(regs, start, benutzt);
+    const ausgang = AUSGAENGE.find((a) => e?.tags[a] !== undefined) ?? null;
+    const pr = /https:\/\/github\.com\/\S+\/pull\/\d+/.exec(e?.titel ?? "")?.[0] ?? null;
+    const titel = e ? e.titel.replace(/\s*https:\/\/\S+/g, "").trim() || null : null;
+
+    let zustandArt: Aufgabe["zustand"] = "fertig";
+    let text = ausgang ? AUSGANG_TEXT[ausgang] : "fertig";
+    let ende: number | null = null;
+    if (laeuftNoch) {
+      zustandArt = z === "working" || z === "unknown" ? "lauf" : "stopp";
+      text = zustandArt === "lauf" ? "läuft" : STOPP_TEXT[z!] ?? "angehalten";
+    } else if (z === "done" || z === "failed") {
+      text = ausgang ? AUSGANG_TEXT[ausgang] : z === "done" ? "fertig" : "fehlgeschlagen";
+      ende = reg?.beendet ? Math.floor(reg.beendet / 1000) : (zeilen.at(-1)?.at ?? jetzt);
+    }
+    let dateien: string[] = [];
+    try {
+      dateien = readdirSync(path.join(daten, id));
+    } catch {}
+    if (zustandArt === "fertig" && ende === null) {
+      ende = reg?.beendet ? Math.floor(reg.beendet / 1000) : Math.max(start, ...dateien.map((n) => mtimeSek(path.join(daten, id, n)) ?? 0));
+    }
+    const modell = meta?.model && meta.model !== "default" ? meta.model : (reg?.modell ?? null);
+    roh.push({
+      id, repo: e?.tags.repo?.trim() || (meta?.project ? path.basename(meta.project) : "") || "(ohne Repo)", kind, titel, zustand: zustandArt, zustandText: text,
+      start, ende, endeBis: ende ?? jetzt, pr, ausgang, kosten: reg?.kostenUsd ?? null, zuege: reg?.zuege ?? null, modell,
+      effort: meta?.effort || null, live: meta !== null, zeitleiste: statusText !== null, dateien: dateien.length,
+    });
+  }
+
+  // Median je Repo aus den abgeschlossenen Umsetzungen, die weder abgebrochen noch gescheitert sind.
+  const mediane = new Map<string, number | null>();
+  for (const repo of new Set(roh.map((r) => r.repo))) {
+    mediane.set(repo, medianMinuten(roh.filter((r) => r.repo === repo && r.kind === "ship" && r.zustand === "fertig" && r.ausgang !== "cancelled" && r.ausgang !== "failed").map((r) => Math.round((r.endeBis - r.start) / 60))));
+  }
+  const bis = new Map<string, number>();
+  for (const r of roh) if (r.zustand === "lauf") {
+    const b = schaetzungBis(r.start, jetzt, mediane.get(r.repo) ?? null);
+    if (b !== null) bis.set(r.id, b);
+  }
+  const t0 = Math.min(jetzt - 60 * 60, ...roh.map((r) => r.start)) - (roh.length ? 10 * 60 : 0);
+  const t1 = Math.max(jetzt + 15 * 60, ...bis.values(), ...roh.map((r) => r.endeBis)) + 5 * 60;
+  const aufgaben = roh.map(({ endeBis, ...r }): Aufgabe => {
+    const b = balken(r.start, endeBis, t0, t1);
+    const sb = bis.get(r.id);
+    const median = mediane.get(r.repo) ?? null;
+    const sg = sb !== undefined && median !== null ? balken(jetzt, sb, t0, t1) : null;
+    return { ...r, minuten: Math.round((endeBis - r.start) / 60), von: b.von, breit: b.breit, schaetzung: sg && sb !== undefined && median !== null ? { ...sg, bis: sb, minuten: Math.round((sb - jetzt) / 60), median } : null };
+  });
+  const repos: FlottenRepo[] = [...new Set(aufgaben.map((a) => a.repo))].map((repo) => {
+    const as = aufgaben.filter((a) => a.repo === repo).sort((a, b) => a.start - b.start || a.id.localeCompare(b.id));
+    return { repo, aufgaben: as, median: mediane.get(repo) ?? null, gemergt: as.filter((a) => a.ausgang === "merged").length, laeuft: as.filter((a) => a.zustand === "lauf").map((a) => a.id) };
+  });
+  repos.sort((a, b) => a.aufgaben[0].start - b.aufgaben[0].start || a.repo.localeCompare(b.repo));
+  return { jetzt, t0, t1, jetztProzent: prozent(jetzt, t0, t1), achse: achseFuer(t0, t1), repos };
+}
+
+// --- Detail einer Aufgabe -------------------------------------------------------------------
+
+export const BERICHT_MAX = 9000;
+const BRIEF_MAX = 60_000;
+const ZEITLEISTE_MAX = 500;
+
+export interface AufgabeDetail {
+  id: string;
+  brief: string | null;
+  briefGekuerzt: boolean;
+  intent: string | null;
+  spec: string | null;
+  bericht: string | null;
+  berichtGekuerzt: boolean;
+  zeitleiste: StatusZeile[] | null;
+  dateien: string[];
+}
+
+// Eine Textdatei im echten Ordner der Aufgabe: kein Symlink, eine Datei, hoechstens `max` Zeichen.
+function liesImOrdner(ordner: string, name: string, max: number): { text: string; gekuerzt: boolean } | null {
+  const pfad = path.join(ordner, name);
+  try {
+    if (!lstatSync(pfad).isFile()) return null;
+    const text = readFileSync(pfad, "utf8");
+    if (text.length <= max) return { text, gekuerzt: false };
+    const schnitt = text.lastIndexOf("\n", max);
+    return { text: text.slice(0, schnitt > max * 0.8 ? schnitt : max), gekuerzt: true };
+  } catch {
+    return null;
+  }
+}
+
+// Brief, Bericht, Zeitleiste und Dateiliste einer Aufgabe, nur aus data/<id>/ und state/<id>.status;
+// null bei ungueltiger Id, unbekannter Aufgabe oder einem data/<id>, das nach realpath ausserhalb von
+// data/ liegt. Schreibt nichts.
+export function aufgabeDetail(home: string, id: string): AufgabeDetail | null {
+  if (!gueltigeAufgabenId(id)) return null;
+  const daten = path.join(home, "data");
+  const ordner = path.join(daten, id);
+  let echt: string | null = null;
+  try {
+    const wurzel = realpathSync(daten);
+    const r = realpathSync(ordner);
+    if (path.dirname(r) === wurzel && path.basename(r) === id && statSync(r).isDirectory() && !lstatSync(ordner).isSymbolicLink()) echt = r;
+  } catch {}
+  const statusPfad = path.join(home, "state", `${id}.status`);
+  const status = existsSync(path.join(home, "state", `${id}.meta`)) || echt ? lies(statusPfad) : null;
+  if (!echt && !existsSync(path.join(home, "state", `${id}.meta`))) return null;
+  const brief = echt ? liesImOrdner(echt, "brief.md", BRIEF_MAX) : null;
+  const bericht = echt ? liesImOrdner(echt, "report.md", BERICHT_MAX) : null;
+  let dateien: string[] = [];
+  if (echt) {
+    try {
+      dateien = readdirSync(echt).sort();
+    } catch {}
+  }
+  return {
+    id,
+    brief: brief?.text ?? null,
+    briefGekuerzt: brief?.gekuerzt ?? false,
+    intent: brief ? abschnittAus(brief.text, "Captain's intent") : null,
+    spec: brief ? abschnittAus(brief.text, "Firstmate spec") : null,
+    bericht: bericht?.text ?? null,
+    berichtGekuerzt: bericht?.gekuerzt ?? false,
+    zeitleiste: status === null ? null : parseStatus(status).slice(-ZEITLEISTE_MAX),
+    dateien,
+  };
 }
 
 // --- Offene PRs ----------------------------------------------------------------------------
@@ -677,14 +1026,14 @@ const selbst = (() => {
   }
 })();
 if (selbst) {
-  const [art, home] = process.argv.slice(2);
+  const [art, home, register] = process.argv.slice(2);
   if (art !== "--json" || !home) {
-    console.error("firstmate: Aufruf firstmate.ts --json HOME");
+    console.error("firstmate: Aufruf firstmate.ts --json HOME [REGISTER]");
     process.exit(2);
   }
   if (!istFirstmateHome(home)) {
     console.error(`firstmate: ${home} ist kein Firstmate-Home`);
     process.exit(1);
   }
-  console.log(JSON.stringify(firstmateSicht(home)));
+  console.log(JSON.stringify(firstmateSicht(home, { register })));
 }
