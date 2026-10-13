@@ -258,7 +258,7 @@ test("hostTeil: ohne Verlauf bleibt der Block wie zuvor", () => {
 });
 
 /** Laedt die Ansicht mit einer Attrappe der Seite, laesst sie ihre Daten holen und liefert den gezeichneten HTML-Text. */
-async function montiere(pfad: string): Promise<string> {
+async function montiere(pfad: string, takte = 0): Promise<string> {
   const wurzel = {
     innerHTML: "",
     querySelector: (sel: string) => (sel === ".lp-kopf" && wurzel.innerHTML.includes('class="lp-kopf"') ? { insertAdjacentHTML: (_: string, h: string) => void (wurzel.innerHTML += h) } : null),
@@ -268,13 +268,14 @@ async function montiere(pfad: string): Promise<string> {
   };
   const wait = async () => { for (let i = 0; i < 20; i++) await new Promise((r) => setImmediate(r)); };
   const sitzung = { plan: pruefePlan({ titel: "T", schritte: [] }).plan };
+  const intervalle: Array<() => void> = [];
   const g: Record<string, unknown> = {
     document: {
       getElementById: () => wurzel, documentElement: { dataset: {} }, visibilityState: "visible", activeElement: null,
       addEventListener: () => {}, removeEventListener: () => {}, querySelector: () => null, querySelectorAll: () => [], title: "",
     },
     location: { pathname: pfad, search: "" },
-    setInterval: () => 1, clearInterval: () => {}, setTimeout: () => 1,
+    setInterval: (f: () => void, ms: number) => (ms === 15000 && intervalle.push(f), 1), clearInterval: () => {}, setTimeout: () => 1,
     fetch: async (url: string) => {
       const antwort = (b: unknown, ok = true) => ({ ok, status: ok ? 200 : 404, json: async () => b });
       if (url === "/api/host") return antwort({ ...HOST_BASIS, verlauf: { takt: 15, vor: [10], cpu: [42], ram: [25] } });
@@ -286,6 +287,7 @@ async function montiere(pfad: string): Promise<string> {
   g.globalThis = g;
   vm.runInNewContext(readFileSync(path.join(import.meta.dirname, "ansicht", "live-plan.js"), "utf8"), g);
   await wait();
+  for (let i = 0; i < takte; i++) { intervalle.forEach((f) => f()); await wait(); }
   return wurzel.innerHTML;
 }
 
@@ -297,4 +299,10 @@ test("Einbindung: Liste und Sitzungsseite zeigen den Rechner samt Verlauf", asyn
   const sitzung = await montiere("/repo/slug");
   assert.match(sitzung, /data-testid="sitzung-host"/);
   assert.match(sitzung, /data-testid="host-verlauf-ram"/);
+});
+
+test("Einbindung: das Neuzeichnen der Liste behaelt den Rechner", async () => {
+  const liste = await montiere("/", 1);
+  assert.match(liste, /data-testid="tabelle-sitzungen"/);
+  assert.equal(liste.match(/data-testid="sitzung-host"/g)?.length, 1);
 });

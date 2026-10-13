@@ -2361,7 +2361,7 @@
       }).join("");
       doc.title = "Sitzungen · live-plan";
       wurzel.innerHTML = '<header class="lp-kopf"><div class="lp-oben"><h1>Sitzungen</h1>' + themaSchalter() + "</div>" +
-        '<p class="lp-ziel">Lebende Dokumente aus <span class="mono">REPO/.live-plan/SLUG.yaml</span> unter <span class="mono">' + esc(daten.wurzel) + "</span> und laufende Claude-Sitzungen aus dem Register</p></header>" +
+        '<p class="lp-ziel">Lebende Dokumente aus <span class="mono">REPO/.live-plan/SLUG.yaml</span> unter <span class="mono">' + esc(daten.wurzel) + "</span> und laufende Claude-Sitzungen aus dem Register</p></header>" + hostTeil(hostAuf) +
         '<table class="lp-liste" data-testid="tabelle-sitzungen"><thead><tr><th>repo</th><th>sitzung</th><th>titel</th><th>fragen</th><th>geaendert</th></tr></thead><tbody>' +
         (zeilen || '<tr><td colspan="5" class="leer">Keine Sitzung. <span class="mono">live-plan neu SLUG</span> legt eine an.</td></tr>') + "</tbody></table>";
     }).catch(function () { /* der naechste Takt versucht es wieder */ });
