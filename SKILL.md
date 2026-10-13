@@ -54,9 +54,13 @@ aufklappbaren Abschnitt ueber dem Baum, mit Warnzeichen bei Ueberschneidung, dan
 steht oder die das Register als gelesen oder geschrieben fuehrt (git-ignoriert: der Inhalt, nur fuer
 Loopback, sonst 403, Regeln in README.md; sonst 404, ein Pfad mit `..` oder fuehrendem `/` 400):
 geaendert oder geloescht `git diff HEAD`, unversioniert der Inhalt als neue Datei, ohne Marke der
-Inhalt; Binaeres und Symlinks heissen `binaer` ohne Inhalt, der Text ist bei 512 KiB `gekappt`. Die Ansicht zeigt ihn im Diff-Modal.
+Inhalt; Binaeres und Symlinks heissen `binaer` ohne Inhalt (Bilder gehen an `bild`, s. u.), der Text ist bei 512 KiB `gekappt`. Die Ansicht zeigt ihn im Diff-Modal.
 Mit `&branch=NAME` gilt er einer Datei, die dieser but-Branch committet hat: `git diff` von seiner
 Basis zum Branch; sonst 404.
+`GET /api/REPO/<id>/bild?p=PFAD` liefert ein Bild (png, jpg, jpeg, gif, webp, svg) als Rohbytes mit dem
+Inhaltstyp der Endung, unter denselben Pfadregeln wie `/diff` (auch `&branch=NAME`); ueber 10 MiB 413, andere
+Endung 415, `nosniff` und CSP `sandbox`. Die eigene Plan-Datei `.live-plan/<id>.yaml` oeffnet `/diff` auch ohne
+Registereintrag (im Seitenfuss anklickbar). Die Ansicht zeigt Bilder im Diff-Modal als `<img>`.
 
 Der Live-Block steht unter der Jetzt-Zeile: oben der Verbrauch in zwei Zeilen, darunter der
 Fortschritt, wenn gesetzt, und die Agenten -- laufend, fertig (einklappbar), geplant (Aufgaben

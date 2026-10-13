@@ -1201,6 +1201,22 @@ export function diffPfadGueltig(p: unknown): p is string {
   return p.split("/").every((t) => t !== "" && t !== "." && t !== "..");
 }
 
+/** Hoechstens so viele Bytes eines Bildes gehen an die Ansicht (GET .../bild?p=); groesser ist 413. */
+export const BILD_HOECHSTENS = 10 * 1024 * 1024;
+
+const BILD_ARTEN: Record<string, string> = { ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp", ".svg": "image/svg+xml" };
+
+/** Der Inhaltstyp eines Bildes nach der Endung (png, jpg, jpeg, gif, webp, svg), sonst null. */
+export function bildArtVon(p: string): string | null {
+  const i = p.lastIndexOf(".");
+  return i < 0 ? null : (BILD_ARTEN[p.slice(i).toLowerCase()] ?? null);
+}
+
+/** Der Pfad der eigenen Plan-Datei einer Sitzung: sie gehoert ihr, auch wenn Git sie ignoriert. */
+export function eigenerPlanPfad(slug: string): string {
+  return `${ORDNER}/${slug}.yaml`;
+}
+
 /** Ob das Register der Sitzung den relativen Pfad `p` als gelesen oder geschrieben fuehrt. */
 export function registerBeruehrt(r: Register | null, p: string): boolean {
   const dateien: unknown = r?.dateien;

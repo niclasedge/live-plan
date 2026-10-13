@@ -1,8 +1,9 @@
-// live-plan: Tests des Diff-Endpunkts fuer git-ignorierte Dateien, `node --test server.test.ts` (startet `bun server.ts`).
+// live-plan: Tests der Endpunkte .../diff und .../bild (Pfadregeln, git-ignorierte Dateien, Bilder, eigene Plan-Datei), `node --test server.test.ts` (startet `bun server.ts`).
 
 import assert from "node:assert/strict";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { BILD_HOECHSTENS } from "./logik.ts";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -33,10 +34,14 @@ test("registerBeruehrt: nur ein gelesener oder geschriebener Pfad, Kaputtes fael
 // --- GET .../diff?p= gegen einen echten Server -------------------------------------------------
 
 const ID = "sitzung-1";
+const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg==", "base64");
+const SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="4" height="4"><script>window.top.document.title="x"</script><rect width="4" height="4"/></svg>';
 let tmp: string;
 let server: ChildProcess;
 let basis: string;
 let lanBasis: string | null;
+let bildBasis: string;
+let lanBild: string | null;
 
 function freierPort(): Promise<number> {
   return new Promise((ok, fehler) => {
@@ -53,10 +58,15 @@ before(async () => {
   const repo = path.join(tmp, "wurzel", "proj");
   const draussen = path.join(tmp, "draussen");
   mkdirSync(path.join(repo, "data"), { recursive: true });
+  mkdirSync(path.join(repo, "assets"));
+  mkdirSync(path.join(repo, ".live-plan"));
   mkdirSync(draussen);
   const git = (...args: string[]) => assert.equal(spawnSync("git", args, { cwd: repo }).status, 0, `git ${args.join(" ")}`);
   git("init", "-q");
-  writeFileSync(path.join(repo, ".gitignore"), "data/\n");
+  writeFileSync(path.join(repo, ".gitignore"), "data/\n.live-plan/\n");
+  writeFileSync(path.join(repo, "assets", "pixel.png"), PNG);
+  writeFileSync(path.join(repo, "assets", "logo.svg"), SVG);
+  writeFileSync(path.join(repo, "config.yaml"), "name: demo\n");
   writeFileSync(path.join(repo, "README.md"), "# proj\n");
   git("add", ".");
   git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init");
@@ -64,18 +74,30 @@ before(async () => {
   writeFileSync(path.join(repo, "data", "andere.md"), "nicht beruehrt\n");
   writeFileSync(path.join(repo, "data", ".env"), "TOKEN=nicht-zeigen\n");
   writeFileSync(path.join(draussen, "notiz.md"), "ausserhalb\n");
+  writeFileSync(path.join(repo, "config.yaml"), "name: demo\nneu: ja\n");
+  writeFileSync(path.join(repo, "data", "bild.png"), PNG);
+  writeFileSync(path.join(repo, "data", "unberuehrt.png"), PNG);
+  writeFileSync(path.join(repo, "data", "secret.png"), PNG);
+  writeFileSync(path.join(repo, "assets", "gross.png"), Buffer.alloc(BILD_HOECHSTENS + 1));
+  writeFileSync(path.join(repo, "assets", "text.png"), "kein Bild, aber lesbar");
+  symlinkSync(path.join(repo, "assets", "pixel.png"), path.join(repo, "assets", "link.png"));
+  writeFileSync(path.join(draussen, "fremd.png"), PNG);
+  writeFileSync(path.join(repo, ".live-plan", `${ID}.yaml`), "titel: Eigene Sitzung\n");
+  writeFileSync(path.join(repo, ".live-plan", "andere.yaml"), "titel: Fremde Sitzung\n");
   symlinkSync(draussen, path.join(repo, "data", "raus"));
 
   const cache = path.join(tmp, "cache");
   mkdirSync(path.join(cache, "sitzungen"), { recursive: true });
-  const dateien = ["data/brief.md", "data/.env", "data/raus/notiz.md"].map((pfad) => ({ pfad, gelesen: 1, n: 1 }));
+  const dateien = ["data/brief.md", "data/.env", "data/raus/notiz.md", "data/bild.png", "data/secret.png", "data/raus/fremd.png"].map((pfad) => ({ pfad, gelesen: 1, n: 1 }));
   const register = { v: 1, id: ID, cwd: repo, wurzel: repo, repo: "proj", modell: "m", gestartet: 0, aktualisiert: 0, haupt: { zuege: 0 }, fortschritt: null, agenten: [], dateien };
   writeFileSync(path.join(cache, "sitzungen", `${ID}.json`), JSON.stringify(register));
 
   const port = await freierPort();
   basis = `http://localhost:${port}/api/proj/${ID}/diff?p=`;
+  bildBasis = `http://localhost:${port}/api/proj/${ID}/bild?p=`;
   const lan = Object.values(os.networkInterfaces()).flat().find((n) => n && n.family === "IPv4" && !n.internal);
   lanBasis = lan ? `http://${lan.address}:${port}/api/proj/${ID}/diff?p=` : null;
+  lanBild = lan ? `http://${lan.address}:${port}/api/proj/${ID}/bild?p=` : null;
   server = spawn("bun", [path.join(import.meta.dirname, "server.ts")], {
     env: { ...process.env, LIVE_PLAN_PORT: String(port), LIVE_PLAN_CACHE: cache, LIVE_PLAN_WURZEL: path.join(tmp, "wurzel") },
     stdio: "ignore",
@@ -145,4 +167,100 @@ test("diff: eine Datei im Baum bleibt wie bisher", async () => {
   const { status, body } = await hole("README.md");
   assert.equal(status, 200);
   assert.equal(body.text, "# proj\n");
+});
+
+// --- YAML und die eigene Plan-Datei -------------------------------------------------------------
+
+test("diff: eine YAML im Baum zeigt ihren Text wie jede Textdatei", async () => {
+  const { status, body } = await hole("config.yaml");
+  assert.equal(status, 200);
+  assert.equal(body.art, "diff");
+  assert.match(body.text ?? "", /\+neu: ja/);
+});
+
+test("diff: die eigene Plan-Datei der Sitzung zeigt ihren Text, auch ohne Eintrag im Register", async () => {
+  const { status, body } = await hole(`.live-plan/${ID}.yaml`);
+  assert.equal(status, 200);
+  assert.equal(body.art, "datei");
+  assert.equal(body.text, "titel: Eigene Sitzung\n");
+});
+
+test("diff: die Plan-Datei einer anderen Sitzung bleibt 404", async () => {
+  const { status, body } = await hole(".live-plan/andere.yaml");
+  assert.equal(status, 404);
+  assert.equal(body.fehler, "Datei steht nicht im Dateibaum");
+});
+
+// --- GET .../bild?p= ----------------------------------------------------------------------------
+
+const holeBild = async (p: string, von = bildBasis, kopf: Record<string, string> = {}) => {
+  const r = await fetch(von + encodeURIComponent(p), { headers: kopf });
+  return { status: r.status, kopf: r.headers, bytes: Buffer.from(await r.arrayBuffer()) };
+};
+const fehlerVon = (b: Buffer) => (JSON.parse(b.toString()) as { fehler?: string }).fehler ?? "";
+
+test("bild: ein PNG im Baum kommt als Rohbytes mit seinem Inhaltstyp", async () => {
+  const { status, kopf, bytes } = await holeBild("assets/pixel.png");
+  assert.equal(status, 200);
+  assert.equal(kopf.get("content-type"), "image/png");
+  assert.equal(kopf.get("x-content-type-options"), "nosniff");
+  assert.deepEqual(bytes, PNG);
+});
+
+test("bild: der Inhaltstyp folgt der Endung (svg als image/svg+xml, nie als Seite)", async () => {
+  const { status, kopf, bytes } = await holeBild("assets/logo.svg");
+  assert.equal(status, 200);
+  assert.equal(kopf.get("content-type"), "image/svg+xml");
+  assert.match(kopf.get("content-security-policy") ?? "", /default-src 'none'/);
+  assert.match(kopf.get("content-security-policy") ?? "", /sandbox/);
+  assert.equal(bytes.toString(), SVG);
+});
+
+test("bild: eine Endung, die kein Bild ist, wird verweigert", async () => {
+  for (const p of ["config.yaml", "README.md", "assets"]) {
+    const { status, bytes } = await holeBild(p);
+    assert.equal(status, 415, p);
+    assert.match(fehlerVon(bytes), /Kein Bild/);
+  }
+});
+
+test("bild: .. und fuehrender Schraegstrich werden verweigert", async () => {
+  for (const p of ["../draussen/fremd.png", "/etc/x.png", "assets/../assets/pixel.png"]) assert.equal((await holeBild(p)).status, 400, p);
+});
+
+test("bild: ein Bild ueber dem Deckel gibt 413", async () => {
+  const { status, bytes } = await holeBild("assets/gross.png");
+  assert.equal(status, 413);
+  assert.match(fehlerVon(bytes), /groesser/);
+});
+
+test("bild: ein Symlink wird nicht gefolgt", async () => {
+  const { status } = await holeBild("assets/link.png");
+  assert.equal(status, 404);
+});
+
+test("bild: ein git-ignoriertes Bild, das die Sitzung beruehrt hat, kommt nur vom eigenen Rechner", async (t) => {
+  const ok = await holeBild("data/bild.png");
+  assert.equal(ok.status, 200);
+  assert.deepEqual(ok.bytes, PNG);
+  if (!lanBild) return t.skip("keine Nicht-Loopback-Adresse an diesem Rechner");
+  for (const kopf of [{}, { "X-Forwarded-For": "127.0.0.1" }]) {
+    const fremd = await holeBild("data/bild.png", lanBild, kopf);
+    assert.equal(fremd.status, 403);
+    assert.match(fehlerVon(fremd.bytes), /eigenen Rechner/);
+  }
+});
+
+test("bild: ein git-ignoriertes Bild ohne Registereintrag bleibt 404, eines mit Secret-Namen 403", async () => {
+  const frei = await holeBild("data/unberuehrt.png");
+  assert.equal(frei.status, 404);
+  assert.equal(fehlerVon(frei.bytes), "Datei steht nicht im Dateibaum");
+  const geheim = await holeBild("data/secret.png");
+  assert.equal(geheim.status, 403);
+});
+
+test("bild: ein Bild ueber einen Symlink-Ordner aus der Wurzel heraus wird nicht geliefert", async () => {
+  const { status, bytes } = await holeBild("data/raus/fremd.png");
+  assert.equal(status, 404);
+  assert.notDeepEqual(bytes, PNG);
 });

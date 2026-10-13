@@ -76,7 +76,15 @@ laut Register gelesen oder geschrieben hat, sie in der Wurzel liegt und der Aufr
 kommt (Quell-IP der Verbindung 127.0.0.0/8 oder ::1, kein Header). Jedem anderen Aufruf, etwa aus dem LAN,
 meldet er für eine git-ignorierte Datei eine Ablehnung (403) statt des Inhalts. Typische Secret-Namen
 (`.env`, `.env.*`, `*.pem`, `*.key`, `id_rsa*`, `id_ed25519*`, `*credentials*`, `*secret*`) zeigt er
-dabei nie, sondern meldet eine Ablehnung. Tests: `node --test server.test.ts` (startet `bun server.ts`).
+dabei nie, sondern meldet eine Ablehnung. Die eigene Plan-Datei der Sitzung (`.live-plan/<id>.yaml`, im
+Seitenfuß anklickbar) gehört ihr und öffnet auch ohne Registereintrag, jede andere Plan-Datei nicht.
+
+Bilder (png, jpg, jpeg, gif, webp, svg) zeigt das Diff-Modal als Bild: `GET /api/REPO/<id>/bild?p=PFAD`
+liefert die Rohbytes mit dem Inhaltstyp der Endung, unter denselben Pfadregeln wie der Diff (im Baum oder im
+Register, kein `..`, kein Symlink, git-ignoriert nur für den eigenen Rechner, keine Secret-Namen). Über
+10 MiB antwortet er 413, jede andere Endung 415. Die Antwort trägt `nosniff` und `Content-Security-Policy:
+sandbox`; ein SVG läuft nur in einem `<img>` und führt dort kein Skript aus. Geändert zeigt es nur die neue Version.
+Tests: `node --test server.test.ts` (startet `bun server.ts`).
 
 ## Firstmate-Cockpit
 

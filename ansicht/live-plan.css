@@ -454,6 +454,8 @@ body { margin: 0; background: var(--s1); font-family: var(--font); }
 .lp-diff-text .dz-hunk code { color: var(--ink-3); background: var(--s2); }
 .lp-diff-text .dz-hunk, .lp-diff-text .dz-kopf, .lp-diff-text .dz-hinweis { color: var(--ink-3); }
 .lp-diff-text .dz-kopf code, .lp-diff-text .dz-hinweis code { color: var(--ink-3); }
+.lp-diff .lp-bild { align-self: start; max-width: 100%; overflow: auto; min-height: 0; padding: 12px; border: 1px solid var(--line-1); border-radius: 6px; background: var(--s1); }
+.lp-diff .lp-bild img { display: block; max-width: 100%; height: auto; margin: 0 auto; }
 .lp-diff .df-hinweis { margin: 0; padding: 6px 2px; color: var(--ink-3); font-size: 12px; }
 
 /* +N aeltere als Text nur fuer den Druck (E8, S5) */
@@ -610,6 +612,7 @@ body { margin: 0; background: var(--s1); font-family: var(--font); }
 .lp-jetzt.wartet { border-left-color: var(--rot); }
 .lp-jetzt.wartet > .t { flex: none; color: var(--rot); }
 /* Fuss: Quelle und Stand links, die Sitzungsdatei rechts */
+.lp-fuss-datei { padding: 0; border: 0; background: none; color: inherit; font: inherit; cursor: pointer; text-decoration: underline dotted; }
 .lp-fuss { display: flex; flex-wrap: wrap; gap: 4px 16px; justify-content: space-between; margin-top: 44px; padding-top: 12px; border-top: 1px solid var(--line-1); font-size: 12px; color: var(--st-offen); }
 .lp-dateien { margin-top: 44px; }
 
