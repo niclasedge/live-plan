@@ -5,7 +5,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { test } from "node:test";
 import vm from "node:vm";
-import { befehlKurz, cpuProzent, cwdKurz, hostSicht, laufzeitKurz, oberste, parseLoadavg, parseMeminfo, parseProzessStat, parseStat, parseSwapMb } from "./host.ts";
+import { befehlKurz, cpuProzent, cwdKurz, hostSicht, laufzeitKurz, oberste, parseLoadavg, parseMeminfo, parseProzessStat, parseSeitengroesse, parseStat, parseSwapMb } from "./host.ts";
 
 test("parseStat und cpuProzent: Delta aus Summe und Leerlauf (idle + iowait)", () => {
   const a = parseStat("cpu  100 0 100 700 100 0 0 0 0 0\ncpu0 50 0 50 350 50 0 0 0 0 0\n");
@@ -41,6 +41,12 @@ test("parseProzessStat: Name mit Leerzeichen und Klammern, Felder 14, 15, 22, 24
   assert.deepEqual(st, { pid: 4321, name: "my (odd) proc", ticks: 100, start: 5000, rssSeiten: 2500 });
   assert.equal(parseProzessStat("kaputt"), null);
   assert.equal(parseProzessStat("1 (x) S 1"), null);
+});
+
+test("parseSeitengroesse: KernelPageSize in Bytes, sonst 4096", () => {
+  assert.equal(parseSeitengroesse("Size: 8 kB\nKernelPageSize:       64 kB\nMMUPageSize: 64 kB\n"), 65536);
+  assert.equal(parseSeitengroesse("Size: 8 kB\n"), 4096);
+  assert.equal(parseSeitengroesse(""), 4096);
 });
 
 test("parseSwapMb: VmSwap in MB, ohne Zeile 0", () => {

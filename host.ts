@@ -8,7 +8,6 @@ import os from "node:os";
 export const HOST_VORHALTEN_MS = 5000;
 export const HOST_TOP = 5;
 const TICKS = 100; // CLK_TCK; auf Linux praktisch immer 100
-const SEITE = 4096;
 const BASIS_MAX_MS = 3 * HOST_VORHALTEN_MS; // aelter, und das CPU-Delta waere ein Mittel ueber die ganze Pause
 
 export type Cpu = { gesamt: number; leer: number };
@@ -70,6 +69,12 @@ export function parseProzessStat(text: string): { pid: number; name: string; tic
   return { pid, name: text.slice(auf + 1, zu), ticks: utime + stime, start, rssSeiten: rss };
 }
 
+/** KernelPageSize (kB) aus /proc/PID/smaps in Bytes; ohne die Zeile 4096. */
+export function parseSeitengroesse(smaps: string): number {
+  const m = /^KernelPageSize:\s+(\d+)\s*kB/m.exec(smaps);
+  return m && Number(m[1]) > 0 ? Number(m[1]) * 1024 : 4096;
+}
+
 /** VmSwap aus /proc/PID/status in MB; fehlt die Zeile (Kernel-Thread), 0. */
 export function parseSwapMb(status: string): number {
   const m = /^VmSwap:\s+(\d+)/m.exec(status);
@@ -126,6 +131,7 @@ function plattenLage(pfad: string): Platte | null {
   }
 }
 
+let seite = 0;
 let vorherCpu: Cpu | null = null;
 let vorherProzess = new Map<number, number>();
 let vorherUm = 0;
@@ -137,6 +143,7 @@ async function messe(): Promise<HostSicht> {
   const last = parseLoadavg(lies("/proc/loadavg") ?? "");
   const speicher = parseMeminfo(lies("/proc/meminfo") ?? "");
   if (!stat || !last || !speicher) return { verfuegbar: false };
+  if (!seite) seite = parseSeitengroesse(lies("/proc/self/smaps") ?? "");
   if (!vorherCpu || Date.now() - vorherUm > BASIS_MAX_MS) {
     vorherCpu = stat;
     vorherUm = Date.now();
@@ -163,7 +170,7 @@ async function messe(): Promise<HostSicht> {
     const lebt = hoch - st.start / TICKS;
     // Neu seit der letzten Messung: Anteil an der bisherigen Lebenszeit, wie ps.
     const proz = davor !== undefined ? ((st.ticks - davor) / TICKS / sek) * 100 : lebt > 0 ? (st.ticks / TICKS / lebt) * 100 : 0;
-    roh.push({ pid: st.pid, name: st.name, ticks: st.ticks, start: st.start, rssMb: (st.rssSeiten * SEITE) / 1048576, cpu: Math.max(0, proz) });
+    roh.push({ pid: st.pid, name: st.name, ticks: st.ticks, start: st.start, rssMb: (st.rssSeiten * seite) / 1048576, cpu: Math.max(0, proz) });
   }
   vorherCpu = jetztStat;
   vorherProzess = jetztProzess;
