@@ -1201,6 +1201,26 @@ export function diffPfadGueltig(p: unknown): p is string {
   return p.split("/").every((t) => t !== "" && t !== "." && t !== "..");
 }
 
+/** Ob das Register der Sitzung den relativen Pfad `p` als gelesen oder geschrieben fuehrt. */
+export function registerBeruehrt(r: Register | null, p: string): boolean {
+  const dateien: unknown = r?.dateien;
+  return Array.isArray(dateien) && dateien.some((d) => istObjekt(d) && d.pfad === p && (typeof d.gelesen === "number" || typeof d.geschrieben === "number"));
+}
+
+/** Namen, die typisch Secrets tragen: eine git-ignorierte Datei mit so einem Namen zeigt der Server nie. */
+const GEHEIM = [/^\.env$/, /^\.env\./, /\.pem$/, /\.key$/, /^id_rsa/, /^id_ed25519/, /credentials/, /secret/];
+
+/** Ob ein Teil von `p` wie eine Secret-Datei heisst (Gross- und Kleinschreibung egal). */
+export function geheimerName(p: string): boolean {
+  return p.split("/").some((t) => GEHEIM.some((m) => m.test(t.toLowerCase())));
+}
+
+/** Ob die Quell-IP `ip` einer Verbindung der eigene Rechner ist: 127.0.0.0/8 oder ::1, auch IPv4 in IPv6. */
+export function istLoopback(ip: string | null | undefined): boolean {
+  const v4 = ip?.toLowerCase().replace(/^::ffff:/, "");
+  return v4 === "::1" || /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(v4 ?? "");
+}
+
 /** Unversioniert: neu; ohne Git-Marke: der Inhalt; sonst der Diff gegen HEAD. */
 export function diffArtVon(s: BaumStatus | undefined): "diff" | "neu" | "datei" {
   return s === "?" ? "neu" : s ? "diff" : "datei";
@@ -1449,14 +1469,24 @@ function juengsteZuerst<T extends { id: string }>(liste: T[], z: Zeiten): T[] {
     .map((x) => x.e);
 }
 
+/** Offen ist eine Frage ohne entscheidung, auch eine aus AskUserQuestion oder Sprengradius (die Mod schreibt sie in die YAML). */
+export function offeneFragen(plan: Plan): string[] {
+  return plan.fragen.filter((f) => !f.entscheidung).map((f) => f.id);
+}
+
+/** Zahl der offenen Fragen fuer die Liste; null, wenn die Datei kein YAML-Objekt ist (kaputt, halb geschrieben, leer). */
+export function offeneFragenZahl(roh: unknown): number | null {
+  return vergleichbar(roh) ? offeneFragen(pruefePlan(roh).plan).length : null;
+}
+
 export function ueberblick(plan: Plan, z: Zeiten): Ueberblick {
-  const offeneFragen = plan.fragen.filter((f) => !f.entscheidung).map((f) => f.id);
+  const wartend = offeneFragen(plan);
   const laufend = jetzt(plan, z);
   const offen = plan.stand?.offen ?? [];
   const blattJetzt = offen.find((b) => b.gate === "jetzt");
   const zeile: JetztZeile =
-    offeneFragen.length > 0
-      ? { art: "fragen", fragen: offeneFragen }
+    wartend.length > 0
+      ? { art: "fragen", fragen: wartend }
       : laufend.length > 0
         ? { art: "laeuft", schritte: laufend }
         : blattJetzt

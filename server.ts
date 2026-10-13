@@ -26,6 +26,8 @@ import {
   diffArtVon,
   diffPfadGueltig,
   DIFF_LESEN_HOECHSTENS,
+  geheimerName,
+  istLoopback,
   type BaumDatei,
   type DiffAntwort,
   gitStand,
@@ -33,12 +35,14 @@ import {
   jetzt,
   neueEntscheidungen,
   neuesteId,
+  offeneFragenZahl,
   ORDNER,
   prozessLayout,
   pruefeEigeneAntwort,
   pruefePlan,
   raster,
   registerAus,
+  registerBeruehrt,
   registerRepo,
   setzeEntscheidungImText,
   spurbild,
@@ -265,19 +269,20 @@ async function liesKoerper(req: Request, grenze: number): Promise<string | null>
 
 const SITZUNGSDATEI = /^([A-Za-z0-9._-]+)\.yaml$/;
 
-function titelVon(pfad: string, slug: string): string {
+/** Titel und Zahl der offenen Fragen aus einem Lesen; eine kaputte Datei gibt den Slug und keine Zahl, nie einen Fehler. */
+function kopfVon(pfad: string, slug: string): { titel: string; offeneFragen: number | null } {
   try {
     const roh = Bun.YAML.parse(liesSicher(pfad) ?? "") as { titel?: unknown } | null;
-    return roh && typeof roh === "object" && typeof roh.titel === "string" ? roh.titel : slug;
+    return { titel: roh && typeof roh === "object" && typeof roh.titel === "string" ? roh.titel : slug, offeneFragen: offeneFragenZahl(roh) };
   } catch {
-    return slug;
+    return { titel: slug, offeneFragen: null };
   }
 }
 
 const REGISTERDATEI = /^([A-Za-z0-9._-]+)\.json$/;
 
 function listeSitzungen() {
-  const eintraege: { repo: string; slug: string; titel: string; geaendert: string; pfad: string | null; live: boolean; beendet: boolean }[] = [];
+  const eintraege: { repo: string; slug: string; titel: string; offeneFragen: number | null; geaendert: string; pfad: string | null; live: boolean; beendet: boolean }[] = [];
   const repos: { wurzel: string; repo: string }[] = [];
   for (const wurzel of WURZELN) {
     try {
@@ -309,7 +314,7 @@ function listeSitzungen() {
       }
       // The same repo name under a later root is shadowed, as in ortVon.
       if (eintraege.some((e) => e.repo === repo && e.slug === slug)) continue;
-      eintraege.push({ repo, slug, titel: titelVon(pfad, slug), geaendert, pfad: path.join(wurzel, repo), live: false, beendet: false });
+      eintraege.push({ repo, slug, ...kopfVon(pfad, slug), geaendert, pfad: path.join(wurzel, repo), live: false, beendet: false });
     }
   }
   let ids: string[] = [];
@@ -329,8 +334,8 @@ function listeSitzungen() {
       Object.assign(da, { pfad: ort.repoPfad, live: true, beendet: r.beendet !== undefined, geaendert: um > da.geaendert ? um : da.geaendert });
       continue;
     }
-    const titel = ort.yaml ? titelVon(ort.yaml, id) : typeof r.fortschritt?.titel === "string" && r.fortschritt.titel ? r.fortschritt.titel : id;
-    eintraege.push({ repo: ort.repo, slug: id, titel, geaendert: um, pfad: ort.repoPfad, live: true, beendet: r.beendet !== undefined });
+    const kopf = ort.yaml ? kopfVon(ort.yaml, id) : { titel: typeof r.fortschritt?.titel === "string" && r.fortschritt.titel ? r.fortschritt.titel : id, offeneFragen: null };
+    eintraege.push({ repo: ort.repo, slug: id, ...kopf, geaendert: um, pfad: ort.repoPfad, live: true, beendet: r.beendet !== undefined });
   }
   return eintraege.sort((a, b) => (a.geaendert < b.geaendert ? 1 : a.geaendert > b.geaendert ? -1 : 0));
 }
@@ -581,6 +586,9 @@ function baumVon(repoPfad: string): Promise<Baum | null> {
 // Nur fuer einen Pfad aus dem Dateibaum: so liest der Server nichts ausserhalb der Wurzel. Geaendert
 // oder geloescht: git diff HEAD; unversioniert: der Inhalt als neue Datei; ohne Marke: der Inhalt.
 // Mit branch= (E3) nur eine Datei, die dieser but-Branch committet hat: der Diff gegen seine Basis.
+// Ausserhalb des Baums (git-ignoriert) nur eine Datei, die das Register dieser Sitzung als gelesen
+// oder geschrieben fuehrt, nur an eine Verbindung vom eigenen Rechner (Loopback), nach realpath in
+// der Wurzel und nicht mit einem Secret-Namen.
 
 const DIFF_PUFFER = 32 * 1024 * 1024;
 const diffPuffer = Buffer.allocUnsafe(DIFF_LESEN_HOECHSTENS);
@@ -615,6 +623,21 @@ async function diffVon(repoPfad: string, d: BaumDatei): Promise<DiffAntwort | nu
   const datei = liesAnfang(path.join(repoPfad, d.p));
   if (!datei) return { p: d.p, art: "binaer", text: "Keine regulaere Datei (Symlink oder nicht lesbar), Inhalt nicht gelesen", gekappt: false };
   return diffAntwort(d.p, art, datei.inhalt, datei.gekappt);
+}
+
+/** Der Inhalt einer Datei ausserhalb des Baums; null, wenn sie nach realpath nicht in der Wurzel liegt. */
+function ignoriertVon(repoPfad: string, p: string): DiffAntwort | null {
+  try {
+    const wurzel = realpathSync(repoPfad);
+    // The last part stays unresolved: liesAnfang refuses a symlink there itself.
+    const ordner = realpathSync(path.dirname(path.join(wurzel, p)));
+    if (ordner !== wurzel && !ordner.startsWith(wurzel + path.sep)) return null;
+    const datei = liesAnfang(path.join(ordner, path.basename(p)));
+    if (!datei) return { p, art: "binaer", text: "Keine regulaere Datei (Symlink oder nicht lesbar), Inhalt nicht gelesen", gekappt: false };
+    return diffAntwort(p, "datei", datei.inhalt, datei.gekappt);
+  } catch {
+    return null;
+  }
 }
 
 /** Eine in einem but-Branch committete Datei (E3): git diff zwischen seiner Basis und dem Branch. */
@@ -1103,7 +1126,13 @@ async function antworte(req: Request, server: Bun.Server): Promise<Response> {
         return antwort ? json(antwort) : json({ fehler: "git diff fehlgeschlagen" }, 500);
       }
       const eintrag = baum.dateien.find((x) => x.p === p);
-      if (!eintrag) return json({ fehler: "Datei steht nicht im Dateibaum" }, 404);
+      if (!eintrag) {
+        if (!registerBeruehrt(ort.live, p)) return json({ fehler: "Datei steht nicht im Dateibaum" }, 404);
+        if (!istLoopback(server.requestIP(req)?.address)) return json({ fehler: "Git-ignorierte Datei, Inhalt nur fuer Aufrufe vom eigenen Rechner" }, 403);
+        if (geheimerName(p)) return json({ fehler: "Git-ignorierte Datei mit Secret-Namen, Inhalt wird nicht gezeigt" }, 403);
+        const antwort = ignoriertVon(ort.repoPfad!, p);
+        return antwort ? json(antwort) : json({ fehler: "Datei nicht lesbar oder nicht in der Wurzel der Sitzung" }, 404);
+      }
       const antwort = await diffVon(ort.repoPfad!, eintrag);
       return antwort ? json(antwort) : json({ fehler: "git diff fehlgeschlagen" }, 500);
     }
