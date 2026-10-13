@@ -184,7 +184,7 @@ Anfrage an `/api/host` und endet, wenn 5 Minuten lang keine kam; ein ruhender Se
 Verlauf kommt als Feld `verlauf` in der Antwort von `/api/host`: `{ takt: 15, vor: [Sekunden vor jetzt], cpu: [%], ram: [%] }`,
 die Reihen gleich lang, älteste Probe zuerst; ohne Proben fehlt die Zeile und der Block bleibt wie zuvor.
 Das Modul steckt in `ansicht/live-plan.js` (`hostTeil`) und sitzt in der Sitzungsseite und in der Liste aller
-Sitzungen; das Firstmate-Cockpit im Terminal zeigt weder Rechner noch Verbrauch. Tests: `node --test verlauf.test.ts host.test.ts`.
+Sitzungen; das Firstmate-Cockpit im Terminal zeigt weder Rechner noch Verbrauch.
 
 Die Seite fragt alle 10 Sekunden, aber nur, solange sie sichtbar ist: ein verborgener Tab pausiert,
 beim Sichtbarwerden kommt sofort eine Messung. `GET /api/host` liest direkt aus `/proc` (kein `top`, `ps`
@@ -194,7 +194,7 @@ und der Takt endet. Im Druck ist der Block ausgeblendet.
 
 Wie der Rest der Seite hat `/api/host` keine Anmeldung. Befehlszeilen (mit Argumenten) und Arbeitsverzeichnisse
 stehen dort für alle Prozesse, die `/proc` dem Server zeigt, also jedem offen, der die Seite erreicht;
-Argumente werden nicht geschwärzt. Tests: `node --test host.test.ts`.
+Argumente werden nicht geschwärzt. Tests: `node --test host.test.ts verlauf.test.ts`.
 
 ## Lizenz
 
