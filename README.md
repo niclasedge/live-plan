@@ -127,8 +127,8 @@ Tests: `node --test cockpit.test.ts firstmate.test.ts`.
 Liegt die Wurzel einer Sitzung in einem Firstmate-Home, zeigt ihre Seite im Browser
 (`http://localhost:4410/firstmate/<sitzung>`) zusätzlich zu Verbrauch, Fortschritt und Dateien den
 Abschnitt Firstmate. Ein Home erkennt die Ansicht am Aufbau (`bin/fm-spawn.sh`, `state/`, `data/`),
-nicht am Namen; ist die Wurzel keins, gilt wie im Cockpit `FM_HOME`, sonst `FIRSTMATE_HOME` aus der
-Umgebung des Servers, wenn es dort eins gibt.
+nicht am Namen; `FM_HOME` und `FIRSTMATE_HOME` aus der Umgebung des Servers gelten hier nicht, nur
+im Cockpit.
 
 ![Abschnitt Firstmate einer Beispiel-Sitzung](docs/firstmate.png)
 

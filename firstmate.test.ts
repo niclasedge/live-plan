@@ -7,7 +7,7 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { test } from "node:test";
 import * as firstmate from "./firstmate.ts";
-import { firstmateHome, firstmateSicht, githubRepo, holePrs, istFirstmateHome, leseProjekte, parseProjekte, prVorrat, VERLAUF_N } from "./firstmate.ts";
+import { firstmateSicht, githubRepo, holePrs, istFirstmateHome, leseProjekte, parseProjekte, prVorrat, VERLAUF_N } from "./firstmate.ts";
 import type { GhLauf } from "./firstmate.ts";
 import * as cockpit from "./cockpit.ts";
 
@@ -49,24 +49,6 @@ test("istFirstmateHome: am Aufbau erkannt, nicht am Namen", () => {
   } finally {
     rmSync(home, { recursive: true, force: true });
     rmSync(halb, { recursive: true, force: true });
-  }
-});
-
-test("firstmateHome: Wurzel vor FM_HOME vor FIRSTMATE_HOME, nur wenn es ein Home ist", () => {
-  const wurzel = neuesHome();
-  const fm = neuesHome();
-  const fw = neuesHome();
-  const kein = mkdtempSync(path.join(os.tmpdir(), "fm-kein-"));
-  try {
-    assert.equal(firstmateHome(wurzel, { FM_HOME: fm }), wurzel);
-    assert.equal(firstmateHome(kein, { FM_HOME: fm, FIRSTMATE_HOME: fw }), fm);
-    assert.equal(firstmateHome(kein, { FIRSTMATE_HOME: fw }), fw);
-    assert.equal(firstmateHome(null, { FM_HOME: "", FIRSTMATE_HOME: fw }), fw);
-    // wie im Cockpit gilt FM_HOME, wenn es gesetzt ist, auch wenn es kein Home ist
-    assert.equal(firstmateHome(kein, { FM_HOME: kein, FIRSTMATE_HOME: fw }), null);
-    assert.equal(firstmateHome(kein, {}), null);
-  } finally {
-    for (const d of [wurzel, fm, fw, kein]) rmSync(d, { recursive: true, force: true });
   }
 });
 

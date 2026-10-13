@@ -58,7 +58,7 @@ import {
   type Register,
   type Verlaufseintrag,
 } from "./logik.ts";
-import { firstmateHome, prVorrat, type FirstmateSicht, type GhLauf } from "./firstmate.ts";
+import { istFirstmateHome, prVorrat, type FirstmateSicht, type GhLauf } from "./firstmate.ts";
 
 const WURZELN = wurzeln(process.env);
 const PORT = Number.parseInt(process.env.LIVE_PLAN_PORT ?? "", 10) || 4410;
@@ -679,9 +679,8 @@ async function aboAntwort(): Promise<{ abo: ReturnType<typeof aboLage> | null; f
 
 // --- Firstmate (GET .../firstmate) ---------------------------------------------------------------
 //
-// Ist die Wurzel der Sitzung ein Firstmate-Home (sonst FM_HOME bzw. FIRSTMATE_HOME), liest
-// firstmate.ts in einem eigenen Prozess Worker, Captain-Inbox, Warteschlange und Projekte; so halten
-// git und tmux keine Anfrage auf. Das Ergebnis gilt FM_VORHALTEN_MS, danach liefert die Anfrage den
+// Ist die Wurzel der Sitzung ein Firstmate-Home, liest firstmate.ts in einem eigenen Prozess Worker,
+// Captain-Inbox, Warteschlange und Projekte; so halten git und tmux keine Anfrage auf. Das Ergebnis gilt FM_VORHALTEN_MS, danach liefert die Anfrage den
 // alten Stand und ein neuer entsteht im Hintergrund; nur der allererste wird abgewartet. Die offenen
 // PRs je Projekt fragt gh ebenfalls im Hintergrund (je Aufruf 10 s, 60 s vorgehalten); was noch
 // fehlt, heisst `laedt`, ein Fehler `unbekannt`. Pane-Inhalte liest firstmate.ts nie. Ein Token aus
@@ -1087,7 +1086,7 @@ async function antworte(req: Request, server: Bun.Server): Promise<Response> {
       return baum ? json(baum) : json({ fehler: "Sitzung ohne Git-Wurzel" }, 404);
     }
     if (lesen && d === "firstmate" && teile.length === 4) {
-      const home = firstmateHome(ort.repoPfad, process.env);
+      const home = ort.repoPfad && istFirstmateHome(ort.repoPfad) ? ort.repoPfad : null;
       return json(home ? await firstmateDaten(home) : { home: null });
     }
     if (lesen && d === "diff" && teile.length === 4) {

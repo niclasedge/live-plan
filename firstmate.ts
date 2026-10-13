@@ -464,13 +464,6 @@ export function homeAusUmgebung(env: Record<string, string | undefined>): string
   return env.FM_HOME || env.FIRSTMATE_HOME || null;
 }
 
-// Das Home einer Sitzung: ihre Wurzel, wenn sie eins ist, sonst das Home aus der Umgebung, wenn es eins ist.
-export function firstmateHome(wurzel: string | null, env: Record<string, string | undefined>): string | null {
-  if (wurzel && istFirstmateHome(wurzel)) return wurzel;
-  const aus = homeAusUmgebung(env);
-  return aus && istFirstmateHome(aus) ? aus : null;
-}
-
 // --- Projekte ------------------------------------------------------------------------------
 
 export interface Registereintrag {
