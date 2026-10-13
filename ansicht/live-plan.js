@@ -2219,6 +2219,13 @@
     var S = Array.isArray(stimmen) ? stimmen.filter(Boolean) : [];
     return (name && S.find(function (s) { return s.name === name; })) || S.find(function (s) { return /^de\b/i.test(String(s.lang || "")); }) || null;
   }
+  /** Spricht stumm eine leere Aeusserung; im Klick selbst gibt das auch Safari die Sprachausgabe fuer spaeter frei. */
+  function tonFreischalten(sprache, Aeusserung) {
+    if (!sprache || !Aeusserung) return;
+    var u = new Aeusserung("");
+    u.volume = 0;
+    sprache.speak(u);
+  }
   /**
    * Das Einstellungsmenue im Kopf der Uebersicht: ⚙ klappt es auf, darin Vorlesen an/aus, die Stimme und die
    * letzte Ansage nochmal. `z`: { kann, vorlesen, frei, stimmen, stimme, auf, letzte, fehler }; `kann` false, wenn
@@ -2252,6 +2259,7 @@
     einstellungenMenue: einstellungenMenue,
     stimmenListe: stimmenListe,
     stimmeWahl: stimmeWahl,
+    tonFreischalten: tonFreischalten,
     ablaufSvg: ablaufSvg,
     doku: doku,
     seite: seite,
@@ -2830,8 +2838,7 @@
       if (wieder) wieder.focus();
     } else if (t.hasAttribute("data-ansage-auto")) {
       var an = !EINST.vorlesen;
-      // Gesprochen im Klick selbst: so schaltet auch Safari die Sprachausgabe fuer spaeter frei.
-      if (an) sprich({ repo: "", text: "Vorlesen an." }, true);
+      if (an) tonFreischalten(SPRACHE, G.SpeechSynthesisUtterance);
       else if (SPRACHE) SPRACHE.cancel();
       speichereEinstellungen({ vorlesen: an });
     } else if (t.hasAttribute("data-ansage-letzte")) sprich(ANSAGEN[0], true);
@@ -2841,9 +2848,10 @@
     }
     return true;
   }
-  /** Der erste Klick oder Tastendruck der Seite gibt die Sprachausgabe frei; der Hinweis geht danach weg. */
+  /** Der erste Klick oder Tastendruck der Seite gibt die Sprachausgabe stumm frei; der Hinweis geht danach weg. */
   function ansageFreigeben() {
     if (ansageFrei) return;
+    tonFreischalten(SPRACHE, G.SpeechSynthesisUtterance);
     ansageFrei = true;
     // Erst nach dem Klick neu zeichnen, sonst ersetzte das Neuzeichnen den Knopf, bevor der Klick ihn erreicht.
     if (wurzel.querySelector(".lp-einst .an-hinweis")) setTimeout(zeichneEinstellungen, 0);

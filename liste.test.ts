@@ -37,6 +37,7 @@ interface Ansicht {
   einstellungenMenue: (z: unknown) => string;
   stimmenListe: (stimmen: unknown) => { name: string; lang: string }[];
   stimmeWahl: (stimmen: unknown, name: unknown) => { name: string } | null;
+  tonFreischalten: (sprache: unknown, aeusserung: unknown) => void;
   setzeJetzt: (ms: number) => void;
 }
 
@@ -99,7 +100,7 @@ const STIMMEN = [{ name: "Daniel", lang: "en-GB" }, { name: "Petra", lang: "de-D
 test("ansageSprechtext: erst das Repo, dann der Text", () => {
   const { ansageSprechtext } = ansicht();
   assert.equal(ansageSprechtext({ repo: "firstmate", text: "Der PR ist offen." }), "firstmate: Der PR ist offen.");
-  assert.equal(ansageSprechtext({ repo: "", text: "Vorlesen an." }), "Vorlesen an.");
+  assert.equal(ansageSprechtext({ repo: "", text: "Der PR ist offen." }), "Der PR ist offen.");
 });
 
 test("letzteAnsagen: je Sitzung (Repo und Id) die neueste, ohne Id keine", () => {
@@ -141,6 +142,16 @@ test("einstellungenMenue: Hinweis vor dem ersten Klick oder ohne Sprachausgabe, 
   assert.match(stumm, /Dieser Browser kann nicht vorlesen/);
   assert.match(stumm, /data-ansage-stimme disabled/);
   assert.match(stumm, /data-ansage-letzte disabled/);
+});
+
+test("tonFreischalten: spricht eine leere, stumme Aeusserung und keine Ansage; ohne Sprachausgabe nichts", () => {
+  const { tonFreischalten } = ansicht();
+  const gesprochen: { text: string; volume: number }[] = [];
+  class Aeusserung { volume = 1; text: string; constructor(text: string) { this.text = text; } }
+  tonFreischalten({ speak: (u: Aeusserung) => gesprochen.push({ text: u.text, volume: u.volume }) }, Aeusserung);
+  assert.deepEqual(gesprochen, [{ text: "", volume: 0 }]);
+  assert.doesNotThrow(() => tonFreischalten(null, Aeusserung));
+  assert.doesNotThrow(() => tonFreischalten({ speak: () => assert.fail("ohne Aeusserung kein Sprechen") }, undefined));
 });
 
 test("Stimmen: deutsche zuerst ohne Doppel; gespeicherter Name, sonst die erste deutsche, die Wahl ist ausgewaehlt", () => {
