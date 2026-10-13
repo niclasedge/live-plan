@@ -421,3 +421,35 @@ test("Aufruf ohne Terminal und mit --once/--json gibt einmal aus und endet", () 
     rmSync(home, { recursive: true, force: true });
   }
 });
+
+test("Firstmate-Home: FIRSTMATE_HOME gilt, wenn FM_HOME fehlt", () => {
+  const home = mkdtempSync(path.join(os.tmpdir(), "cockpit-test-"));
+  mkdirSync(path.join(home, "state"), { recursive: true });
+  const env = { ...process.env, FIRSTMATE_HOME: home };
+  delete env.FM_HOME;
+  const skript = path.join(import.meta.dirname, "cockpit.ts");
+  try {
+    const r = spawnSync(process.execPath, [skript, "--json"], { encoding: "utf8", env, timeout: 10000 });
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(JSON.parse(r.stdout).home, home);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("Firstmate-Home: FM_HOME gewinnt vor FIRSTMATE_HOME", () => {
+  const fm = mkdtempSync(path.join(os.tmpdir(), "cockpit-test-"));
+  const fw = mkdtempSync(path.join(os.tmpdir(), "cockpit-test-"));
+  mkdirSync(path.join(fm, "state"), { recursive: true });
+  mkdirSync(path.join(fw, "state"), { recursive: true });
+  const env = { ...process.env, FM_HOME: fm, FIRSTMATE_HOME: fw };
+  const skript = path.join(import.meta.dirname, "cockpit.ts");
+  try {
+    const r = spawnSync(process.execPath, [skript, "--json"], { encoding: "utf8", env, timeout: 10000 });
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(JSON.parse(r.stdout).home, fm);
+  } finally {
+    rmSync(fm, { recursive: true, force: true });
+    rmSync(fw, { recursive: true, force: true });
+  }
+});
