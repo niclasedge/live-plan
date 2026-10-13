@@ -163,6 +163,25 @@ Weil der Server ohne Anmeldung im LAN erreichbar ist, zeigt die Ansicht **keine 
 tmux-Panes**; die letzten Pane-Zeilen gibt es nur im Terminal (`cockpit --once`). Statuszeilen,
 PR-Adressen, Zweige und Titel aus dem Backlog stehen dagegen jedem offen, der die Seite erreicht.
 
+### Rechner in der Ansicht
+
+Über dem Verbrauch zeigt die Seite den Block Rechner: die Last des Rechners, auf dem der Server läuft,
+knapp wie der Verbrauch. Erste Zeile CPU in Prozent (gemessen zwischen zwei Abfragen, die erste wartet
+rund 300 ms), Last (1/5/15 Minuten), RAM benutzt / gesamt (frei) und Swap benutzt / gesamt; zweite Zeile
+`/tmp` und `/` mit belegt / Größe (Prozent). Darunter klappt `Top-Prozesse` auf: je fünf nach CPU und nach
+RAM mit CPU, RSS, Swap, PID, Laufzeit, Arbeitsverzeichnis (`$HOME` als `~`) und Befehl (Programm ohne
+Pfad plus Argumente, auf 60 Zeichen gekürzt).
+
+Die Seite fragt alle 10 Sekunden, aber nur, solange sie sichtbar ist: ein verborgener Tab pausiert,
+beim Sichtbarwerden kommt sofort eine Messung. `GET /api/host` liest direkt aus `/proc` (kein `top`, `ps`
+oder Shell) und hält die Messung 5 s vor, sodass mehrere Tabs eine teilen; ist die CPU-Basis älter als
+15 s, wird sie neu gesetzt. Nur Linux: sonst meldet die Antwort `verfuegbar: false`, der Block entfällt
+und der Takt endet. Im Druck ist der Block ausgeblendet.
+
+Wie der Rest der Seite hat `/api/host` keine Anmeldung. Befehlszeilen (mit Argumenten) und Arbeitsverzeichnisse
+stehen dort für alle Prozesse, die `/proc` dem Server zeigt, also jedem offen, der die Seite erreicht;
+Argumente werden nicht geschwärzt. Tests: `node --test host.test.ts`.
+
 ## Lizenz
 
 MIT, siehe [LICENSE](LICENSE).
