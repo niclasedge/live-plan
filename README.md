@@ -176,6 +176,14 @@ im Cockpit.
   Auftrag); ohne passende Sitzung steht `—`. Das Ende einer abgeschlossenen Aufgabe ist das Ende der
   Sitzung, sonst die letzte Änderung in `data/<id>/`. Das Markdown wird im Browser ohne rohes HTML
   gerendert (alles maskiert, Links nur auf `https://`).
+- **Worker-Karte:** die Details eines laufenden Workers. Kopf mit Repo, Art, Modell mit Effort, Laufzeit und
+  Zustand (ohne Statuszeile steht „arbeitet, noch keine Meldung“); Meta in Gruppen Ort, Lauf und Liefern,
+  die internen Zähler nur hinter „alle“; Statusverlauf mit Abstand zum Start und dem Verb als Marke (leer:
+  Worker melden nur Phasenwechsel, die Statusdatei entsteht mit der ersten Meldung); Steuerung mit wartenden und
+  erledigten Inbox-Nachrichten; Befehle zum Kopieren, darunter `tail -F` auf die Statusdatei, `fm-peek` und
+  `fm-crew-state`. Die Zeilen des Panes zeigt auch die Karte nie.
+
+  ![Karte eines Workers](docs/agent-karte.png)
 - **Projekte:** je Klon unter `projects/` Beschreibung und Haltung aus `data/projects.md`, Zweig,
   sauber oder geändert, ahead/behind, letzter Commit, „zuletzt aktualisiert“ (letzter `git fetch`,
   mtime von `FETCH_HEAD`), die Worker auf dem Projekt und die offenen PRs.
