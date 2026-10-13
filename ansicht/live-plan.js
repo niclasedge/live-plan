@@ -1433,7 +1433,9 @@
   var FM = null;
   /** Id des Workers, dessen Details im Modal stehen. */
   var fmAuf = null;
-  var FM_ZUSTAND = { working: "●", paused: "‖", blocked: "■", "needs-decision": "?", done: "✓", failed: "✗", dead: "†", unknown: "·" };
+  var FM_ZUSTAND = { working: "●", "ohne-meldung": "●", paused: "‖", blocked: "■", "needs-decision": "?", done: "✓", failed: "✗", dead: "†", unknown: "·" };
+  // Der Zustand in Worten, wie die Karte ihn nennt; "ohne-meldung": das Fenster lebt, eine Statuszeile fehlt noch.
+  var FM_KARTE = { working: "arbeitet", "ohne-meldung": "arbeitet, noch keine Meldung", paused: "pausiert", blocked: "blockiert", "needs-decision": "wartet auf Entscheidung", done: "fertig", failed: "fehlgeschlagen", dead: "Fenster fehlt", unknown: "unbekannt" };
   var FM_WARTESCHLANGE_N = 8;
   function isoAus(sek) {
     return typeof sek === "number" && isFinite(sek) && sek > 0 ? new Date(sek * 1000).toISOString() : "";
@@ -1448,6 +1450,11 @@
   }
   function fmZustand(w) {
     return FM_ZUSTAND[w && w.zustand] ? w.zustand : "unknown";
+  }
+  /** Der Zustand, wie die Karte ihn zeigt: zustandKarte aus firstmate.ts, sonst der Zustand. */
+  function fmKarte(w) {
+    var k = w && w.zustandKarte;
+    return FM_KARTE[k] ? k : fmZustand(w);
   }
   function fmWorker(id) {
     return FM && Array.isArray(FM.worker) ? FM.worker.find(function (w) { return w && w.id === id; }) : null;
@@ -1815,42 +1822,69 @@
       return '<li><span class="fm-zweck">' + esc(b.zweck) + '</span><code>' + esc(b.befehl) + '</code><button type="button" class="kopieren" data-kopiere="' + esc(b.befehl) + '">kopieren</button></li>';
     }).join("") + "</ul>";
   }
-  /** Die Details eines Workers im Modal: wie `cockpit --once`, ohne Pane-Zeilen; "t:ID" ist eine Aufgabe der Flotte. */
+  /** Laufzeit der Karte: vom Start bis jetzt; bei fertig oder gescheitert bis zur letzten Meldung. */
+  function fmLaufzeit(w) {
+    if (!w.gestartet) return "";
+    var letzte = w.status && w.status.letzte;
+    var ende = (w.zustand === "done" || w.zustand === "failed") && letzte && letzte.at ? letzte.at : zahl(FM.zeit) || Math.floor(Date.now() / 1000);
+    return flDauer((ende - w.gestartet) / 60);
+  }
+  /** Eine Gruppe der Meta als Zeilen aus Schluessel und Wert; pr ist ein Link, sonst Text. */
+  function fmMetaZeilen(eintraege) {
+    return eintraege.map(function (e) {
+      return "<dt>" + esc(e.schluessel) + "</dt><dd>" + (e.schluessel === "pr" ? fmLink(e.wert, e.wert) : esc(e.wert)) + "</dd>";
+    }).join("");
+  }
+  /** Die Karte eines Workers im Modal: Kopf, Meta in Gruppen, Statusverlauf, Steuerung, Befehle; ohne Pane-Zeilen. "t:ID" ist eine Aufgabe der Flotte. */
   function fmModal(id) {
     if (typeof id === "string" && id.indexOf("t:") === 0) return flAufgabeModal(id.slice(2));
     var w = id && fmWorker(id);
     if (!w) return "";
-    var m = w.meta || {}, z = fmZustand(w), fe = w.fenster || {}, wt = w.worktree;
-    var feld = function (name, wert) { return wert ? "<dt>" + esc(name) + "</dt><dd>" + wert + "</dd>" : ""; };
-    var lebt = fe.lebt === null || fe.lebt === undefined ? "?" : fe.lebt ? "lebt" : "FEHLT";
-    var felder =
-      feld("Projekt", esc([m.project, m.kind && "kind=" + m.kind, m.mode && "mode=" + m.mode, m.yolo && "yolo=" + m.yolo].filter(Boolean).join("  "))) +
-      feld("Harness", esc([m.harness, m.model && "model=" + m.model, m.effort && "effort=" + m.effort, m.backend && "backend=" + m.backend, m.remote_host && "remote=" + m.remote_host].filter(Boolean).join("  "))) +
-      feld("Gestartet", w.gestartet ? zeitAngabe(isoAus(w.gestartet)) + " (" + esc(ortszeit(isoAus(w.gestartet))) + ")" : "") +
-      feld("Fenster", fe.ziel ? esc(fe.ziel + "  " + lebt + (fe.befehl ? "  " + fe.befehl : "")) + (fe.aktivitaet ? " · aktiv " + zeitAngabe(isoAus(fe.aktivitaet)) : "") : "keins") +
-      feld("Busy", w.busy ? esc(w.busy.zustand + (w.busy.quelle ? " (" + w.busy.quelle + ")" : "")) + (w.busy.ts ? " " + zeitAngabe(isoAus(w.busy.ts)) : "") : "") +
-      feld("Inbox", w.inbox ? esc(w.inbox.wartend.length + " wartend" + (w.inbox.wartend.length ? " (" + w.inbox.wartend.join(", ") + ")" : "") + ", " + w.inbox.erledigt + " erledigt") : "") +
-      feld("PR", m.pr ? fmLink(m.pr, m.pr) : "") +
-      (wt ? feld("Worktree", esc(wt.pfad + (wt.da ? "" : "  (nicht da)"))) +
-        (wt.da ? feld("Git", esc((wt.zweig || "?") + (m.branch && wt.zweig !== m.branch ? " (Meta: " + m.branch + ")" : "") + "  " +
-          (wt.ahead === null || wt.ahead === undefined ? "kein Upstream" : wt.upstream + " +" + wt.ahead + " -" + wt.behind) + "  " + zahl(wt.geaendert) + " geändert")) + feld("Commit", esc(wt.letzterCommit || "")) : "")
-        : feld("Zweig", esc(m.branch || ""))) +
-      feld("Daten", w.daten && w.daten.dateien && w.daten.dateien.length ? esc(w.daten.ordner + "/ (" + w.daten.dateien.join(", ") + ")") : "");
-    var zeile = function (s) {
-      return '<li class="fm-v-' + esc(s.verb) + '"><span class="fm-verb">' + esc(s.verb) + (s.key ? " [" + esc(s.key) + "]" : "") + "</span>" + (s.at ? zeitAngabe(isoAus(s.at)) : '<span class="unbekannt">?</span>') + " " + esc(s.text) + "</li>";
+    var m = w.meta || {}, zk = fmKarte(w), fe = w.fenster || {}, wt = w.worktree, dt = w.daten || {};
+    var gruppe = function (name) {
+      var g = (Array.isArray(w.metaGruppen) ? w.metaGruppen : []).find(function (x) { return x && x.name === name; });
+      return g && Array.isArray(g.eintraege) ? g.eintraege : [];
     };
+    var zeile = function (name, wert) { return wert ? "<dt>" + esc(name) + "</dt><dd>" + wert + "</dd>" : ""; };
+    var ohne = function (t) { return t ? esc(t) : "—"; };
+    var art = m.kind === "scout" ? "Scout" : m.kind === "ship" ? "Umsetzung" : m.kind;
+    var kopf = '<dl class="fm-felder fm-kopf">' + zeile("Repo", ohne(m.project && fmProjektName(m.project))) + zeile("Art", ohne(art)) +
+      zeile("Modell", ohne([m.model, m.effort].filter(Boolean).join(" · "))) + zeile("Laufzeit", ohne(fmLaufzeit(w))) + "</dl>";
+
+    var ortZeilen = fmMetaZeilen(gruppe("Ort")) +
+      zeile("Fenster", fe.ziel ? esc(fe.ziel + "  " + (fe.lebt === null || fe.lebt === undefined ? "?" : fe.lebt ? "lebt" : "FEHLT")) + (fe.aktivitaet ? " · aktiv " + zeitAngabe(isoAus(fe.aktivitaet)) : "") : "keins") +
+      (wt && wt.da ? zeile("Stand", fmZweig(w) + (wt.letzterCommit ? " · " + esc(wt.letzterCommit) : "")) : wt ? zeile("Stand", '<span class="unbekannt">Worktree nicht da</span>') : "") +
+      (dt.dateien && dt.dateien.length ? zeile("Daten", esc(dt.ordner + " (" + dt.dateien.join(", ") + ")")) : "");
+    var laufZeilen = fmMetaZeilen(gruppe("Lauf")) +
+      zeile("Busy", w.busy ? esc(w.busy.zustand + (w.busy.quelle ? " (" + w.busy.quelle + ")" : "")) + (w.busy.ts ? " " + zeitAngabe(isoAus(w.busy.ts)) : "") : "");
+    var alle = gruppe("alle"), alleSchluessel = "w:" + w.id + "/alle";
+    var block = function (name, zeilenHtml) { return zeilenHtml ? '<div class="fm-untertitel">' + name + '</div><dl class="fm-felder">' + zeilenHtml + "</dl>" : ""; };
+    var meta = block("Ort", ortZeilen) + block("Lauf", laufZeilen) + block("Liefern", fmMetaZeilen(gruppe("Liefern"))) +
+      (alle.length ? '<details class="fm-alle" data-fl-det="' + esc(alleSchluessel) + '"' + (flDetailOffen[alleSchluessel] ? " open" : "") + "><summary>alle · " + alle.length + '</summary><dl class="fm-felder">' + fmMetaZeilen(alle) + "</dl></details>" : "");
+
     var offen = w.status && Array.isArray(w.status.offen) ? w.status.offen : [];
     var verlauf = Array.isArray(w.verlauf) ? w.verlauf.slice().reverse() : [];
+    var zeileVerlauf = function (s) {
+      var versatz = s.at && w.gestartet ? "+" + flDauer((s.at - w.gestartet) / 60) : s.at ? flZeit(s.at) : "?";
+      return '<li class="fm-v-' + esc(s.verb) + '"><span class="fm-zeit"' + (s.at ? ' title="' + esc(ortszeit(isoAus(s.at))) + '"' : "") + ">" + esc(versatz) + '</span><span class="fl-marke fm-tag fm-v-' + esc(s.verb) + '">' + esc(s.verb + (s.key ? " [" + s.key + "]" : "")) + "</span>" + esc(s.text) + "</li>";
+    };
+    // Offene Zeilen, die im Verlauf fehlen (aelter als die letzten VERLAUF_N), stehen vorab; sonst zaehlt der Verlauf
+    var ausserhalb = offen.filter(function (o) { return !(w.verlauf || []).some(function (v) { return v.roh === o.roh; }); });
+    var verlaufInhalt = (ausserhalb.length ? '<div class="fm-untertitel">Offene Entscheidungen und Blocker</div><ul class="fm-verlauf">' + ausserhalb.map(zeileVerlauf).join("") + "</ul>" : "") +
+      (verlauf.length ? '<ul class="fm-verlauf">' + verlauf.map(zeileVerlauf).join("") + "</ul>" : '<p class="unbekannt">Noch keine Meldung: Worker melden nur Phasenwechsel, die Statusdatei entsteht mit der ersten Meldung.</p>');
+
+    var post = w.inbox || { wartend: [], erledigt: 0 }, wartend = Array.isArray(post.wartend) ? post.wartend : [];
+    var steuerung = '<h3 class="fm-h">Steuerung</h3><dl class="fm-felder">' + zeile("wartend", wartend.length + (wartend.length ? " · " + esc(wartend.join(", ")) : "")) + zeile("erledigt", String(zahl(post.erledigt))) + "</dl>";
     var befehle = Array.isArray(w.befehle) ? w.befehle : [];
-    return '<div class="lp-modal" data-modal-zu><div class="lp-modal-box lp-fm fm-z-' + z + '" role="dialog" aria-modal="true" aria-labelledby="lp-modal-titel" data-testid="firstmate-details">' +
-      '<div class="lp-modal-kopf"><h2 id="lp-modal-titel"><span class="fm-zeichen">' + FM_ZUSTAND[z] + '</span> <span class="mono">' + esc(w.id) + "</span>" + (w.titel ? " · " + esc(w.titel) : "") + "</h2>" +
-      '<span class="pfad">' + esc(z) + "</span>" +
+
+    return '<div class="lp-modal" data-modal-zu><div class="lp-modal-box lp-fm fm-z-' + zk + '" role="dialog" aria-modal="true" aria-labelledby="lp-modal-titel" data-testid="firstmate-details">' +
+      '<div class="lp-modal-kopf"><h2 id="lp-modal-titel"><span class="fm-zeichen">' + FM_ZUSTAND[zk] + '</span> <span class="mono">' + esc(w.id) + "</span>" + (w.titel ? " · " + esc(w.titel) : "") + "</h2>" +
+      '<span class="pfad">' + esc(FM_KARTE[zk]) + "</span>" +
       '<button type="button" class="zu" data-modal-zu aria-label="Schliessen (Esc)" title="Schliessen (Esc)">×</button></div>' +
-      '<div class="fm-details" tabindex="0"><dl class="fm-felder">' + felder + "</dl>" +
-      (offen.length ? '<h3 class="fm-h">Offene Entscheidungen und Blocker</h3><ul class="fm-verlauf">' + offen.map(zeile).join("") + "</ul>" : "") +
-      '<h3 class="fm-h">Statusverlauf <span class="zaehler">' + (w.status ? zahl(w.status.zeilen) : 0) + " Zeilen</span></h3>" +
-      (verlauf.length ? '<ul class="fm-verlauf">' + verlauf.map(zeile).join("") + "</ul>" : '<p class="unbekannt">noch keine Statuszeile</p>') +
-      (befehle.length ? '<h3 class="fm-h">Befehle</h3>' + fmBefehle(befehle) : "") +
+      '<div class="fm-details" tabindex="0">' + kopf +
+      '<h3 class="fm-h">Meta</h3>' + (meta || '<p class="unbekannt">keine Meta</p>') +
+      '<h3 class="fm-h">Statusverlauf <span class="zaehler">' + zahl(w.status && w.status.zeilen) + " Zeilen</span></h3>" + verlaufInhalt +
+      steuerung + (befehle.length ? '<h3 class="fm-h">Befehle</h3>' + fmBefehle(befehle) : "") +
       '<p class="klein unbekannt">Pane-Inhalte zeigt nur das Cockpit im Terminal.</p></div></div></div>';
   }
 

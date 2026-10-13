@@ -194,7 +194,8 @@ Platte. Wie das Cockpit liest die Ansicht nur (git ohne optionale Sperren, kein
 
 Weil der Server ohne Anmeldung im LAN erreichbar ist, zeigt die Ansicht **keine Inhalte der
 tmux-Panes**; die letzten Pane-Zeilen gibt es nur im Terminal (`cockpit --once`). Statuszeilen,
-PR-Adressen, Zweige und Titel aus dem Backlog stehen dagegen jedem offen, der die Seite erreicht.
+PR-Adressen, Zweige, Titel aus dem Backlog und die Meta der Worker stehen dagegen jedem offen, der die Seite
+erreicht. Schlüssel mit `token`, `secret`, `key`, `pass` oder `auth` im Namen fehlen dort.
 
 ### Rechner in der Ansicht
 
