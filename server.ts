@@ -67,7 +67,7 @@ import {
 } from "./logik.ts";
 import { hostSicht } from "./host.ts";
 import { verlauf } from "./verlauf.ts";
-import { istFirstmateHome, prVorrat, type FirstmateSicht, type GhLauf } from "./firstmate.ts";
+import { aufgabeDetail, gueltigeAufgabenId, istFirstmateHome, prVorrat, type FirstmateSicht, type GhLauf } from "./firstmate.ts";
 
 const WURZELN = wurzeln(process.env);
 const PORT = Number.parseInt(process.env.LIVE_PLAN_PORT ?? "", 10) || 4410;
@@ -780,7 +780,9 @@ async function aboAntwort(): Promise<{ abo: ReturnType<typeof aboLage> | null; f
 // gilt FM_VORHALTEN_MS, danach liefert die Anfrage den alten Stand und ein neuer entsteht im
 // Hintergrund; nur der allererste wird abgewartet. Die offenen
 // PRs je Projekt fragt gh ebenfalls im Hintergrund (je Aufruf 10 s, 60 s vorgehalten); was noch
-// fehlt, heisst `laedt`, ein Fehler `unbekannt`. Pane-Inhalte liest firstmate.ts nie. Ein Token aus
+// fehlt, heisst `laedt`, ein Fehler `unbekannt`. Pane-Inhalte liest firstmate.ts nie. Die Flotte
+// (Aufgaben des Tages je Repo) liest dazu das Sitzungsregister; die Details einer Aufgabe holt
+// GET .../firstmate/aufgabe/ID einzeln (nur data/ID/, nur vom eigenen Rechner). Ein Token aus
 // `gh auth token` geht nur in die Umgebung des einen gh-Aufrufs, nie in eine Antwort oder ein Log.
 
 const FM_SKRIPT = path.join(import.meta.dir, "firstmate.ts");
@@ -796,7 +798,7 @@ const prs = prVorrat(ghLauf);
 
 function fmLesen(home: string): Promise<FirstmateSicht | null> {
   return new Promise((resolve) => {
-    execFile(process.execPath, [FM_SKRIPT, "--json", home], { timeout: FM_ABBRUCH_MS, encoding: "utf8", maxBuffer: 32 * 1024 * 1024 }, (fehler, stdout) => {
+    execFile(process.execPath, [FM_SKRIPT, "--json", home, REGISTER], { timeout: FM_ABBRUCH_MS, encoding: "utf8", maxBuffer: 32 * 1024 * 1024 }, (fehler, stdout) => {
       if (fehler) return resolve(null);
       try {
         resolve(JSON.parse(stdout) as FirstmateSicht);
@@ -1213,6 +1215,16 @@ async function antworte(req: Request, server: Bun.Server): Promise<Response> {
       if (zugang.eintrag?.s === "D") return json({ fehler: "Datei ist geloescht" }, 404);
       const voll = zugang.ignoriert ? ignorierterPfad(ort.repoPfad!, p) : path.join(ort.repoPfad!, p);
       return bildAntwort(p, voll ? liesBild(voll) : null);
+    }
+    // Brief, Bericht, Zeitleiste und Dateiliste einer Aufgabe; Anweisungen und Berichte sind mehr als
+    // der Status im Kopf der Seite, daher nur fuer Aufrufe vom eigenen Rechner (wie git-ignorierte Dateien).
+    if (lesen && d === "firstmate" && teile.length === 6 && teile[4] === "aufgabe") {
+      const home = ort.repoPfad && istFirstmateHome(ort.repoPfad) ? ort.repoPfad : null;
+      if (!home) return json({ fehler: "Sitzung ohne Firstmate-Home" }, 404);
+      if (!istLoopback(server.requestIP(req)?.address)) return json({ fehler: "Anweisungen und Berichte nur fuer Aufrufe vom eigenen Rechner" }, 403);
+      if (!gueltigeAufgabenId(teile[5]!)) return json({ fehler: "Id darf nur aus A-Z a-z 0-9 . _ - bestehen" }, 400);
+      const detail = aufgabeDetail(home, teile[5]!);
+      return detail ? json(detail) : json({ fehler: "Aufgabe unbekannt" }, 404);
     }
     if (lesen && d === "diff" && teile.length === 4) {
       const p = url.searchParams.get("p");

@@ -688,8 +688,8 @@ body { margin: 0; background: var(--s1); font-family: var(--font); }
   .lp-agentenliste { display: none !important; }
 }
 
-/* Firstmate: Worker als Karten wie die Kaesten des Cockpits, Captain-Inbox und Warteschlange, Projekte
-   als Tabelle, Details im Modal. Farbe je Zustand ueber --fm. Nur Variablen des Themas. */
+/* Firstmate: Flotte als Linie je Repo (aufklappbar zu einer Zeile je Aufgabe, Details im Modal), Captain-Inbox
+   und Warteschlange, Projekte als Tabelle. Farbe je Zustand ueber --fm. Nur Variablen des Themas. */
 .lp-firstmate { margin: 30px 0 0; }
 .lp-firstmate .lp-h { margin-top: 0; }
 .fm-z-working { --fm: var(--ok); }
@@ -708,20 +708,9 @@ body { margin: 0; background: var(--s1); font-family: var(--font); }
 .fm-wartet.bereit { color: var(--ok); }
 .fm-h { display: flex; align-items: baseline; gap: 8px; margin: 18px 0 8px; font-size: 11px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-3); }
 .fm-h .zaehler { font-family: var(--mono); letter-spacing: 0; text-transform: none; }
-.fm-karten { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 10px; }
-.fm-karte { display: grid; gap: 3px; align-content: start; min-width: 0; padding: 8px 10px; border: 1px solid var(--line-2); border-top: 3px solid var(--fm); border-radius: var(--r-s); background: var(--s2); font-size: 12.5px; cursor: pointer; }
-.fm-karte:hover, .fm-karte:focus-visible { border-color: var(--fm); outline: none; }
-.fm-kopf { display: flex; gap: 6px; align-items: baseline; min-width: 0; }
-.fm-kopf b { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink-1); }
 .fm-zeichen { flex: none; color: var(--fm); font-weight: 700; }
-.fm-post { flex: none; margin-left: auto; color: var(--warn); font-size: 11.5px; }
-.fm-zustand { flex: none; margin-left: auto; color: var(--fm); font-family: var(--mono); font-size: 11px; }
-.fm-post + .fm-zustand { margin-left: 6px; }
-.fm-titel { color: var(--ink-1); }
-.fm-zeile, .fm-status { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink-2); }
-.fm-status { color: var(--ink-1); }
-.fm-status .uhr, .fm-verlauf .uhr { font-family: var(--mono); font-size: 11px; color: var(--ink-3); }
-.fm-karte .vz, .fm-projekte .vz { color: var(--ink-3); font-family: var(--mono); font-size: 11px; }
+.fm-verlauf .uhr { font-family: var(--mono); font-size: 11px; color: var(--ink-3); }
+.fm-projekte .vz { color: var(--ink-3); font-family: var(--mono); font-size: 11px; }
 .lp-firstmate a { color: var(--l1); }
 .lp-firstmate .unbekannt, .lp-fm .unbekannt { color: var(--ink-3); }
 .fm-tabelle { overflow-x: auto; }
@@ -754,3 +743,71 @@ body { margin: 0; background: var(--s1); font-family: var(--font); }
 .fm-befehle code { flex: 1; min-width: 0; overflow-wrap: anywhere; font-family: var(--mono); font-size: 11.5px; color: var(--ink-2); }
 .fm-befehle .kopieren { flex: none; padding: 1px 8px; border: 1px solid var(--line-2); border-radius: 6px; background: var(--s1); color: var(--ink-2); font-size: 11px; }
 .fm-projekte td.mono { white-space: nowrap; }
+
+/* Flotte: eine Linie je Repo auf dem gemeinsamen Zeitstrahl; Farben nur ueber Variablen des Themas. */
+.fl-seg { display: inline-block; position: absolute; top: 0; bottom: 0; border-radius: 3px; background: var(--l1); opacity: 0.75; }
+.fl-seg.fl-scout { background: var(--l5); }
+.fl-seg.fl-lauf { background: repeating-linear-gradient(45deg, var(--ok) 0 5px, color-mix(in srgb, var(--ok) 70%, #000) 5px 10px); opacity: 1; }
+.fl-seg.fl-stopp { background: repeating-linear-gradient(45deg, var(--warn) 0 5px, color-mix(in srgb, var(--warn) 70%, #000) 5px 10px); opacity: 1; }
+.fl-seg.fl-plan { background: transparent; border: 1px dashed var(--ok); box-sizing: border-box; opacity: 0.9; }
+.fl-seg.hl { opacity: 1; outline: 2px solid var(--ink-1); outline-offset: 1px; z-index: 2; }
+.fl-leg { margin: 0 0 8px; font-size: 11px; color: var(--ink-3); }
+.fl-leg .fl-seg { position: static; width: 14px; height: 6px; margin: 0 4px 0 10px; vertical-align: middle; }
+.fl-leg .fl-seg:first-child { margin-left: 0; }
+.fl-jetzt-leg { display: inline-block; width: 2px; height: 10px; margin: 0 4px 0 10px; vertical-align: middle; background: var(--rot); }
+.fl-gachse { padding: 0 13px; margin-bottom: -2px; }
+.fl-gachse .fl-achse, .fl-auf .fl-achse { position: relative; height: 14px; margin-bottom: 2px; border-bottom: 1px solid var(--line-2); }
+.fl-achse span { position: absolute; transform: translateX(-50%); font-size: 10px; color: var(--ink-3); }
+.fl-jetzt { position: absolute; top: -3px; bottom: -3px; border-left: 2px solid var(--rot); z-index: 3; }
+.fl-repo { margin: 8px 0; border: 1px solid var(--line-2); border-radius: var(--r-s); overflow: hidden; background: var(--s2); }
+.fl-kopf { display: flex; gap: 8px; align-items: baseline; padding: 8px 12px 2px; cursor: pointer; user-select: none; }
+.fl-kopf:focus-visible, .fl-zeile:focus-visible { outline: 2px solid var(--l1); outline-offset: -2px; }
+.fl-kopf b { font-size: 13px; color: var(--ink-1); }
+.fl-kpi { margin-left: auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; color: var(--ink-3); }
+.fl-pfeil { display: inline-block; width: 10px; color: var(--ink-3); transition: transform 0.15s; }
+.fl-repo.offen .fl-pfeil { transform: rotate(90deg); }
+.fl-strahl { padding: 4px 12px 10px; }
+.fl-linie { position: relative; height: 6px; border-radius: 3px; background: var(--s3); cursor: pointer; }
+.fl-auf { display: none; padding: 0 12px 10px; }
+.fl-repo.offen .fl-auf { display: block; }
+.fl-repo.offen .fl-strahl { display: none; }
+.fl-zeile { display: grid; grid-template-columns: 200px minmax(0, 1fr) minmax(0, 260px); gap: 8px; align-items: center; padding: 3px 4px; border-radius: 4px; cursor: pointer; }
+.fl-zeile:hover, .fl-zeile.hl { background: var(--s3); }
+.fl-lbl { min-width: 0; }
+.fl-lbl b, .fl-lbl span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fl-lbl b { font-size: 12px; font-weight: 600; color: var(--ink-1); }
+.fl-lbl span { font-size: 11px; color: var(--ink-3); }
+.fl-bahn { position: relative; height: 10px; border-radius: 3px; background: color-mix(in srgb, var(--s3) 70%, transparent); }
+.fl-meta { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; color: var(--ink-3); }
+.fl-tip { position: fixed; z-index: 90; display: none; max-width: 420px; padding: 6px 8px; border: 1px solid var(--line-2); border-radius: 6px; background: var(--s1); box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4); font-size: 11px; color: var(--ink-1); pointer-events: none; }
+.fl-tip div { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fl-tip .h { margin-top: 3px; color: var(--ink-3); }
+.lp-modal-box.lp-fl { width: min(900px, 94vw); }
+.fl-titel { margin: 4px 0 0; color: var(--ink-2); }
+.fl-marke { flex: none; padding: 1px 7px; border-radius: 9px; background: var(--s3); font-size: 11px; color: var(--ink-2); }
+.fl-marke.fl-m-lauf { color: var(--ok); }
+.fl-marke.fl-m-stopp { color: var(--warn); }
+.fl-marke.fl-m-fertig { color: var(--l1); }
+.fl-fakten { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; margin: 12px 0; }
+.fl-fakten > div { min-width: 0; padding: 6px 8px; border: 1px solid var(--line-2); border-radius: 6px; }
+.fl-fakten .breit { grid-column: span 2; }
+.fl-fakten .lab { display: block; font-size: 10px; letter-spacing: 0.05em; text-transform: uppercase; color: var(--ink-3); }
+.fl-fakten b { display: block; overflow: hidden; text-overflow: ellipsis; font-size: 13px; color: var(--ink-1); }
+.fl-teil details { margin-top: 8px; padding: 6px 10px; border: 1px solid var(--line-2); border-radius: 6px; }
+.fl-teil summary { cursor: pointer; font-size: 12px; color: var(--ink-3); }
+.fl-zl { width: 100%; border-collapse: collapse; font-size: 12px; }
+.fl-zl td { padding: 3px 6px; border-top: 1px solid var(--line-1); vertical-align: top; color: var(--ink-2); }
+.fl-zl td:first-child { white-space: nowrap; color: var(--ink-3); }
+.fl-dateien { color: var(--ink-3); overflow-wrap: anywhere; }
+.md { font-size: 13px; line-height: 1.55; color: var(--ink-2); overflow-wrap: anywhere; }
+.md h1, .md h2, .md h3, .md h4, .md h5, .md h6 { margin: 14px 0 6px; font-size: 14px; color: var(--ink-1); }
+.md p { margin: 6px 0; }
+.md ul, .md ol { margin: 6px 0; padding-left: 20px; }
+.md code { padding: 1px 4px; border-radius: 4px; background: var(--s3); font-family: var(--mono); font-size: 12px; }
+.md pre { margin: 6px 0; padding: 8px 10px; border-radius: 6px; background: var(--s3); overflow: auto; }
+.md pre code { padding: 0; background: none; }
+.md table { border-collapse: collapse; font-size: 12px; }
+.md td, .md th { padding: 3px 6px; border: 1px solid var(--line-2); text-align: left; }
+.md blockquote { margin: 6px 0; padding-left: 10px; border-left: 3px solid var(--line-2); color: var(--ink-3); }
+.md a { color: var(--l1); }
+@media (max-width: 760px) { .fl-zeile { grid-template-columns: minmax(0, 1fr); } .fl-fakten { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
