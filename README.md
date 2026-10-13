@@ -145,8 +145,6 @@ Abschnitt Firstmate. Ein Home erkennt die Ansicht am Aufbau (`bin/fm-spawn.sh`, 
 nicht am Namen; `FM_HOME` und `FIRSTMATE_HOME` aus der Umgebung des Servers gelten hier nicht, nur
 im Cockpit.
 
-![Abschnitt Firstmate einer Beispiel-Sitzung](docs/firstmate.png)
-
 - **Kopf:** Home, Zahl der Worker, Abschnitte des Backlogs, Captain-Inbox und die Warteschlange mit
   dem, worauf jeder Auftrag wartet.
 - **Flotte heute:** die Aufgaben des Tages (laufende aus `state/<id>.meta` und `.status`, abgeschlossene
