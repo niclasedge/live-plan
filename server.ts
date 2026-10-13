@@ -7,7 +7,7 @@
 // Verbindung beendet er sich nach LIVE_PLAN_LEERLAUF_MS (Vorgabe 60 Minuten).
 
 import { execFile } from "node:child_process";
-import { chmodSync, closeSync, constants, existsSync, fstatSync, lstatSync, openSync, readdirSync, readFileSync, readSync, realpathSync, renameSync, rmSync, statSync, watch, writeFileSync, writeSync, type FSWatcher } from "node:fs";
+import { chmodSync, closeSync, constants, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, realpathSync, renameSync, rmSync, statSync, watch, writeFileSync, writeSync, type FSWatcher } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -65,6 +65,7 @@ import {
   type Register,
   type Verlaufseintrag,
 } from "./logik.ts";
+import { ansagenDatei, einstellungenAus, einstellungenDatei, einstellungenMit, einstellungenYaml, leseAnsagen, type Einstellungen } from "./ansagen.ts";
 import { hostSicht } from "./host.ts";
 import { verlauf } from "./verlauf.ts";
 import { aufgabeDetail, gueltigeAufgabenId, istFirstmateHome, prVorrat, type FirstmateSicht, type GhLauf } from "./firstmate.ts";
@@ -82,6 +83,11 @@ const CACHE = process.env.LIVE_PLAN_CACHE || path.join(os.homedir(), ".cache", "
 const PID_DATEI = path.join(CACHE, `server-${PORT}.pid`);
 /** Das Register der Claude-Sitzungen (S5), ausserhalb jedes Repos; geschrieben von der Mod live-plan-sitzung. */
 const REGISTER = path.join(CACHE, "sitzungen");
+/** Die Ansagen aller Sitzungen (ansagen.ts), geschrieben von `live-plan sage` und der Mod; der Server liest nur. */
+const ANSAGEN = ansagenDatei(CACHE);
+/** Vorlesen und Stimme der Uebersicht (ansagen.ts), eine YAML daneben; geschrieben nur von POST /api/einstellungen. */
+const EINSTELLUNGEN = einstellungenDatei(CACHE);
+const EINSTELLUNGEN_HOECHSTENS = 2 * 1024;
 
 // --- Sicher lesen und schreiben (S1) -----------------------------------------------------------
 //
@@ -884,6 +890,28 @@ function setzeEntscheidung(pfad: string, frage: string, roh: string, eigen: bool
   });
 }
 
+// --- Einstellungen der Sprachausgabe ------------------------------------------------------------
+
+/** Die Einstellungen aus EINSTELLUNGEN; eine fehlende, kaputte oder unsichere Datei ergibt die Vorgabe. */
+function liesEinstellungen(): Einstellungen {
+  try {
+    return einstellungenAus(Bun.YAML.parse(liesSicher(EINSTELLUNGEN) ?? ""));
+  } catch {
+    return einstellungenAus(null);
+  }
+}
+
+/** Uebernimmt eine Aenderung aus dem Browser und schreibt die YAML neu; null, wenn sie nicht passt. */
+function setzeEinstellungen(aenderung: unknown): Promise<Einstellungen | null> {
+  return inReihe(EINSTELLUNGEN, () => {
+    const neu = einstellungenMit(liesEinstellungen(), aenderung);
+    if (!neu) return null;
+    mkdirSync(CACHE, { recursive: true });
+    schreibeAtomar(EINSTELLUNGEN, einstellungenYaml(neu));
+    return neu;
+  });
+}
+
 // --- Beobachten -------------------------------------------------------------------------------
 
 /**
@@ -1105,7 +1133,7 @@ function istApi(req: Request): boolean {
   }
 }
 
-/** Meldet jede Aenderung an YAML und Register-JSON; Schreibschuebe der Mod fasst sie zu einer Meldung je 250 ms zusammen. */
+/** Meldet jede Aenderung an den Dateien (YAML und Register-JSON, in der Uebersicht Ansagen und Einstellungen); Schreibschuebe fasst sie zu einer Meldung je 250 ms zusammen. */
 function ereignisse(pfade: string[], req: Request): Response {
   const frei = belegt();
   let halt = () => {};
@@ -1170,6 +1198,28 @@ async function antworte(req: Request, server: Bun.Server): Promise<Response> {
     if (lesen && b === "gesund" && teile.length === 2) return json({ pid: process.pid, wurzel: WURZELN[0], wurzeln: WURZELN, port: PORT });
     if (lesen && b === "liste" && teile.length === 2) return json({ wurzel: WURZELN[0], wurzeln: WURZELN, sitzungen: listeSitzungen() });
     if (lesen && b === "abo" && teile.length === 2) return json(await aboAntwort());
+    // Die Ansagen aller Sitzungen, neueste zuerst; der Strom der Uebersicht meldet jede neue und jede Aenderung der Einstellungen.
+    if (lesen && b === "ansagen" && teile.length === 2) return json({ ansagen: leseAnsagen(ANSAGEN).reverse() });
+    if (lesen && b === "ereignisse" && teile.length === 2) {
+      server.timeout(req, 0);
+      return ereignisse([ANSAGEN, EINSTELLUNGEN], req);
+    }
+    if (lesen && b === "einstellungen" && teile.length === 2) return json(liesEinstellungen());
+    // Schreiben wie eine Entscheidung: nur JSON, klein, und nur von der eigenen Seite (herkunftAbgelehnt oben).
+    if (req.method === "POST" && b === "einstellungen" && teile.length === 2) {
+      const art = (req.headers.get("content-type") ?? "").split(";")[0]!.trim().toLowerCase();
+      if (art !== "application/json") return json({ fehler: "Inhaltstyp application/json erwartet" }, 415);
+      const roh = await liesKoerper(req, EINSTELLUNGEN_HOECHSTENS);
+      if (roh === null) return json({ fehler: `Koerper groesser als ${EINSTELLUNGEN_HOECHSTENS} Bytes` }, 413);
+      let aenderung: unknown;
+      try {
+        aenderung = JSON.parse(roh);
+      } catch {
+        return json({ fehler: "JSON mit vorlesen und/oder stimme erwartet" }, 400);
+      }
+      const neu = await setzeEinstellungen(aenderung);
+      return neu ? json(neu) : json({ fehler: "vorlesen muss true oder false sein, stimme ein Name bis 200 Zeichen oder null" }, 422);
+    }
     if (lesen && b === "host" && teile.length === 2) {
       try {
         const sicht = await hostSicht();

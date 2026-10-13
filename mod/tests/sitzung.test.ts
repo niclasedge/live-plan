@@ -11,6 +11,7 @@ function welt(on: On, opts: { skriptDa?: boolean } = {}) {
   mock.env(on, { HOME: '/home/t' })
   const dateien = new Map<string, string>()
   const prozesse: string[][] = []
+  const laeufe: { argv: string[]; cwd?: string; stdin?: string }[] = []
   on('fs.write', ($, e) => {
     dateien.set(e.path, e.text)
     return { value: undefined }
@@ -22,6 +23,7 @@ function welt(on: On, opts: { skriptDa?: boolean } = {}) {
   )
   on('process.run', ($, e) => {
     prozesse.push([...e.argv])
+    laeufe.push({ argv: [...e.argv], cwd: e.init?.cwd, stdin: e.init?.stdin })
     return { value: { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
   on('session.id', () => ({ value: ID }))
@@ -42,7 +44,7 @@ function welt(on: On, opts: { skriptDa?: boolean } = {}) {
   on('turn.complete', ($, e) => ({ text: e.answer }))
   on('session.measure', ($, e) => ({ changed: e.changed }))
   const lesen = () => JSON.parse(dateien.get(PFAD) ?? 'null')
-  return { clock, prozesse, lesen }
+  return { clock, prozesse, laeufe, lesen }
 }
 
 test('session.start schreibt das Register mit id und cwd', async ($, on) => {
@@ -262,4 +264,41 @@ test('dateien: hoechstens 400, aelteste fallen weg, erneute Beruehrung rueckt an
   expect(d[0].pfad).toBe('f5.ts')
   expect(d.at(-1)).toMatchObject({ pfad: 'f10.ts', n: 2, geschrieben: 10_000 })
   expect(d.some((x: { pfad: string }) => x.pfad === 'f4.ts')).toBe(false)
+})
+
+const SKRIPT = { options: { skript: '/opt/lp/live-plan' } }
+const sage = (w: ReturnType<typeof welt>) => w.laeufe.filter(l => l.argv[2] === 'sage')
+
+test('Ansage: ein beantworteter Hauptzug geht mit seiner Antwort an sage --auto', SKRIPT, async ($, on) => {
+  const w = welt(on, { skriptDa: true })
+  await $.session.start(START)
+  await $.turn.complete({ answer: 'Der Build ist **gruen**.', durationMs: 4_000, isAborted: false, turnId: 't-1', reason: 'answer' })
+  await w.clock.settle()
+  // seit = now (10_000) - durationMs - 1 s slack
+  expect(sage(w)).toEqual([
+    {
+      argv: ['bun', '/opt/lp/live-plan', 'sage', '--auto', '--id', ID, '--seit', '5000', '--repo', 'repo'],
+      cwd: '/repo',
+      stdin: 'Der Build ist **gruen**.',
+    },
+  ])
+})
+
+test('Ansage: kein sage fuer Subagenten, Abbrueche, leere Antworten oder ohne Skript', SKRIPT, async ($, on) => {
+  const w = welt(on, { skriptDa: true })
+  await $.session.start(START)
+  await $.turn.complete({ answer: 'Bericht des Agenten.', durationMs: 10, isAborted: false, turnId: 't-1', agentId: 'ag-1', reason: 'answer' })
+  await $.turn.complete({ answer: 'Halb fertig', durationMs: 10, isAborted: true, turnId: 't-2', reason: 'aborted' })
+  await $.turn.complete({ answer: '  ', durationMs: 10, isAborted: false, turnId: 't-3', reason: 'answer' })
+  await w.clock.settle()
+  expect(sage(w)).toEqual([])
+})
+
+test('Ansage: ohne Skript laeuft nichts und der Zug zaehlt trotzdem', async ($, on) => {
+  const w = welt(on)
+  await $.session.start(START)
+  await $.turn.complete({ answer: 'Alles erledigt, der PR ist offen.', durationMs: 10, isAborted: false, turnId: 't-1', reason: 'answer' })
+  await w.clock.advance(1_000)
+  expect(w.prozesse).toEqual([])
+  expect(w.lesen().haupt.zuege).toBe(1)
 })

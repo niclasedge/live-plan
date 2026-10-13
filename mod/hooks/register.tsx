@@ -12,6 +12,10 @@
 // Contract v1.1 (optional fields, `v` stays 1): `haupt.limits`/`haupt.limitsZeit` from
 // session.measure and session.usage(), and `dateien`, the files Claude read and wrote,
 // from tool.call on Read/Edit/Write/NotebookEdit/Grep/Glob.
+//
+// Ansagen: at the end of each answered turn of the main session the final answer goes to
+// `live-plan sage --auto` on stdin; the script cleans and shortens it, skips a trivial one and one
+// the session already announced itself this turn, and appends it to LIVE_PLAN_CACHE/ansagen.jsonl.
 
 import type { EngineInterface, PluginOptions, Register, SessionRateLimit, SessionUsage } from 'claude-code'
 import { fragenRegistrieren, sprengradiusRegistrieren } from './fragen'
@@ -114,6 +118,8 @@ const DATEI_WERKZEUGE = new Map<string, Art>([
   ['NotebookEdit', 'geschrieben'],
 ])
 const TAKT_MS = 1000
+// What of a turn's answer goes to `sage --auto`; the script keeps the first sentences only.
+const ANTWORT_HOECHSTENS = 20_000
 
 // ---------------------------------------------------------------------------
 // Cost and context window, from savvy-progress.
@@ -413,15 +419,33 @@ export async function skriptPfad($: EngineInterface): Promise<string | null> {
   return dir ? `${dir.replace(/\/+$/, '')}/skills/live-plan/live-plan` : null
 }
 
+// The script's path when it is there as a file, else null.
+async function skriptDa($: EngineInterface): Promise<string | null> {
+  const skript = await skriptPfad($)
+  if (!skript) return null
+  const da = await $.fs.stat(skript).catch(() => undefined)
+  return da && da.kind !== 'dir' ? skript : null
+}
+
 // `bun <skript> neu --auto <id>` in the repository root; skipped silently when the
 // session is outside a repository or the script is missing.
 async function neuAuto($: EngineInterface, s: Sitzung): Promise<void> {
   if (!s.wurzel) return
-  const skript = await skriptPfad($)
+  const skript = await skriptDa($)
   if (!skript) return
-  const da = await $.fs.stat(skript).catch(() => undefined)
-  if (!da || da.kind === 'dir') return
   await $.process.run(['bun', skript, 'neu', '--auto', s.id], { cwd: s.wurzel, timeoutMs: 30_000 })
+}
+
+// `bun <skript> sage --auto` with the turn's answer on stdin; `--seit` is the turn's start, so an
+// announcement the session made itself during the turn (`live-plan sage`) replaces this one.
+async function ansageAuto($: EngineInterface, s: Sitzung, antwort: string, dauerMs: number): Promise<void> {
+  const skript = await skriptDa($)
+  if (!skript) return
+  const seit = (await $.clock.now()) - Math.max(0, dauerMs) - 1000
+  await $.process.run(
+    ['bun', skript, 'sage', '--auto', '--id', s.id, '--seit', String(Math.round(seit)), ...(s.repo ? ['--repo', s.repo] : [])],
+    { cwd: s.wurzel ?? s.cwd, stdin: antwort.slice(0, ANTWORT_HOECHSTENS), timeoutMs: 30_000 },
+  )
 }
 
 async function werkzeugeAnmelden($: EngineInterface): Promise<void> {
@@ -613,6 +637,8 @@ export const register: Register = (on, options: PluginOptions) => {
         if (nutzung) limitsSetzen(s.haupt, nutzung.rateLimits, await $.clock.now())
         if (e.usage?.model) s.modell = e.usage.model
         await merken($)
+        // Not awaited: the end of the turn never waits for the script.
+        if (e.reason === 'answer' && e.answer.trim()) void ansageAuto($, s, e.answer, e.durationMs).catch(() => undefined)
       }
     } catch {
       // Never disturb the session.

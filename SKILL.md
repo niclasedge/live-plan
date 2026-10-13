@@ -264,9 +264,29 @@ Skripte, Bilder als Data-URL). Chrome kommt aus `LIVE_PLAN_CHROME`, sonst unter 
 Pfade stehen auf stdout. Den Browser steuert das Skript ueber CDP mit dem WebSocket von bun, der Server
 schreibt dafuer nichts.
 
+## Ansagen
+
+Die Uebersicht `http://localhost:4410/` liest am Ende eines Zugs eine kurze Zusammenfassung vor, aus allen
+Sitzungen, vorneweg das Repo ("live-plan: ..."). Ohne Ihr Zutun macht das die Mod `live-plan-sitzung`: sie gibt
+die letzte Antwort der Hauptsitzung an `live-plan sage --auto`, das Markdown, Links, URLs und Codebloecke
+entfernt und die ersten drei Saetze (hoechstens 300 Zeichen) nimmt; eine Antwort unter vier Woertern
+("Captain, shipshape.") faellt weg. Wollen Sie selbst formulieren, sagen Sie im selben Zug an:
+
+```bash
+$LP sage "Der Umbau ist fertig, alle Tests gruen. Der PR wartet auf Ihr Review."
+```
+
+Zwei bis drei gesprochene Saetze, ohne Pfade, Befehle oder URLs. Diese Ansage ersetzt die automatische
+dieses Zugs (Sitzung aus `CLAUDE_SESSION_ID`, REPO aus der Git-Wurzel); auch sie wird gesaeubert, bis sechs
+Saetze und 600 Zeichen. Alle Ansagen stehen in `${LIVE_PLAN_CACHE:-~/.cache/live-plan}/ansagen.jsonl`
+(die letzten 200, kaputte Zeilen ueberspringt der Server). `GET /api/ansagen` liefert sie neueste zuerst,
+`GET /api/ereignisse` meldet jede neue. In der Tabelle der Uebersicht steht je Sitzung ▶ mit der Uhrzeit ihrer
+neuesten Ansage; Vorlesen an/aus und die Stimme stehen im Menue ⚙ und zentral in
+`${LIVE_PLAN_CACHE:-~/.cache/live-plan}/einstellungen.yaml` (`GET`/`POST /api/einstellungen`).
+
 ## Grenzen
 
-- Der Browser schreibt nur `fragen[].entscheidung`. Status, Schritte, Belege: nur Sie.
+- Der Browser schreibt nur `fragen[].entscheidung` und die Einstellungen der Sprachausgabe. Status, Schritte, Belege: nur Sie.
 - Keine Anmeldung; der Server lauscht auf `0.0.0.0` und ist im LAN erreichbar. Keine Secrets in die Datei.
   Er antwortet nur unter einem Host dieses Rechners (localhost, Rechnername, eigene Adresse,
   dazu `LIVE_PLAN_HOSTS`, durch Komma getrennt), `/api/` nur ohne fremden `Origin`, und eine
@@ -282,5 +302,8 @@ schreibt dafuer nichts.
   Symlink an.
 - Die Ansicht laesst sich nicht in fremde Seiten einbetten; Belege nur in die eigene.
 - `SLUG.verlauf.jsonl`, `SLUG.stand.json` und `SLUG.seit` daneben gehoeren Server und Skript. Nicht anfassen.
+- Ansagen schreibt nur `live-plan sage` auf diesem Rechner, nie der Browser; wer die Seite erreicht, liest
+  sie (`GET /api/ansagen`). Nichts Vertrauliches ansagen. Der Browser schreibt nur `einstellungen.yaml`
+  (`POST /api/einstellungen`, JSON bis 2 KB, ohne fremden `Origin`).
 - `frage` schreibt nur neue Eintraege hinten an `fragen:`, nie durch einen Symlink und nie in eine
   Flow-Liste mit Inhalt.

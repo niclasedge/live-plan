@@ -230,6 +230,23 @@ body { margin: 0; background: var(--s1); font-family: var(--font); }
 .hw-prozesse th { text-align: left; font-weight: 400; font-size: 10px; color: var(--ink-3); }
 .hw-prozesse th, .hw-prozesse td { padding: 0 8px 0 0; }
 .hw-prozesse td.cwd, .hw-prozesse td.befehl { max-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Ansagen der Uebersicht: Spalte ansage (▶ und Uhrzeit) und das Menue ⚙ mit Vorlesen, Stimme, letzte nochmal. */
+.lp-liste .lp-ansage { white-space: nowrap; }
+.lp-liste .an-spiel { width: 24px; height: 22px; padding: 0; border: 1px solid var(--line-2); border-radius: 6px; background: var(--s2); font-size: 11px; }
+.lp-liste .an-uhr { font-size: 12px; color: var(--ink-2); }
+.lp-einst { position: relative; display: flex; gap: 8px; align-items: center; min-width: 0; margin-left: auto; }
+.lp-einst-knopf { padding: 3px 9px; border: 1px solid var(--line-2); border-radius: 8px; background: var(--s2); font-size: 13px; }
+.lp-einst-knopf.an { border-color: var(--l1); }
+.lp-einst .an-hinweis { font-size: 12px; color: var(--warn); }
+.lp-einst-panel { position: absolute; top: calc(100% + 6px); right: 0; z-index: 20; display: grid; gap: 8px; justify-items: start; width: max-content; max-width: min(360px, 90vw); padding: 12px; border: 1px solid var(--line-2); border-radius: 10px; background: var(--s1); box-shadow: 0 8px 24px rgb(0 0 0 / 25%); font-size: 12.5px; }
+.lp-einst-panel > button { padding: 3px 10px; border: 1px solid var(--line-2); border-radius: 8px; background: var(--s2); }
+.lp-einst-panel > button.an { border-color: var(--l1); background: color-mix(in srgb, var(--l1) 18%, transparent); color: var(--ink-1); font-weight: 600; }
+.lp-einst-panel button:disabled { cursor: default; opacity: 0.5; }
+.an-stimme { display: inline-flex; gap: 6px; align-items: center; min-width: 0; color: var(--ink-3); }
+.an-stimme select { max-width: 260px; min-width: 0; padding: 2px 4px; border: 1px solid var(--line-2); border-radius: 6px; background: var(--s2); color: var(--ink-1); font: inherit; }
+.an-notiz { color: var(--ink-3); }
+.an-fehler { color: var(--rot); }
 .hw-prozesse td.befehl { width: 40%; font-family: var(--mono); color: var(--ink-2); }
 .vb-trenn { color: var(--line-2); }
 .vb-sitzung { display: flex; gap: 6px; align-items: center; min-width: 0; white-space: nowrap; overflow: hidden; }
@@ -673,6 +690,7 @@ body { margin: 0; background: var(--s1); font-family: var(--font); }
   .lp-kachel .w { font-size: 13px; }
   .lv-verbrauch { padding: 2px 6px; font-size: 8px; }
   .lp-host { display: none; }
+  .lp-einst, .lp-liste .an-spiel { display: none !important; }
   .vb-fbar { height: 10px; }
   .vb-fbar .lab { line-height: 10px; font-size: 7px; }
   .lp-dateien { display: none !important; }

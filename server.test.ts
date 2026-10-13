@@ -1,8 +1,8 @@
-// live-plan: Tests der Endpunkte .../diff und .../bild (Pfadregeln, git-ignorierte Dateien, Bilder, eigene Plan-Datei), `node --test server.test.ts` (startet `bun server.ts`).
+// live-plan: Tests der Endpunkte .../diff und .../bild (Pfadregeln, git-ignorierte Dateien, Bilder, eigene Plan-Datei) und der Ansagen (/api/ansagen, /api/ereignisse, /api/einstellungen), `node --test server.test.ts` (startet `bun server.ts`).
 
 import assert from "node:assert/strict";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { BILD_HOECHSTENS } from "./logik.ts";
 import net from "node:net";
 import os from "node:os";
@@ -42,6 +42,8 @@ let basis: string;
 let lanBasis: string | null;
 let bildBasis: string;
 let lanBild: string | null;
+let seite: string;
+let cacheOrdner: string;
 
 function freierPort(): Promise<number> {
   return new Promise((ok, fehler) => {
@@ -87,6 +89,7 @@ before(async () => {
   symlinkSync(draussen, path.join(repo, "data", "raus"));
 
   const cache = path.join(tmp, "cache");
+  cacheOrdner = cache;
   mkdirSync(path.join(cache, "sitzungen"), { recursive: true });
   const dateien = ["data/brief.md", "data/.env", "data/raus/notiz.md", "data/bild.png", "data/secret.png", "data/raus/fremd.png"].map((pfad) => ({ pfad, gelesen: 1, n: 1 }));
   const register = { v: 1, id: ID, cwd: repo, wurzel: repo, repo: "proj", modell: "m", gestartet: 0, aktualisiert: 0, haupt: { zuege: 0 }, fortschritt: null, agenten: [], dateien };
@@ -95,6 +98,7 @@ before(async () => {
   const port = await freierPort();
   basis = `http://localhost:${port}/api/proj/${ID}/diff?p=`;
   bildBasis = `http://localhost:${port}/api/proj/${ID}/bild?p=`;
+  seite = `http://localhost:${port}`;
   const lan = Object.values(os.networkInterfaces()).flat().find((n) => n && n.family === "IPv4" && !n.internal);
   lanBasis = lan ? `http://${lan.address}:${port}/api/proj/${ID}/diff?p=` : null;
   lanBild = lan ? `http://${lan.address}:${port}/api/proj/${ID}/bild?p=` : null;
@@ -263,4 +267,93 @@ test("bild: ein Bild ueber einen Symlink-Ordner aus der Wurzel heraus wird nicht
   const { status, bytes } = await holeBild("data/raus/fremd.png");
   assert.equal(status, 404);
   assert.notDeepEqual(bytes, PNG);
+});
+
+// --- GET /api/ansagen und der Strom der Uebersicht GET /api/ereignisse --------------------------------
+
+/** Liest den Strom, bis `bis` im Text steht oder `ms` um sind; gibt den gelesenen Text. */
+async function liesStrom(antwort: Response, bis: string, ms: number): Promise<string> {
+  const leser = antwort.body!.getReader();
+  const dekoder = new TextDecoder();
+  let text = "";
+  const ende = Date.now() + ms;
+  while (!text.includes(bis) && Date.now() < ende) {
+    const teil = await Promise.race([leser.read(), new Promise<null>((ok) => setTimeout(() => ok(null), Math.max(0, ende - Date.now())))]);
+    if (!teil || teil.done) break;
+    text += dekoder.decode(teil.value, { stream: true });
+  }
+  await leser.cancel().catch(() => undefined);
+  return text;
+}
+
+test("ansagen: ohne Datei leer; eine neue Ansage meldet der Strom, die Liste kommt neueste zuerst und ohne URL", async () => {
+  const leer = await fetch(`${seite}/api/ansagen`);
+  assert.equal(leer.status, 200);
+  assert.deepEqual(await leer.json(), { ansagen: [] });
+
+  const strom = await fetch(`${seite}/api/ereignisse`);
+  assert.equal(strom.headers.get("content-type"), "text/event-stream");
+  const a = (zeit: number, text: string, quelle = "auto") => JSON.stringify({ v: 1, zeit, id: ID, repo: "proj", text, quelle });
+  const gelesen = liesStrom(strom, "event: geaendert", 8000);
+  await new Promise((r) => setTimeout(r, 300));
+  writeFileSync(path.join(cacheOrdner, "ansagen.jsonl"), [a(1000, "Erste Ansage."), "{kaputt", a(2000, "Siehe https://geheim.example/x bitte.", "sage")].join("\n") + "\n");
+  const text = await gelesen;
+  assert.match(text, /event: bereit/);
+  assert.match(text, /event: geaendert/);
+
+  const r = await fetch(`${seite}/api/ansagen`);
+  const body = (await r.json()) as { ansagen: { zeit: number; text: string; quelle: string; repo: string; id: string }[] };
+  assert.deepEqual(body.ansagen.map((x) => [x.zeit, x.quelle, x.repo, x.id, x.text]), [
+    [2000, "sage", "proj", ID, "Siehe bitte."],
+    [1000, "auto", "proj", ID, "Erste Ansage."],
+  ]);
+});
+
+test("ansagen: nur lesen, fremde Herkunft 403, Schreiben gibt es nicht", async () => {
+  const fremd = await fetch(`${seite}/api/ansagen`, { headers: { Origin: "http://evil.example" } });
+  assert.equal(fremd.status, 403);
+  const fremdStrom = await fetch(`${seite}/api/ereignisse`, { headers: { Origin: "http://evil.example" } });
+  assert.equal(fremdStrom.status, 403);
+  const post = await fetch(`${seite}/api/ansagen`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
+  assert.equal(post.status, 404);
+});
+
+// --- GET und POST /api/einstellungen: Vorlesen und Stimme in LIVE_PLAN_CACHE/einstellungen.yaml -------------
+
+const einstellungen = (body: unknown, kopf: Record<string, string> = {}) =>
+  fetch(`${seite}/api/einstellungen`, { method: "POST", headers: { "content-type": "application/json", ...kopf }, body: typeof body === "string" ? body : JSON.stringify(body) });
+
+test("einstellungen: Vorgabe ohne Datei, POST schreibt die YAML, GET und der Strom sehen sie", async () => {
+  assert.deepEqual(await (await fetch(`${seite}/api/einstellungen`)).json(), { vorlesen: false, stimme: null });
+  const strom = await fetch(`${seite}/api/ereignisse`);
+  const gelesen = liesStrom(strom, "event: geaendert", 8000);
+  await new Promise((r) => setTimeout(r, 300));
+  const r = await einstellungen({ vorlesen: true, stimme: 'Anna "de"' });
+  assert.equal(r.status, 200);
+  assert.deepEqual(await r.json(), { vorlesen: true, stimme: 'Anna "de"' });
+  assert.match(await gelesen, /event: geaendert/);
+  const yaml = readFileSync(path.join(cacheOrdner, "einstellungen.yaml"), "utf8");
+  assert.match(yaml, /^vorlesen: true$/m);
+  assert.match(yaml, /^stimme: "Anna \\"de\\""$/m);
+  // Ein Feld allein aendert nur sich.
+  assert.deepEqual(await (await einstellungen({ vorlesen: false })).json(), { vorlesen: false, stimme: 'Anna "de"' });
+  assert.deepEqual(await (await fetch(`${seite}/api/einstellungen`)).json(), { vorlesen: false, stimme: 'Anna "de"' });
+  assert.deepEqual(await (await einstellungen({ stimme: null })).json(), { vorlesen: false, stimme: null });
+});
+
+test("einstellungen: falsche Felder 422, kein JSON 400 oder 415, fremde Herkunft 403, alles ohne Schreiben", async () => {
+  await einstellungen({ vorlesen: true, stimme: "Petra" });
+  for (const falsch of [{ vorlesen: "ja" }, { stimme: 7 }, [], "null"]) assert.equal((await einstellungen(falsch)).status, 422, JSON.stringify(falsch));
+  assert.equal((await einstellungen("{kaputt")).status, 400);
+  assert.equal((await fetch(`${seite}/api/einstellungen`, { method: "POST", headers: { "content-type": "text/plain" }, body: "{}" })).status, 415);
+  assert.equal((await einstellungen({ stimme: "x".repeat(3000) })).status, 413);
+  assert.equal((await einstellungen({ vorlesen: false }, { Origin: "http://evil.example" })).status, 403);
+  assert.deepEqual(await (await fetch(`${seite}/api/einstellungen`)).json(), { vorlesen: true, stimme: "Petra" });
+});
+
+test("einstellungen: eine kaputte YAML gilt als Vorgabe und wird beim naechsten POST ersetzt", async () => {
+  writeFileSync(path.join(cacheOrdner, "einstellungen.yaml"), "vorlesen: [kaputt\n");
+  assert.deepEqual(await (await fetch(`${seite}/api/einstellungen`)).json(), { vorlesen: false, stimme: null });
+  assert.deepEqual(await (await einstellungen({ vorlesen: true })).json(), { vorlesen: true, stimme: null });
+  assert.match(readFileSync(path.join(cacheOrdner, "einstellungen.yaml"), "utf8"), /^vorlesen: true$/m);
 });

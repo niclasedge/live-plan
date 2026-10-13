@@ -1,7 +1,8 @@
-// live-plan (#257): die Ansicht, ohne Bibliothek. "/" zeigt die Liste aus /api/liste, "/REPO/SLUG"
-// eine Sitzung aus /api/REPO/SLUG, neu gelesen bei jeder Dateiaenderung (SSE /ereignisse). Ein
-// Klick auf eine Option schickt POST .../entscheidung, ebenso eine eigene Antwort (Freitext, mit
-// eigen: true); alles andere aendert nur der Agent.
+// live-plan (#257): die Ansicht, ohne Bibliothek. "/" zeigt die Liste aus /api/liste, je Sitzung mit ihrer neuesten
+// Ansage (GET /api/ansagen, neue per SSE /api/ereignisse, vorgelesen mit speechSynthesis; Vorlesen und Stimme im
+// Menue, GET und POST /api/einstellungen), "/REPO/SLUG" eine Sitzung aus /api/REPO/SLUG, neu gelesen bei jeder
+// Dateiaenderung (SSE /ereignisse). Ein Klick auf eine Option schickt POST .../entscheidung, ebenso eine eigene
+// Antwort (Freitext, mit eigen: true); alles andere aendert nur der Agent.
 //
 // Aufbau nach der Vorlage im Things-Stil: Kopf mit Icon, Kurztext und Tags, Ueberblick in drei Karten,
 // Teil 1 Sitzung und Fortschritt (Verbrauch, Fortschritt mit Phasen, vier Kacheln aus Issue 320, genau eine
@@ -2177,7 +2178,88 @@
       (modalHtml || "");
   }
 
+  // --- Ansagen (Uebersicht): kurze Zusammenfassungen aller Sitzungen aus GET /api/ansagen, vorgelesen ---------
+  /** Der Sprechtext einer Ansage: erst das Repo, aus dem sie kommt, dann der Text. */
+  function ansageSprechtext(a) {
+    var repo = a && a.repo ? String(a.repo) : "", text = a && a.text ? String(a.text) : "";
+    return repo ? repo + ": " + text : text;
+  }
+  /** Die Uhrzeit einer Ansage, an einem anderen Tag mit Datum. */
+  function ansageUhr(ms, jetzt) {
+    var d = new Date(ms), n = new Date(jetzt === undefined ? jetztMs() : jetzt);
+    if (isNaN(d.getTime())) return "";
+    var tag = d.toDateString() === n.toDateString() ? "" : zwei(d.getDate()) + "." + zwei(d.getMonth() + 1) + ". ";
+    return tag + zwei(d.getHours()) + ":" + zwei(d.getMinutes());
+  }
+  /** Je Sitzung (Repo und Id) ihre neueste Ansage; `liste` kommt neueste zuerst. */
+  function letzteAnsagen(liste) {
+    var je = {};
+    (Array.isArray(liste) ? liste : []).forEach(function (a) {
+      var k = a && a.id ? a.repo + "\u0000" + a.id : null;
+      if (k && !je[k]) je[k] = a;
+    });
+    return je;
+  }
+  /** Die Zelle Ansage einer Sitzung: ▶ spielt ihre neueste Ansage, daneben ihre Uhrzeit; ohne Ansage leer. */
+  function ansageZelle(a) {
+    if (!a) return '<td class="lp-ansage"></td>';
+    var uhr = ansageUhr(a.zeit);
+    return '<td class="lp-ansage"><button type="button" class="an-spiel" data-ansage="' + esc(a.zeit) + '" title="' + esc(a.text) + '" aria-label="' +
+      esc("Letzte Ansage vorlesen: " + a.repo + " " + uhr) + '">▶</button> <span class="an-uhr mono" title="' + esc(ortszeit(isoVon(a.zeit))) + '">' + esc(uhr) + "</span></td>";
+  }
+  /** Die Namen der Stimmen ohne Doppel, deutsche zuerst, je { name, lang }. */
+  function stimmenListe(stimmen) {
+    var de = function (s) { return /^de\b/i.test(s.lang) ? 0 : 1; }, da = {};
+    return (Array.isArray(stimmen) ? stimmen : []).filter(function (s) { return s && s.name && !da[s.name] && (da[s.name] = true); })
+      .map(function (s) { return { name: String(s.name), lang: String(s.lang || "") }; })
+      .sort(function (a, b) { return de(a) - de(b) || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0); });
+  }
+  /** Die Stimme zum gespeicherten Namen; fehlt sie im Browser, die erste deutsche, sonst null (Vorgabe des Browsers). */
+  function stimmeWahl(stimmen, name) {
+    var S = Array.isArray(stimmen) ? stimmen.filter(Boolean) : [];
+    return (name && S.find(function (s) { return s.name === name; })) || S.find(function (s) { return /^de\b/i.test(String(s.lang || "")); }) || null;
+  }
+  /** Spricht stumm eine leere Aeusserung; im Klick selbst gibt das auch Safari die Sprachausgabe fuer spaeter frei. */
+  function tonFreischalten(sprache, Aeusserung) {
+    if (!sprache || !Aeusserung) return;
+    var u = new Aeusserung("");
+    u.volume = 0;
+    sprache.speak(u);
+  }
+  /**
+   * Das Einstellungsmenue im Kopf der Uebersicht: ⚙ klappt es auf, darin Vorlesen an/aus, die Stimme und die
+   * letzte Ansage nochmal. `z`: { kann, vorlesen, frei, stimmen, stimme, auf, letzte, fehler }; `kann` false, wenn
+   * der Browser nicht spricht, `frei` erst nach einem Klick auf die Seite.
+   */
+  function einstellungenMenue(z) {
+    z = z || {};
+    var zu = z.kann ? "" : " disabled";
+    var hinweis = !z.vorlesen ? "" : !z.kann ? "Dieser Browser kann nicht vorlesen." : !z.frei ? "Ein Klick auf die Seite schaltet den Ton frei." : "";
+    var html = '<div class="lp-einst" data-testid="einstellungen">' +
+      '<button type="button" class="lp-einst-knopf' + (z.vorlesen ? " an" : "") + '" data-einst-auf aria-expanded="' + (z.auf ? "true" : "false") + '" title="Einstellungen: Vorlesen und Stimme">⚙' + (z.vorlesen ? " 🔊" : "") + "</button>" +
+      (hinweis ? '<span class="an-hinweis">' + esc(hinweis) + "</span>" : "");
+    if (!z.auf) return html + "</div>";
+    var namen = stimmenListe(z.stimmen);
+    var fehlt = z.stimme && !namen.some(function (s) { return s.name === z.stimme; });
+    var optionen = '<option value=""' + (z.stimme && !fehlt ? "" : " selected") + ">Standard (Deutsch)</option>" + namen.map(function (s) {
+      return '<option value="' + esc(s.name) + '"' + (s.name === z.stimme ? " selected" : "") + ">" + esc(s.name + (s.lang ? " · " + s.lang : "")) + "</option>";
+    }).join("");
+    return html + '<div class="lp-einst-panel" role="group" aria-label="Sprachausgabe">' +
+      '<button type="button" class="an-auto' + (z.vorlesen ? " an" : "") + '" data-ansage-auto aria-pressed="' + (z.vorlesen ? "true" : "false") + '" title="Neue Ansagen aller Sitzungen automatisch vorlesen">🔊 Vorlesen: ' + (z.vorlesen ? "an" : "aus") + "</button>" +
+      '<label class="an-stimme">Stimme <select data-ansage-stimme' + zu + ">" + optionen + "</select></label>" +
+      (fehlt ? '<span class="an-notiz">' + esc("„" + z.stimme + "“ fehlt in diesem Browser, es gilt die deutsche Vorgabe.") + "</span>" : "") +
+      '<button type="button" data-ansage-letzte' + (z.letzte && z.kann ? "" : " disabled") + ">▶ Letzte Ansage nochmal</button>" +
+      (z.fehler ? '<span class="an-fehler">' + esc(z.fehler) + "</span>" : "") + "</div></div>";
+  }
+
   G.LivePlanAnsicht = {
+    ansageSprechtext: ansageSprechtext,
+    ansageZelle: ansageZelle,
+    letzteAnsagen: letzteAnsagen,
+    einstellungenMenue: einstellungenMenue,
+    stimmenListe: stimmenListe,
+    stimmeWahl: stimmeWahl,
+    tonFreischalten: tonFreischalten,
     ablaufSvg: ablaufSvg,
     doku: doku,
     seite: seite,
@@ -2442,6 +2524,7 @@
   wurzel.addEventListener("click", function (e) {
     var th = e.target.closest(".lp-thema button[data-thema]");
     if (th) { setzeThema(th.dataset.thema); return; }
+    if (!API && ansageKlick(e)) return;
     if (!D) return;
     var opt = e.target.closest(".lp-frage .opt button[data-frage]");
     if (opt) {
@@ -2667,22 +2750,141 @@
       '<p class="lp-ziel mono">' + esc((REPO || "") + "/.live-plan/" + (SLUG || "") + ".yaml") + "</p></header>";
   }
 
+  // --- Ansagen auf der Uebersicht -------------------------------------------------------------
+  // Neue Ansagen und geaenderte Einstellungen meldet GET /api/ereignisse. Vorgelesen wird eine neue Ansage nur, solange
+  // Vorlesen an ist und die Seite einen Klick oder eine Taste hatte, denn erst danach lassen Browser sie sprechen.
+  // Vorlesen und Stimme stehen zentral in einstellungen.yaml (GET und POST /api/einstellungen).
+  var ANSAGEN = [], ansagenBekannt = null, ansageFrei = false;
+  var EINST = { vorlesen: false, stimme: null }, einstAuf = false, einstFehler = "";
+  var SPRACHE = G.speechSynthesis && G.SpeechSynthesisUtterance ? G.speechSynthesis : null;
+  function einstellungenZustand() {
+    return { kann: !!SPRACHE, vorlesen: EINST.vorlesen, frei: ansageFrei, stimmen: SPRACHE ? SPRACHE.getVoices() : [], stimme: EINST.stimme, auf: einstAuf, letzte: ANSAGEN.length > 0, fehler: einstFehler };
+  }
+  function zeichneEinstellungen() {
+    var el = wurzel.querySelector(".lp-einst");
+    if (el) el.outerHTML = einstellungenMenue(einstellungenZustand());
+  }
+  /** Spricht eine Ansage; `sofort` bricht ab, was gerade laeuft, sonst reiht der Browser sie hinten an. */
+  function sprich(a, sofort) {
+    if (!SPRACHE || !a) return;
+    if (sofort) SPRACHE.cancel();
+    var u = new G.SpeechSynthesisUtterance(ansageSprechtext(a));
+    var stimme = stimmeWahl(SPRACHE.getVoices(), EINST.stimme);
+    if (stimme) { u.voice = stimme; u.lang = stimme.lang; } else u.lang = "de-DE";
+    SPRACHE.speak(u);
+  }
+  /** Laedt die Ansagen; was seit dem letzten Laden dazukam, liest sie bei Vorlesen an der Reihe nach vor. */
+  function ladeAnsagen() {
+    return fetch("/api/ansagen", { cache: "no-store" }).then(function (r) {
+      return r.ok ? r.json() : null;
+    }).then(function (b) {
+      if (!b || !Array.isArray(b.ansagen)) return;
+      var liste = b.ansagen.filter(function (a) { return a && typeof a.zeit === "number" && typeof a.text === "string"; });
+      var bekannt = ansagenBekannt;
+      var neu = bekannt === null ? [] : liste.filter(function (a) { return a.zeit > bekannt; }).reverse();
+      ansagenBekannt = liste.reduce(function (m, a) { return Math.max(m, a.zeit); }, bekannt || 0);
+      var ersteDa = !ANSAGEN.length && liste.length;
+      ANSAGEN = liste;
+      zeichneListe();
+      // "Letzte nochmal" geht erst mit einer Ansage; sonst bleibt das Menue, wie es ist (offene Stimmenwahl).
+      if (ersteDa) zeichneEinstellungen();
+      if (EINST.vorlesen && ansageFrei) neu.forEach(function (a) { sprich(a, false); });
+    }).catch(function () { /* das naechste Ereignis versucht es wieder */ });
+  }
+  function ladeEinstellungen() {
+    return fetch("/api/einstellungen", { cache: "no-store" }).then(function (r) {
+      return r.ok ? r.json() : null;
+    }).then(function (b) {
+      if (!b || typeof b.vorlesen !== "boolean") return;
+      var neu = { vorlesen: b.vorlesen, stimme: typeof b.stimme === "string" ? b.stimme : null };
+      if (neu.vorlesen === EINST.vorlesen && neu.stimme === EINST.stimme) return;
+      EINST = neu;
+      zeichneEinstellungen();
+    }).catch(function () { /* das naechste Ereignis versucht es wieder */ });
+  }
+  /** Schreibt eine Aenderung nach einstellungen.yaml; bis zur Antwort gilt sie schon, ein Fehler nimmt sie zurueck. */
+  function speichereEinstellungen(aenderung) {
+    var vorher = EINST;
+    EINST = { vorlesen: "vorlesen" in aenderung ? aenderung.vorlesen : EINST.vorlesen, stimme: "stimme" in aenderung ? aenderung.stimme : EINST.stimme };
+    einstFehler = "";
+    zeichneEinstellungen();
+    return fetch("/api/einstellungen", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(aenderung) }).then(function (r) {
+      return r.json().catch(function () { return {}; }).then(function (b) {
+        if (!r.ok) throw new Error((b && b.fehler) || "HTTP " + r.status);
+        EINST = { vorlesen: b.vorlesen === true, stimme: typeof b.stimme === "string" ? b.stimme : null };
+      });
+    }).catch(function (err) {
+      EINST = vorher;
+      einstFehler = "Nicht gespeichert: " + err.message;
+    }).then(zeichneEinstellungen);
+  }
+  function lauscheAnsagen() {
+    if (!G.EventSource) return;
+    var quelle = new EventSource("/api/ereignisse");
+    quelle.addEventListener("geaendert", function () { ladeAnsagen(); ladeEinstellungen(); });
+    quelle.onerror = function () {
+      quelle.close();
+      setTimeout(function () { ladeAnsagen(); ladeEinstellungen(); lauscheAnsagen(); }, 3000);
+    };
+  }
+  /** Ein Klick auf Einstellungen oder einen Abspielknopf; true, wenn er ihnen galt. */
+  function ansageKlick(e) {
+    var t = e.target.closest && e.target.closest("[data-einst-auf], [data-ansage-auto], [data-ansage-letzte], [data-ansage]");
+    if (!t) return false;
+    if (t.hasAttribute("data-einst-auf")) {
+      einstAuf = !einstAuf;
+      zeichneEinstellungen();
+      var wieder = wurzel.querySelector("[data-einst-auf]");
+      if (wieder) wieder.focus();
+    } else if (t.hasAttribute("data-ansage-auto")) {
+      var an = !EINST.vorlesen;
+      if (an) tonFreischalten(SPRACHE, G.SpeechSynthesisUtterance);
+      else if (SPRACHE) SPRACHE.cancel();
+      speichereEinstellungen({ vorlesen: an });
+    } else if (t.hasAttribute("data-ansage-letzte")) sprich(ANSAGEN[0], true);
+    else {
+      var zeit = Number(t.getAttribute("data-ansage"));
+      sprich(ANSAGEN.find(function (a) { return a.zeit === zeit; }), true);
+    }
+    return true;
+  }
+  /** Der erste Klick oder Tastendruck der Seite gibt die Sprachausgabe stumm frei; der Hinweis geht danach weg. */
+  function ansageFreigeben() {
+    if (ansageFrei) return;
+    tonFreischalten(SPRACHE, G.SpeechSynthesisUtterance);
+    ansageFrei = true;
+    // Erst nach dem Klick neu zeichnen, sonst ersetzte das Neuzeichnen den Knopf, bevor der Klick ihn erreicht.
+    if (wurzel.querySelector(".lp-einst .an-hinweis")) setTimeout(zeichneEinstellungen, 0);
+  }
+
   // --- Liste aller Sitzungen ------------------------------------------------------------------
+  var LISTE = null;
   function liste() {
     return fetch("/api/liste", { cache: "no-store" }).then(function (r) { return r.json(); }).then(function (daten) {
-      var zeilen = daten.sitzungen.map(function (e) {
-        var href = "/" + encodeURIComponent(e.repo) + "/" + encodeURIComponent(e.slug);
-        // S5: eine Sitzung aus dem Register traegt die Marke live (beendet grau), der volle Repo-Pfad steht im title.
-        var marke = e.live ? ' <span class="lv-marke' + (e.beendet ? " aus" : "") + '">' + (e.beendet ? "beendet" : "live") + "</span>" : "";
-        return '<tr><td title="' + esc(e.pfad || "") + '"><b>' + esc(e.repo) + '</b></td><td class="mono"><a href="' + esc(href) + '">' + esc(e.slug) + "</a>" + marke + "</td><td>" + esc(e.titel) +
-          "</td>" + fragenZelle(e.offeneFragen, href) + '<td class="mono klein">' + zeitAngabe(e.geaendert) + "</td></tr>";
-      }).join("");
-      doc.title = "Sitzungen · live-plan";
-      wurzel.innerHTML = '<header class="lp-kopf"><div class="lp-oben"><h1>Sitzungen</h1>' + themaSchalter() + "</div>" +
-        '<p class="lp-ziel">Lebende Dokumente aus <span class="mono">REPO/.live-plan/SLUG.yaml</span> unter <span class="mono">' + esc(daten.wurzel) + "</span> und laufende Claude-Sitzungen aus dem Register</p></header>" + hostTeil(hostAuf) +
-        '<table class="lp-liste" data-testid="tabelle-sitzungen"><thead><tr><th>repo</th><th>sitzung</th><th>titel</th><th>fragen</th><th>geaendert</th></tr></thead><tbody>' +
-        (zeilen || '<tr><td colspan="5" class="leer">Keine Sitzung. <span class="mono">live-plan neu SLUG</span> legt eine an.</td></tr>') + "</tbody></table>";
+      LISTE = daten;
+      zeichneListe();
     }).catch(function () { /* der naechste Takt versucht es wieder */ });
+  }
+  function zeichneListe() {
+    var daten = LISTE;
+    if (!daten) return;
+    var letzte = letzteAnsagen(ANSAGEN);
+    var zeilen = daten.sitzungen.map(function (e) {
+      var href = "/" + encodeURIComponent(e.repo) + "/" + encodeURIComponent(e.slug);
+      // S5: eine Sitzung aus dem Register traegt die Marke live (beendet grau), der volle Repo-Pfad steht im title.
+      var marke = e.live ? ' <span class="lv-marke' + (e.beendet ? " aus" : "") + '">' + (e.beendet ? "beendet" : "live") + "</span>" : "";
+      return '<tr><td title="' + esc(e.pfad || "") + '"><b>' + esc(e.repo) + '</b></td><td class="mono"><a href="' + esc(href) + '">' + esc(e.slug) + "</a>" + marke + "</td><td>" + esc(e.titel) +
+        "</td>" + fragenZelle(e.offeneFragen, href) + ansageZelle(letzte[e.repo + "\u0000" + e.slug]) + '<td class="mono klein">' + zeitAngabe(e.geaendert) + "</td></tr>";
+    }).join("");
+    doc.title = "Sitzungen · live-plan";
+    // Das Menue bleibt beim Neuzeichnen der Liste derselbe Knoten (offene Stimmenwahl, Fokus).
+    var menue = wurzel.querySelector(".lp-einst");
+    wurzel.innerHTML = '<header class="lp-kopf"><div class="lp-oben"><h1>Sitzungen</h1>' + (menue ? "<div data-einst-platz></div>" : einstellungenMenue(einstellungenZustand())) + themaSchalter() + "</div>" +
+      '<p class="lp-ziel">Lebende Dokumente aus <span class="mono">REPO/.live-plan/SLUG.yaml</span> unter <span class="mono">' + esc(daten.wurzel) + "</span> und laufende Claude-Sitzungen aus dem Register</p></header>" + hostTeil(hostAuf) +
+      '<table class="lp-liste" data-testid="tabelle-sitzungen"><thead><tr><th>repo</th><th>sitzung</th><th>titel</th><th>fragen</th><th>ansage</th><th>geaendert</th></tr></thead><tbody>' +
+      (zeilen || '<tr><td colspan="6" class="leer">Keine Sitzung. <span class="mono">live-plan neu SLUG</span> legt eine an.</td></tr>') + "</tbody></table>";
+    var platz = wurzel.querySelector("[data-einst-platz]");
+    if (platz) platz.replaceWith(menue);
   }
 
   function lausche() {
@@ -2716,6 +2918,21 @@
   if (!API) {
     liste();
     setInterval(liste, 15000);
+    ladeAnsagen();
+    ladeEinstellungen();
+    lauscheAnsagen();
+    doc.addEventListener("click", ansageFreigeben, true);
+    doc.addEventListener("keydown", ansageFreigeben, true);
+    doc.addEventListener("keydown", function (e) {
+      if (e.key !== "Escape" || !einstAuf) return;
+      einstAuf = false;
+      zeichneEinstellungen();
+    });
+    wurzel.addEventListener("change", function (e) {
+      if (e.target.matches && e.target.matches("[data-ansage-stimme]")) speichereEinstellungen({ stimme: e.target.value || null });
+    });
+    // Die Stimmen kommen in Chrome erst nach dem Laden.
+    if (SPRACHE && SPRACHE.addEventListener) SPRACHE.addEventListener("voiceschanged", zeichneEinstellungen);
     hostTaktObj = sichtbarTakt(doc, HOST_TAKT_MS, ladeHost);
     hostTaktObj.start();
     return;
