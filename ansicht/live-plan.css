@@ -218,6 +218,12 @@ body { margin: 0; background: var(--s1); font-family: var(--font); }
 .hw-reihe .w { text-align: right; }
 .hw-reihe.gelb .w { color: var(--warn); }
 .hw-reihe.rot .w { color: var(--rot); }
+.hw-verlaeufe { margin-top: 6px; }
+.hw-spur { display: flex; align-items: flex-end; justify-content: flex-end; gap: 1px; height: 18px; min-width: 0; overflow: hidden; }
+.hw-spur i { flex: none; width: 3px; min-height: 2px; border-radius: 1px; background: var(--ok); }
+.hw-spur i.gelb { background: var(--warn); }
+.hw-spur i.rot { background: var(--rot); }
+.hw-spur i.leer { min-height: 0; height: 0; }
 .hw-details > summary { cursor: pointer; font-size: 10px; color: var(--ink-3); }
 .hw-prozesse { width: 100%; margin-top: 4px; border-collapse: collapse; font-size: 11px; }
 .hw-prozesse caption { text-align: left; font-size: 10px; color: var(--ink-3); }

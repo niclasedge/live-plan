@@ -5,6 +5,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { test } from "node:test";
 import vm from "node:vm";
+import { pruefePlan } from "./logik.ts";
 import { befehlKurz, cpuProzent, cwdKurz, hostSicht, laufzeitKurz, oberste, parseLoadavg, parseMeminfo, parseProzessStat, parseSeitengroesse, parseStat, parseSwapMb } from "./host.ts";
 
 test("parseStat und cpuProzent: Delta aus Summe und Leerlauf (idle + iowait)", () => {
@@ -206,4 +207,102 @@ test("hostTeil: vier Balken, gelb ab 60 %, rot ab 80 %", () => {
   assert.match(h, /102\.5 \/ 125 GB/);
   assert.match(h, /title="Swap 1\.0 GB|title="Swap 1000 MB/);
   assert.match(h, /style="width:82%"/);
+});
+
+// --- Verlauf: Sparkline der letzten 60 Minuten ----------------------------------------------------
+
+type Ansicht2 = ReturnType<typeof ansicht> & { verlaufEimer: (vor: number[], werte: number[]) => (number | null)[] };
+
+const HOST_BASIS = {
+  verfuegbar: true, um: Date.UTC(2026, 9, 13, 12, 0, 0), cpu: 37.4, last: [1, 1, 1], kerne: 8,
+  speicher: { gesamtMb: 16000, benutztMb: 8000, verfuegbarMb: 8000, swapGesamtMb: 0, swapBenutztMb: 0 },
+  platten: [], topCpu: [], topRam: [],
+};
+
+test("verlaufEimer: Minuten-Eimer nehmen das Maximum, aelteste zuerst, Luecken null", () => {
+  const { verlaufEimer } = ansicht() as Ansicht2;
+  // 0-59 s: Eimer 0 (neuester); 60-119 s: Eimer 1; nichts in Eimer 2; 180 s: Eimer 3
+  const e = (v: number[], w: number[]) => [...verlaufEimer(v, w)]; // aus der vm: Array des anderen Realms
+  assert.deepEqual(e([0, 15, 30, 45, 75, 100, 185], [10, 90, 20, 30, 5, 7, 50]), [50, null, 7, 90]);
+  assert.deepEqual(e([], []), []);
+  assert.deepEqual(e([5], [150]), [100]);
+  // laenger als 60 Minuten zurueck: nicht mehr gezeichnet
+  const alt = e([3600, 3599], [80, 20]);
+  assert.equal(alt.length, 60);
+  assert.deepEqual([alt[0], alt[59]], [20, null]);
+});
+
+test("hostTeil: Sparkline je CPU und RAM, Farbe nach Schwellen, rechts buendig, Tooltip mit Zeit und Wert", () => {
+  const a = ansicht();
+  a.setzeHost({ ...HOST_BASIS, verlauf: { takt: 15, vor: [130, 70, 10], cpu: [85, 65, 5], ram: [10, 20, 30] } });
+  const h = a.hostTeil(false);
+  assert.match(h, /data-testid="host-verlauf-cpu"/);
+  assert.match(h, /data-testid="host-verlauf-ram"/);
+  const cpu = /data-testid="host-verlauf-cpu">(.*?)<\/span>/.exec(h)![1]!;
+  assert.deepEqual(cpu.match(/<i[^>]*>/g)!.map((x) => /class="(\w+)"/.exec(x)?.[1] ?? ""), ["rot", "gelb", ""]); // 85 %, 65 %, 5 %
+  assert.match(cpu, /style="height:85\.0%"/);
+  assert.match(cpu, /title="\d\d:\d\d–\d\d:\d\d · max 85 %"/);
+  assert.match(h, /<span class="w">37%<\/span>/); // aktueller Wert hinter der Reihe
+  // Weniger als 60 Minuten: drei Balken, nicht 60
+  assert.equal(cpu.match(/<i/g)!.length, 3);
+});
+
+test("hostTeil: ohne Verlauf bleibt der Block wie zuvor", () => {
+  const a = ansicht();
+  a.setzeHost({ ...HOST_BASIS });
+  assert.doesNotMatch(a.hostTeil(false), /host-verlauf/);
+  a.setzeHost({ ...HOST_BASIS, verlauf: { takt: 15, vor: [], cpu: [], ram: [] } });
+  const h = a.hostTeil(false);
+  assert.doesNotMatch(h, /host-verlauf/);
+  assert.match(h, /data-testid="sitzung-host"/);
+});
+
+/** Laedt die Ansicht mit einer Attrappe der Seite, laesst sie ihre Daten holen und liefert den gezeichneten HTML-Text. */
+async function montiere(pfad: string, takte = 0): Promise<string> {
+  const wurzel = {
+    innerHTML: "",
+    querySelector: (sel: string) => (sel === ".lp-kopf" && wurzel.innerHTML.includes('class="lp-kopf"') ? { insertAdjacentHTML: (_: string, h: string) => void (wurzel.innerHTML += h) } : null),
+    querySelectorAll: () => [],
+    addEventListener: () => {},
+    contains: () => false,
+  };
+  const wait = async () => { for (let i = 0; i < 20; i++) await new Promise((r) => setImmediate(r)); };
+  const sitzung = { plan: pruefePlan({ titel: "T", schritte: [] }).plan };
+  const intervalle: Array<() => void> = [];
+  const g: Record<string, unknown> = {
+    document: {
+      getElementById: () => wurzel, documentElement: { dataset: {} }, visibilityState: "visible", activeElement: null,
+      addEventListener: () => {}, removeEventListener: () => {}, querySelector: () => null, querySelectorAll: () => [], title: "",
+    },
+    location: { pathname: pfad, search: "" },
+    setInterval: (f: () => void, ms: number) => (ms === 15000 && intervalle.push(f), 1), clearInterval: () => {}, setTimeout: () => 1,
+    fetch: async (url: string) => {
+      const antwort = (b: unknown, ok = true) => ({ ok, status: ok ? 200 : 404, json: async () => b });
+      if (url === "/api/host") return antwort({ ...HOST_BASIS, verlauf: { takt: 15, vor: [10], cpu: [42], ram: [25] } });
+      if (url === "/api/liste") return antwort({ wurzel: "/w", sitzungen: [] });
+      if (url.endsWith("/baum") || url.endsWith("/firstmate") || url === "/api/abo") return antwort(null, false);
+      return antwort(sitzung);
+    },
+  };
+  g.globalThis = g;
+  vm.runInNewContext(readFileSync(path.join(import.meta.dirname, "ansicht", "live-plan.js"), "utf8"), g);
+  await wait();
+  for (let i = 0; i < takte; i++) { intervalle.forEach((f) => f()); await wait(); }
+  return wurzel.innerHTML;
+}
+
+test("Einbindung: Liste und Sitzungsseite zeigen den Rechner samt Verlauf", async () => {
+  const liste = await montiere("/");
+  assert.match(liste, /data-testid="tabelle-sitzungen"/);
+  assert.match(liste, /data-testid="sitzung-host"/);
+  assert.match(liste, /data-testid="host-verlauf-cpu"/);
+  const sitzung = await montiere("/repo/slug");
+  assert.match(sitzung, /data-testid="sitzung-host"/);
+  assert.match(sitzung, /data-testid="host-verlauf-ram"/);
+});
+
+test("Einbindung: das Neuzeichnen der Liste behaelt den Rechner", async () => {
+  const liste = await montiere("/", 1);
+  assert.match(liste, /data-testid="tabelle-sitzungen"/);
+  assert.equal(liste.match(/data-testid="sitzung-host"/g)?.length, 1);
 });
