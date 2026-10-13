@@ -1657,7 +1657,9 @@
   function flRepo(r, f) {
     var offen = !!flOffen[r.repo], laeuft = (r.laeuft || []).join(", ");
     var kpi = r.aufgaben.length + (r.aufgaben.length === 1 ? " Aufgabe" : " Aufgaben") + " · " + zahl(r.gemergt) + " gemergt · läuft: " + (laeuft || "nichts") + (r.median !== null && r.median !== undefined ? " · Median " + r.median + " min" : "");
-    return '<section class="fl-repo' + (offen ? " offen" : "") + '" data-testid="flotte-repo">' +
+    // Ohne laufende Aufgabe ist der Repo-Abschnitt gedämpft, bleibt aber aufklappbar und lesbar
+    var ruht = !laeuft;
+    return '<section class="fl-repo' + (offen ? " offen" : "") + (ruht ? " fl-ruht" : "") + '" data-testid="flotte-repo">' +
       '<div class="fl-kopf" role="button" tabindex="0" aria-expanded="' + offen + '" data-fl-repo="' + esc(r.repo) + '"><span class="fl-pfeil">▸</span><b>' + esc(r.repo) + '</b><span class="fl-kpi">' + esc(kpi) + "</span></div>" +
       '<div class="fl-strahl"><div class="fl-linie" data-fl-linie>' + r.aufgaben.map(flBalken).join("") + '<em class="fl-jetzt" style="left:' + zahl(f.jetztProzent) + '%"></em></div></div>' +
       '<div class="fl-auf">' + flAchse(f) + r.aufgaben.map(flZeile).join("") + "</div></section>";

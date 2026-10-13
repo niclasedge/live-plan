@@ -828,7 +828,9 @@ export function flotte(home: string, o: FlotteOptionen = {}): Flotte {
     let text = ausgang ? AUSGANG_TEXT[ausgang] : "fertig";
     let ende: number | null = null;
     if (laeuftNoch) {
-      zustandArt = z === "working" || z === "unknown" ? "lauf" : "stopp";
+      // paused arbeitet noch (nur gerade nicht), captain-held ist fuer den Captain angehalten; zustandAus gibt beides als paused
+      const fuerCaptain = zeilen.at(-1)?.verb === "captain-held";
+      zustandArt = z === "working" || z === "unknown" || (z === "paused" && !fuerCaptain) ? "lauf" : "stopp";
       text = zustandArt === "lauf" ? "läuft" : STOPP_TEXT[z!] ?? "angehalten";
     } else if (z === "done" || z === "failed") {
       text = ausgang ? AUSGANG_TEXT[ausgang] : z === "done" ? "fertig" : "fehlgeschlagen";

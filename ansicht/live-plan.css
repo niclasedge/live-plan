@@ -771,6 +771,7 @@ body { margin: 0; background: var(--s1); font-family: var(--font); }
 .fl-auf { display: none; padding: 0 12px 10px; }
 .fl-repo.offen .fl-auf { display: block; }
 .fl-repo.offen .fl-strahl { display: none; }
+.fl-repo.fl-ruht .fl-kopf, .fl-repo.fl-ruht .fl-strahl { opacity: 0.5; }
 .fl-zeile { display: grid; grid-template-columns: 200px minmax(0, 1fr) minmax(0, 260px); gap: 8px; align-items: center; padding: 3px 4px; border-radius: 4px; cursor: pointer; }
 .fl-zeile:hover, .fl-zeile.hl { background: var(--s3); }
 .fl-lbl { min-width: 0; }

@@ -163,6 +163,10 @@ im Cockpit.
      `state/<id>.status` („Zeitleiste beim Abräumen gelöscht“, wenn der Auftrag abgeräumt ist) und die
      Dateiliste von `data/<id>/`; bei laufenden Workern dazu offene Blocker und die Befehle zum Kopieren.
 
+  Eine Aufgabe, deren letzte Statuszeile `paused:` ist, zählt als läuft: sie arbeitet weiter, nur gerade
+  nicht. Ausnahme ist `captain-held`, das bleibt angehalten. Ein Repo ohne laufende Aufgabe ist
+  ausgegraut (aufklappbar, die KPI sagt „läuft: nichts“).
+
   ![Flotte: ein Repo aufgeklappt](docs/firstmate.png)
 
   ![Details einer Aufgabe](docs/flotte-details.png)
