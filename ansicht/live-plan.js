@@ -1847,16 +1847,15 @@
     if (baum) { baum.innerHTML = baumInhalt(); baum.scrollTop = scroll; }
   }
   function zeichneSeite() {
-    // The open diff keeps its scroll position across a redraw (every SSE event redraws).
-    var diffText = diffAuf && wurzel.querySelector(".lp-diff-text");
-    var diffScroll = diffText ? [diffText.scrollTop, diffText.scrollLeft] : null;
+    // The open modal keeps its scroll position and focus across a redraw (every SSE event and Firstmate poll redraws).
+    var stand = modalStand();
     if (!D.plan) {
       // Nur im Register (S5): Kopf, Live-Block und Dateien, sonst nichts.
       doc.title = ((D.live && D.live.fortschritt && D.live.fortschritt.titel) || D.slug) + " · live-plan";
       var nurModal = diffModal(diffAuf) || fmModal(fmAuf);
       if (!nurModal) fmAuf = null;
       wurzel.innerHTML = '<div class="lp-inhalt"' + (nurModal ? " inert" : "") + ">" + kopfNurLive() + live() + firstmateTeil() + dateien() + "</div>" + nurModal;
-      nachModal(diffScroll);
+      nachModal(stand);
       return;
     }
     var drawer = doc.getElementById("lp-drawer");
@@ -1870,15 +1869,21 @@
     wurzel.innerHTML = seite(modalHtml);
     var d = doc.getElementById("lp-drawer");
     if (d) d.scrollTop = scroll;
-    nachModal(diffScroll);
+    nachModal(stand);
   }
 
-  /** Das neue innerHTML nimmt dem Modal den Fokus (er fiele auf BODY); er geht zurueck auf Schliessen. Der Diff behaelt seine Scrollposition. */
-  function nachModal(diffScroll) {
-    var zu = (modal || diffAuf || fmAuf) && wurzel.querySelector(".lp-modal button[data-modal-zu]");
-    if (zu) zu.focus();
-    var diffText = diffScroll && wurzel.querySelector(".lp-diff-text");
-    if (diffText) { diffText.scrollTop = diffScroll[0]; diffText.scrollLeft = diffScroll[1]; }
+  /** Scrollposition und Fokus des offenen Modals vor dem Neuzeichnen. */
+  function modalStand() {
+    var rolle = wurzel.querySelector(".lp-modal .lp-diff-text, .lp-modal .fm-details");
+    return { scroll: rolle ? [rolle.scrollTop, rolle.scrollLeft] : null, fokus: modalZiele().indexOf(doc.activeElement) };
+  }
+  /** Das neue innerHTML nimmt dem Modal den Fokus (er fiele auf BODY); er geht zurueck, wo er war, sonst auf Schliessen. Die Scrollposition bleibt. */
+  function nachModal(stand) {
+    if (!(modal || diffAuf || fmAuf)) return;
+    var ziel = modalZiele()[stand.fokus] || wurzel.querySelector(".lp-modal button[data-modal-zu]");
+    if (ziel) ziel.focus();
+    var rolle = stand.scroll && wurzel.querySelector(".lp-modal .lp-diff-text, .lp-modal .fm-details");
+    if (rolle) { rolle.scrollTop = stand.scroll[0]; rolle.scrollLeft = stand.scroll[1]; }
   }
 
   /**
@@ -2076,7 +2081,7 @@
       return;
     }
     // Eine Worker-Karte oeffnet ihre Details auch mit Enter und Leertaste.
-    var karte = (e.key === "Enter" || e.key === " ") && !modal && !diffAuf && !fmAuf && e.target.closest && e.target.closest("[data-fm-worker]");
+    var karte = (e.key === "Enter" || e.key === " ") && !modal && !diffAuf && !fmAuf && e.target.closest && !e.target.closest("a[href]") && e.target.closest("[data-fm-worker]");
     if (karte) { e.preventDefault(); oeffneFm(karte.dataset.fmWorker); return; }
     // Fokusfalle (S29, S3): Tab und Shift-Tab bleiben im Modal.
     if ((modal || diffAuf || fmAuf) && e.key === "Tab") {
