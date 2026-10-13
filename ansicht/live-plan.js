@@ -258,6 +258,18 @@
   function hostProzent(x) {
     return Math.round(zahl(x)) + "%";
   }
+  /** "7.6 / 15.7 GB" bei zwei GB-Werten, sonst jeder Wert mit eigener Einheit ("21 MB / 3.9 GB"). */
+  function mbPaar(a, b) {
+    if (zahl(a) < 1024 || zahl(b) < 1024) return mb(a) + " / " + mb(b);
+    var g = function (x) { return (zahl(x) / 1024).toFixed(1).replace(/\.0$/, ""); };
+    return g(a) + " / " + g(b) + " GB";
+  }
+  /** Eine Reihe des Rechners: Name, Balken (gelb ab 60 %, rot ab 80 %), Wert. */
+  function hostBalken(name, prozent, wert, tip) {
+    var p = Math.max(0, Math.min(100, zahl(prozent)));
+    var farbe = p >= 80 ? "rot" : p >= 60 ? "gelb" : "";
+    return '<div class="hw-reihe' + (farbe ? " " + farbe : "") + '" title="' + esc(tip) + '"><span class="k">' + esc(name) + "</span>" + balken(p / 100, false, "", farbe) + '<span class="w">' + esc(wert) + "</span></div>";
+  }
   function hostProzesse(titel, liste) {
     var zeilen = (Array.isArray(liste) ? liste : []).map(function (p) {
       return "<tr><td>" + hostProzent(p.cpu) + "</td><td>" + mb(p.rssMb) + "</td><td>" + (zahl(p.swapMb) >= 1 ? mb(p.swapMb) : "–") + "</td><td>" + zahl(p.pid) + "</td><td>" + esc(p.laufzeit) +
@@ -270,16 +282,18 @@
     var H = HOST;
     if (!H || H.verfuegbar !== true || !H.speicher) return "";
     var sp = H.speicher, last = Array.isArray(H.last) ? H.last : [0, 0, 0];
-    var zeile1 = '<div class="vb-sitzung"><span><span class="k">CPU</span> <span class="w">' + hostProzent(H.cpu) + "</span></span>" +
-      '<span><span class="k">Last</span> <span class="w">' + last.map(function (x) { return zahl(x).toFixed(2); }).join(" ") + "</span></span>" +
-      '<span><span class="k">RAM</span> <span class="w">' + mb(sp.benutztMb) + "</span> / " + mb(sp.gesamtMb) + ' <span class="k">(frei ' + mb(sp.verfuegbarMb) + ")</span></span>" +
-      '<span><span class="k">Swap</span> <span class="w">' + mb(sp.swapBenutztMb) + "</span> / " + mb(sp.swapGesamtMb) + "</span></div>";
-    var platten = (Array.isArray(H.platten) ? H.platten : []).map(function (d) {
-      return '<span><span class="k mono">' + esc(d.pfad) + '</span> <span class="w">' + mb(d.benutztMb) + "</span> / " + mb(d.gesamtMb) + " (" + hostProzent(d.prozent) + ")</span>";
-    }).join("");
-    var zeile2 = platten ? '<div class="vb-sitzung">' + platten + "</div>" : "";
+    var tipLast = "Last " + last.map(function (x) { return zahl(x).toFixed(2); }).join(" ");
+    var tipSwap = "Swap " + mb(sp.swapBenutztMb) + " / " + mb(sp.swapGesamtMb);
+    var reihen = [
+      hostBalken("CPU", zahl(H.cpu), hostProzent(H.cpu).replace("%", " %"), tipLast),
+      hostBalken("RAM", sp.gesamtMb > 0 ? zahl(sp.benutztMb) / zahl(sp.gesamtMb) * 100 : 0, mbPaar(sp.benutztMb, sp.gesamtMb), tipSwap + " · frei " + mb(sp.verfuegbarMb))
+    ];
+    (Array.isArray(H.platten) ? H.platten : []).forEach(function (d) {
+      reihen.push(hostBalken(d.pfad === "/" ? "Platte" : d.pfad, zahl(d.prozent), mbPaar(d.benutztMb, d.gesamtMb), d.pfad));
+    });
+    var balkenBlock = '<div class="hw-balken">' + reihen.join("") + "</div>";
     var details = '<details class="hw-details"' + (auf ? " open" : "") + "><summary>Top-Prozesse</summary>" + hostProzesse("nach CPU", H.topCpu) + hostProzesse("nach RAM", H.topRam) + "</details>";
-    return '<section class="lp-host" data-testid="sitzung-host">' + ueberschrift("Rechner") + '<div class="lv-verbrauch lv-host">' + zeile1 + zeile2 + details + "</div></section>";
+    return '<section class="lp-host" data-testid="sitzung-host">' + ueberschrift("Rechner") + '<div class="lv-verbrauch lv-host">' + balkenBlock + details + "</div></section>";
   }
   /**
    * Ruft lade alle ms auf, solange das Dokument sichtbar ist. Beim Sichtbarwerden sofort einmal, beim

@@ -166,9 +166,10 @@ PR-Adressen, Zweige und Titel aus dem Backlog stehen dagegen jedem offen, der di
 ### Rechner in der Ansicht
 
 Über dem Verbrauch zeigt die Seite den Block Rechner: die Last des Rechners, auf dem der Server läuft,
-knapp wie der Verbrauch. Erste Zeile CPU in Prozent (gemessen zwischen zwei Abfragen, die erste wartet
-rund 300 ms), Last (1/5/15 Minuten), RAM benutzt / gesamt (frei) und Swap benutzt / gesamt; zweite Zeile
-`/tmp` und `/` mit belegt / Größe (Prozent). Darunter klappt `Top-Prozesse` auf: je fünf nach CPU und nach
+als vier schlanke Balken wie der Verbrauch: CPU (Prozent, gemessen zwischen zwei Abfragen, die erste wartet
+rund 300 ms), RAM, `/tmp` und Platte (`/`), jeweils mit Wert rechts (RAM und Platten belegt / Größe).
+Ein Balken wird gelb ab 60 % und rot ab 80 %. Last (1/5/15 Minuten) und Swap stehen im Tooltip der
+CPU- bzw. RAM-Reihe. Darunter klappt `Top-Prozesse` auf: je fünf nach CPU und nach
 RAM mit CPU, RSS, Swap, PID, Laufzeit, Arbeitsverzeichnis (`$HOME` als `~`) und Befehl (Programm ohne
 Pfad plus Argumente, auf 60 Zeichen gekürzt).
 
