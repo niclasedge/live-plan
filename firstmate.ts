@@ -527,6 +527,12 @@ function leseProjekt(pfad: string, register: Registereintrag | null, worker: Wor
   const git = (...args: string[]) => lauf("git", ["--no-optional-locks", ...args], pfad);
   const p: Projekt = { name, pfad, register, git: false, zweig: null, upstream: null, ahead: null, behind: null, geaendert: null, commit: null, abgerufen: null, github: null, worker: [] };
   p.worker = worker.filter((w) => w.meta.project && (w.meta.project === pfad || path.basename(w.meta.project) === name)).map((w) => w.id);
+  const spitze = git("rev-parse", "--show-toplevel")?.trim();
+  try {
+    if (!spitze || realpathSync(spitze) !== realpathSync(pfad)) return p;
+  } catch {
+    return p;
+  }
   const st = git("status", "--porcelain=v2", "--branch");
   if (st === null) return p;
   p.git = true;

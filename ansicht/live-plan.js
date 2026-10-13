@@ -1356,7 +1356,7 @@
     var r = p.register;
     var name = '<b class="mono">' + esc(p.name) + "</b>" + (r && r.haltung ? ' <span class="fm-haltung">' + esc(r.haltung) + "</span>" : "") +
       (r && r.beschreibung ? '<div class="klein">' + esc(r.beschreibung) + "</div>" : r ? "" : '<div class="klein unbekannt">nicht in data/projects.md</div>');
-    if (!p.git) return "<tr><td>" + name + '</td><td colspan="5" class="unbekannt">kein Git-Klon</td><td>' + esc((p.worker || []).join(", ")) + "</td><td></td></tr>";
+    if (!p.git) return "<tr><td>" + name + '</td><td colspan="5" class="unbekannt">kein Git-Klon</td><td>' + esc((p.worker || []).join(", ")) + "</td></tr>";
     var zweig = esc(p.zweig || "detached") + (p.upstream ? ' <span class="vz" title="' + esc("gegen " + p.upstream) + '">↑' + zahl(p.ahead) + " ↓" + zahl(p.behind) + "</span>" : ' <span class="unbekannt">kein Upstream</span>');
     var stand = p.geaendert ? '<span class="g-m">geändert ±' + zahl(p.geaendert) + "</span>" : '<span class="fm-sauber">sauber</span>';
     var commit = p.commit ? zeitAngabe(isoAus(p.commit.zeit)) + ' <span class="mono klein">' + esc(p.commit.hash) + "</span> " + esc(p.commit.betreff) : '<span class="unbekannt">kein Commit</span>';

@@ -136,6 +136,24 @@ test("leseProjekte: Git-Stand, letzter Commit, letzter fetch, Register und Worke
   }
 });
 
+test("leseProjekte: ein Ordner ohne eigenen Klon in einem Home unter Git zeigt nicht den Stand des Homes", () => {
+  const home = neuesHome();
+  try {
+    git(home, "init", "-q", "-b", "main");
+    writeFileSync(path.join(home, "README.md"), "home\n");
+    git(home, "add", "README.md");
+    git(home, "commit", "-q", "-m", "home");
+    mkdirSync(path.join(home, "projects", "beta"), { recursive: true });
+    const [beta] = leseProjekte(home, []);
+    assert.equal(beta.name, "beta");
+    assert.equal(beta.git, false);
+    assert.equal(beta.zweig, null);
+    assert.equal(beta.commit, null);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
 // gh-Ersatz: zaehlt Aufrufe und merkt sich die Umgebung je Aufruf.
 function ghMit(antwort: (args: string[]) => string | null) {
   const aufrufe: { args: string[]; env: Record<string, string> }[] = [];
