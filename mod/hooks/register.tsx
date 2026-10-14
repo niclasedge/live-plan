@@ -439,14 +439,19 @@ async function neuAuto($: EngineInterface, s: Sitzung): Promise<void> {
 
 // `bun <skript> sage --auto` with the turn's answer on stdin; `--seit` is the turn's start, so an
 // announcement the session made itself during the turn (`live-plan sage`) replaces this one.
+// `run` resolves for any exit code: a failed save (the lock stayed taken) shows as a toast, with the
+// script's own `live-plan: …` line from stderr, else its exit code.
 async function ansageAuto($: EngineInterface, s: Sitzung, antwort: string, dauerMs: number): Promise<void> {
   const skript = await skriptDa($)
   if (!skript) return
   const seit = (await $.clock.now()) - Math.max(0, dauerMs) - 1000
-  await $.process.run(
+  const r = await $.process.run(
     ['bun', skript, 'sage', '--auto', '--id', s.id, '--seit', String(Math.round(seit)), ...(s.repo ? ['--repo', s.repo] : [])],
     { cwd: s.wurzel ?? s.cwd, stdin: antwort.slice(0, ANTWORT_HOECHSTENS), timeoutMs: 30_000 },
   )
+  if (r.exitCode === 0) return
+  const meldung = r.stderr.split('\n').map(z => z.trim()).find(z => z.startsWith('live-plan:'))
+  $.ui.toast(meldung ?? `live-plan: sage --auto endete mit Exit ${r.exitCode}, die Ansage fehlt`)
 }
 
 async function werkzeugeAnmelden($: EngineInterface): Promise<void> {

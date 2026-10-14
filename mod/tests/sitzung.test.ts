@@ -6,12 +6,13 @@ const PFAD = '/home/t/.cache/live-plan/sitzungen/sitzung-1.json'
 const START = { cwd: '/repo/sub', surface: null, isInteractive: false } as const
 
 // The world beneath the plugin: files in memory, a repo at /repo, a mocked clock.
-function welt(on: On, opts: { skriptDa?: boolean } = {}) {
+function welt(on: On, opts: { skriptDa?: boolean; sageEnde?: { exitCode: number; stderr: string } } = {}) {
   const clock = mock.clock(on, { now: 10_000 })
   mock.env(on, { HOME: '/home/t' })
   const dateien = new Map<string, string>()
   const prozesse: string[][] = []
   const laeufe: { argv: string[]; cwd?: string; stdin?: string }[] = []
+  const toasts: string[] = []
   on('fs.write', ($, e) => {
     dateien.set(e.path, e.text)
     return { value: undefined }
@@ -24,7 +25,12 @@ function welt(on: On, opts: { skriptDa?: boolean } = {}) {
   on('process.run', ($, e) => {
     prozesse.push([...e.argv])
     laeufe.push({ argv: [...e.argv], cwd: e.init?.cwd, stdin: e.init?.stdin })
-    return { value: { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+    const ende = e.argv[2] === 'sage' && opts.sageEnde ? opts.sageEnde : { exitCode: 0, stderr: '' }
+    return { value: { ...ende, stdout: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
+  on('ui.toast', ($, e) => {
+    toasts.push(e.text)
+    return { value: undefined }
   })
   on('session.id', () => ({ value: ID }))
   on('session.cwd', () => ({ value: '/repo/sub' }))
@@ -44,7 +50,7 @@ function welt(on: On, opts: { skriptDa?: boolean } = {}) {
   on('turn.complete', ($, e) => ({ text: e.answer }))
   on('session.measure', ($, e) => ({ changed: e.changed }))
   const lesen = () => JSON.parse(dateien.get(PFAD) ?? 'null')
-  return { clock, prozesse, laeufe, lesen }
+  return { clock, prozesse, laeufe, lesen, toasts }
 }
 
 test('session.start schreibt das Register mit id und cwd', async ($, on) => {
@@ -282,6 +288,33 @@ test('Ansage: ein beantworteter Hauptzug geht mit seiner Antwort an sage --auto'
       stdin: 'Der Build ist **gruen**.',
     },
   ])
+})
+
+test('Ansage: scheitert sage --auto, zeigt ein Toast die Meldung von live-plan', SKRIPT, async ($, on) => {
+  const meldung = 'live-plan: Ansage nicht gespeichert: die Sperre /c/ansagen.jsonl.sperre ist seit 12000 ms besetzt'
+  const w = welt(on, { skriptDa: true, sageEnde: { exitCode: 1, stderr: `${meldung}\n` } })
+  await $.session.start(START)
+  await $.turn.complete({ answer: 'Der Build ist gruen, der PR ist offen.', durationMs: 4_000, isAborted: false, turnId: 't-1', reason: 'answer' })
+  await w.clock.settle()
+  expect(sage(w)).toHaveLength(1)
+  expect(w.toasts).toEqual([meldung])
+})
+
+test('Ansage: ohne Meldung von live-plan auf stderr nennt das Toast den Exit-Code', SKRIPT, async ($, on) => {
+  const w = welt(on, { skriptDa: true, sageEnde: { exitCode: 2, stderr: 'irgendwas\n' } })
+  await $.session.start(START)
+  await $.turn.complete({ answer: 'Der Build ist gruen, der PR ist offen.', durationMs: 4_000, isAborted: false, turnId: 't-1', reason: 'answer' })
+  await w.clock.settle()
+  expect(w.toasts).toEqual(['live-plan: sage --auto endete mit Exit 2, die Ansage fehlt'])
+})
+
+test('Ansage: ein erfolgreiches sage --auto zeigt kein Toast', SKRIPT, async ($, on) => {
+  const w = welt(on, { skriptDa: true })
+  await $.session.start(START)
+  await $.turn.complete({ answer: 'Der Build ist gruen, der PR ist offen.', durationMs: 4_000, isAborted: false, turnId: 't-1', reason: 'answer' })
+  await w.clock.settle()
+  expect(sage(w)).toHaveLength(1)
+  expect(w.toasts).toEqual([])
 })
 
 test('Ansage: kein sage fuer Subagenten, Abbrueche, leere Antworten oder ohne Skript', SKRIPT, async ($, on) => {

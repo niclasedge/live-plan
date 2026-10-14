@@ -2226,17 +2226,25 @@
     var repo = a && a.repo ? String(a.repo) : "", text = a && a.text ? String(a.text) : "";
     return repo ? repo + ": " + text : text;
   }
-  /** Hoechstens so viele Zeichen spricht eine Aeusserung; Chrome bricht eine einzelne mit Netzstimmen nach etwa 15 s ab. */
-  var TEIL_ZEICHEN = 200;
+  /**
+   * Chrome bricht eine einzelne Aeusserung mit Netzstimmen nach etwa 15 s ab. Ein Teil dauert deshalb beim gemessenen Tempo
+   * etwa TEIL_SEKUNDEN und hat mindestens und hoechstens TEIL_GRENZEN Zeichen.
+   */
+  var TEIL_SEKUNDEN = 10, TEIL_GRENZEN = [80, 250];
+  /** Zeichen je Teil bei `zps` Zeichen je Sekunde (ohne: ZPS_VORGABE): etwa TEIL_SEKUNDEN Sprechzeit, innerhalb TEIL_GRENZEN. */
+  function teilZeichen(zps) {
+    var z = Math.round((zps || ZPS_VORGABE) * TEIL_SEKUNDEN);
+    return Math.min(TEIL_GRENZEN[1], Math.max(TEIL_GRENZEN[0], z));
+  }
   /** Ein Satzende mit zwei Buchstaben davor ("z. B." und "13. Oktober" trennen nicht); ersatzweise Komma, Semikolon, Doppelpunkt. */
   var TEIL_SATZ = /[A-Za-zÀ-ÖØ-öø-ÿ]{2}[.!?…]+["“”'»«)]*(?=\s)/g, TEIL_KOMMA = /[,;:](?=\s)/g;
   /**
-   * Ein Sprechtext in Teile von hoechstens `zeichen` Zeichen (Vorgabe TEIL_ZEICHEN): ganze Saetze, solange sie passen; ein
+   * Ein Sprechtext in Teile von hoechstens `zeichen` Zeichen (ohne: teilZeichen()): ganze Saetze, solange sie passen; ein
    * laengerer Satz endet am letzten Komma, sonst an einer Wortgrenze, ein Wort ueber der Grenze hart. Mit Leerzeichen
    * verbunden ergeben die Teile wieder den Text.
    */
   function sprechTeile(text, zeichen) {
-    var max = zeichen || TEIL_ZEICHEN, rest = String(text || "").trim(), teile = [];
+    var max = zeichen || teilZeichen(), rest = String(text || "").trim(), teile = [];
     while (Array.from(rest).length > max) {
       var fenster = Array.from(rest).slice(0, max + 1).join("");
       var schnitt = letztesEnde(TEIL_SATZ, fenster) || letztesEnde(TEIL_KOMMA, fenster) || fenster.lastIndexOf(" ");
@@ -2412,6 +2420,7 @@
   G.LivePlanAnsicht = {
     ansageSprechtext: ansageSprechtext,
     sprechTeile: sprechTeile,
+    teilZeichen: teilZeichen,
     ansageDauer: ansageDauer,
     dauerText: dauerText,
     ansageZelle: ansageZelle,
@@ -3083,12 +3092,12 @@
    * Spricht eine Ansage. `sofort` (der Klick) bricht ab, was gerade laeuft, und zeigt diese Ansage sofort als laufend; sonst
    * reiht der Browser sie hinten an, und sie gilt erst mit ihrem Beginn (onstart) als laufend. Jede Ansage zaehlt von hier
    * bis zu ihrem Ende in `wartend` (s. endeLauf); eine abgebrochene meldet ihr Ende nach und zaehlt dann nicht mehr.
-   * Eine lange Ansage geht in Teilen (sprechTeile) in die Warteschlange des Browsers; pause, resume und cancel wirken dort
-   * auf alle Teile. Sie beginnt mit dem ersten Teil, der beginnt, und endet mit dem letzten Teil, der endet (`offen`).
+   * Eine lange Ansage geht in Teilen (sprechTeile, je etwa 10 s beim gemessenen Tempo, teilZeichen) in die Warteschlange des
+   * Browsers; pause, resume und cancel wirken dort auf alle Teile. Sie beginnt mit dem ersten Teil, der beginnt, und endet mit dem letzten Teil, der endet (`offen`).
    */
   function sprich(a, sofort) {
     if (!SPRACHE || !a) return;
-    var text = ansageSprechtext(a), teile = sprechTeile(text);
+    var text = ansageSprechtext(a), teile = sprechTeile(text, teilZeichen(zeichenJeSekunde()));
     if (sofort) abbrechen();
     var lauf = { zeit: a.zeit, pausiert: false, gepausiert: false, zeichen: Array.from(text).length, start: null, nr: abbruchNr, gezaehlt: false, offen: teile.length, fehler: false };
     wartend++;
@@ -3105,13 +3114,14 @@
         if (lauf.nr !== abbruchNr || lauf.start !== null) return;
         lauf.start = jetztMs(); LAUFT = lauf; zeichneAnsagen();
       };
-      // Jeder Teil endet hoechstens einmal; ein Fehler in einem Teil verhindert nur die Messung.
+      // Jeder Teil endet hoechstens einmal; ein Fehler in einem Teil verhindert nur die Messung. Ein Ende waehrend oder nach
+      // einem Abbruch misst nicht: Chrome meldet die Enden der abgebrochenen Teile noch im Aufruf von cancel.
       var ende = function (regulaer) {
         if (fertig) return;
         fertig = true;
         if (!regulaer) lauf.fehler = true;
         if (--lauf.offen > 0) return;
-        if (!lauf.fehler && LAUFT === lauf && !lauf.gepausiert) kalibriere(lauf);
+        if (!lauf.fehler && lauf.nr === abbruchNr && LAUFT === lauf && !lauf.gepausiert) kalibriere(lauf);
         endeLauf(lauf);
       };
       u.onend = function () { ende(true); };

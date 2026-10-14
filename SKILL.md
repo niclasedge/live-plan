@@ -303,8 +303,8 @@ ab; laeuft sie, zeigt sie ⏸ (Klick haelt an), pausiert zeigt sie ▶ (Klick se
 solange etwas spricht, pausiert ist oder wartet, und bricht ab und leert die Warteschlange. Die Steuerung gilt nur im
 Tab, der gerade spricht: nur dort stehen ⏸ und ⏹. Die anderen Tabs zeigen nur ▶; ein Klick dort startet in jenem Tab
 eine eigene Ausgabe. In der Leiste fuehrt der Repo-Name zur Sitzung, die eigene ist mit aria-current markiert.
-Eine lange Ansage geht in Teilen von hoechstens 200 Zeichen in die Warteschlange (Chrome bricht eine einzelne
-Aeusserung nach etwa 15 s ab); ⏸, ▶ und ⏹ gelten fuer die ganze Ansage.
+Eine lange Ansage geht in Teilen von etwa 10 s beim gemessenen Tempo (80 bis 250 Zeichen) in die Warteschlange
+(Chrome bricht eine einzelne Aeusserung nach etwa 15 s ab); ⏸, ▶ und ⏹ gelten fuer die ganze Ansage.
 
 ## Grenzen
 

@@ -109,7 +109,8 @@ langen Ansagen fallen vorne weitere weg. Der Abstand verhindert, dass ab 1 MiB j
 schreibt. Anhängen und Kürzen laufen unter der Sperre `ansagen.jsonl.sperre` (O_EXCL, eine Sperre älter als 10 s gilt
 als verwaist), denn ein Anhang neben einem Kürzen ginge mit dem Ersetzen der Datei verloren. Ein Schreiber wartet bis
 zu 12 s auf die Sperre, nimmt also eine verwaiste sicher noch; bekommt er sie nicht, hängt er nichts an, und
-`live-plan sage` meldet `Ansage nicht gespeichert: …` mit Exit-Code 1. Eine kaputte Zeile oder eine fehlende Datei
+`live-plan sage` meldet `Ansage nicht gespeichert: …` mit Exit-Code 1. Scheitert so die automatische Ansage am
+Ende eines Zugs, zeigt die Mod diese Meldung als Toast in der Sitzung (ohne Meldung den Exit-Code). Eine kaputte Zeile oder eine fehlende Datei
 kostet nur diese Ansagen; ein Text über 8000 Zeichen wird auch beim Lesen gekappt wie beim Schreiben, nicht verworfen.
 Der Server liest
 die Datei nur: `GET /api/ansagen` liefert die letzten 200, neueste zuerst,
@@ -152,10 +153,11 @@ Klick hält an; pausiert zeigt sie ▶, und ein Klick setzt fort. ⏹ Stopp ersc
 pausiert ist oder in der Warteschlange wartet; er bricht die Ansage ab und leert die Warteschlange. Die Steuerung gilt
 nur im Tab, der gerade spricht: nur dort stehen ⏸ und ⏹, die anderen Tabs zeigen nur ▶; ein Klick dort startet in jenem
 Tab eine eigene Ausgabe. In der Leiste führt der Repo-Name zur Sitzung; die eigene ist mit `aria-current` markiert.
-Eine lange Ansage spricht der Browser in Teilen von höchstens 200 Zeichen (ganze Sätze, ein längerer Satz endet am
-Komma oder an einer Wortgrenze), denn Chrome bricht mit Netzstimmen eine einzelne Äußerung nach etwa 15 s ab. Alle
+Eine lange Ansage spricht der Browser in Teilen von etwa 10 s beim gemessenen Tempo, mindestens 80 und höchstens
+250 Zeichen (bei der Vorgabe 14 Zeichen je Sekunde 140; ganze Sätze, ein längerer Satz endet am Komma oder an einer
+Wortgrenze), denn Chrome bricht mit Netzstimmen eine einzelne Äußerung nach etwa 15 s ab. Alle
 Teile stehen gleich in der Warteschlange; ⏸, ▶ und ⏹ gelten für die ganze Ansage, und als beendet gilt sie erst mit
-dem letzten Teil.
+dem letzten Teil. Abgebrochene Ansagen (⏹ oder ▶ einer anderen Zeile) gehen nicht in das gemessene Tempo ein.
 
 ![Leiste mit laufender Ansage (⏸) und Stopp neben ⚙](docs/ansagen-steuerung.png)
 
