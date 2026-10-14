@@ -286,8 +286,11 @@ neuesten Ansage; Vorlesen an/aus und die Stimme stehen im Menue ⚙ und zentral 
 Auf jeder Sitzungsseite gilt dasselbe: neue Ansagen aller Sitzungen werden dort ebenfalls vorgelesen, und oben
 unter dem Kopf steht die Leiste Ansagen mit den letzten fuenf, neueste zuerst; die Zeilen der eigenen Sitzung
 sind hervorgehoben. Mehrere Tabs teilen sich die Verbindung: einer haelt `GET /api/ereignisse`, die anderen bekommen
-Aenderungen ueber einen BroadcastChannel. Vorgelesen wird nur im Sprecher-Tab (der zuletzt bediente, ohne Sprecher der
-Leiter-Tab), jede Ansage genau einmal; ohne Lock oder BroadcastChannel (z. B. LAN-IP) hat jeder Tab seine eigene Verbindung.
+Aenderungen ueber einen BroadcastChannel. Vorgelesen wird nur im Sprecher-Tab (der zuletzt bediente, ohne Sprecher der Leiter-Tab), jede Ansage genau einmal.
+Ohne Web Locks (z. B. LAN-IP, Tailscale, `.local` oder ohne sicheren Kontext) lauscht jeder Tab selbst; gesprochen wird
+dann nur im zuletzt geklickten Tab, und schliesst der, schweigt es bis zum naechsten Klick oder Tabwechsel. Dort hat
+jeder Sitzungstab zwei Dauerverbindungen; ab etwa drei Sitzungstabs stockt der Browser (HTTP/1.1, 6 je Host). Ueber
+`localhost` (`live-plan open`) zeigte sich das in unseren Laeufen nicht. Siehe #20.
 
 ## Grenzen
 

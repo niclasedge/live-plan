@@ -270,3 +270,88 @@ test("sollSprechen: ohne localStorage (sprecher und gesprochenBis null) entschei
   assert.equal(sollSprechen({ ...SPRECHEN, istLeiter: true }), true);
   assert.equal(sollSprechen({ ...SPRECHEN, istLeiter: false }), false);
 });
+
+/**
+ * Startet die Uebersicht mit Attrappen fuer Sprachausgabe, Ereignisquelle, Speicher und Web Locks. `sperre` ist "fehlt"
+ * (kein navigator.locks, der Fallback) oder "abgelehnt" (der Lock wird verweigert, der .catch-Zweig greift).
+ */
+async function ansagenLauf(sperre: "fehlt" | "abgelehnt") {
+  const gesprochen: string[] = [];
+  const klicks: Array<(e: unknown) => void> = [];
+  const quellen: Array<Record<string, () => void>> = [];
+  const speicher = new Map<string, string>();
+  let ansagen: unknown[] = [];
+  const wurzel = { innerHTML: "", querySelector: () => null, querySelectorAll: () => [], addEventListener: () => {}, contains: () => false };
+  const doc = {
+    getElementById: () => wurzel, documentElement: { dataset: {} }, visibilityState: "visible", activeElement: null, title: "",
+    addEventListener: (typ: string, f: (e: unknown) => void) => { if (typ === "click") klicks.push(f); },
+    removeEventListener: () => {}, querySelector: () => null, querySelectorAll: () => [],
+  };
+  const antwort = (b: unknown, ok = true) => ({ ok, status: ok ? 200 : 404, json: async () => b });
+  const g: Record<string, unknown> = {
+    document: doc,
+    location: { pathname: "/", search: "" },
+    localStorage: {
+      getItem: (k: string) => speicher.get(k) ?? null,
+      setItem: (k: string, v: string) => { speicher.set(k, String(v)); },
+      removeItem: (k: string) => { speicher.delete(k); },
+    },
+    speechSynthesis: { speak: (u: { text: string }) => { gesprochen.push(u.text); }, cancel: () => {}, getVoices: () => [] },
+    SpeechSynthesisUtterance: class { text: string; volume = 1; constructor(t: string) { this.text = t; } },
+    EventSource: function () {
+      const hoert: Record<string, () => void> = {};
+      quellen.push(hoert);
+      return { addEventListener: (typ: string, f: () => void) => { hoert[typ] = f; }, close: () => {} };
+    },
+    navigator: sperre === "fehlt" ? {} : { locks: { request: () => Promise.reject(new Error("verweigert")) } },
+    BroadcastChannel: class { onmessage: unknown = null; postMessage() {} },
+    setInterval: () => 1, clearInterval: () => {}, setTimeout: () => 1,
+    addEventListener: () => {},
+    fetch: async (url: string) => {
+      if (url === "/api/ansagen") return antwort({ ansagen });
+      if (url === "/api/einstellungen") return antwort({ vorlesen: true, stimme: null });
+      if (url === "/api/liste") return antwort({ wurzel: "/w", sitzungen: [] });
+      return antwort(null, false);
+    },
+  };
+  g.globalThis = g;
+  vm.runInNewContext(readFileSync(path.join(import.meta.dirname, "ansicht", "live-plan.js"), "utf8"), g);
+  const warte = async () => { for (let i = 0; i < 20; i++) await new Promise((r) => setImmediate(r)); };
+  await warte();
+  return {
+    /** Gesprochene Texte; die Freischaltung spricht stumm einen leeren Text und zaehlt nicht. */
+    gesprochen: () => gesprochen.filter((t) => t !== ""),
+    sprecher: () => speicher.get("live-plan.sprecher") ?? null,
+    /** Ein Klick auf die Seite: dieser Tab wird Sprecher und schaltet die Sprachausgabe frei. */
+    klick: () => { klicks.forEach((f) => f({ target: { closest: () => null, hasAttribute: () => false } })); },
+    /** Wie das Schliessen des Sprecher-Tabs: sein Schluessel verschwindet. */
+    sprecherSchliessen: () => { speicher.delete("live-plan.sprecher"); },
+    /** Eine neue Ansage kommt an: Ereignis geaendert, dann Laden und Sprechen. */
+    neueAnsage: async (zeit: number) => {
+      ansagen = [{ v: 1, zeit, id: `a${zeit}`, repo: "r", text: "Neu", quelle: "test" }];
+      quellen.forEach((h) => h.geaendert?.());
+      await warte();
+    },
+  };
+}
+
+// Ein Tab ohne Web Locks lauscht selbst, leitet aber nicht (#18, Runde 3, R1): ohne Sprecher-Tab spricht keiner.
+test("Fallback ohne Lock: der zuletzt geklickte Tab spricht die neue Ansage (Gegenprobe)", async () => {
+  for (const sperre of ["fehlt", "abgelehnt"] as const) {
+    const lauf = await ansagenLauf(sperre);
+    lauf.klick();
+    assert.notEqual(lauf.sprecher(), null, sperre);
+    await lauf.neueAnsage(1000);
+    assert.equal(lauf.gesprochen().length, 1, sperre);
+  }
+});
+
+test("Fallback ohne Lock: ohne Sprecher-Tab spricht kein Tab, auch nicht der freigeschaltete", async () => {
+  for (const sperre of ["fehlt", "abgelehnt"] as const) {
+    const lauf = await ansagenLauf(sperre);
+    lauf.klick();
+    lauf.sprecherSchliessen();
+    await lauf.neueAnsage(1000);
+    assert.deepEqual(lauf.gesprochen(), [], sperre);
+  }
+});

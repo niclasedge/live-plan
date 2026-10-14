@@ -3057,16 +3057,15 @@
         ladeEinstellungen();
         lauscheAnsagen();
         return new Promise(function () { /* haelt den Lock, bis der Tab geschlossen wird */ });
-      }).catch(function () { istLeiter = true; lauscheAnsagen(); });
+      }).catch(function () { lauscheAnsagen(); });
     } else {
-      istLeiter = true;
       lauscheAnsagen();
     }
     doc.addEventListener("click", ansageFreigeben, true);
     doc.addEventListener("keydown", ansageFreigeben, true);
     doc.addEventListener("visibilitychange", function () { if (doc.visibilityState === "visible") sprecherSetzen(); });
     // Schliesst der Sprecher, faellt das Sprechen an den Leiter-Tab (ohne Schluessel).
-    G.onpagehide = function () { if (lies(SCHLUESSEL_SPRECHER) === TAB) vergiss(SCHLUESSEL_SPRECHER); };
+    G.addEventListener("pagehide", function () { if (lies(SCHLUESSEL_SPRECHER) === TAB) vergiss(SCHLUESSEL_SPRECHER); });
     doc.addEventListener("keydown", function (e) {
       if (e.key !== "Escape" || !einstAuf) return;
       einstAuf = false;

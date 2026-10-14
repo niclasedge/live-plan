@@ -127,8 +127,11 @@ ist das der Übersicht. Eine neue Ansage zeichnet nur die Leiste neu, nicht den 
 ohne Leiste und ohne Ansagen.
 Mehrere Tabs teilen sich die Verbindung: ein Tab hält `GET /api/ereignisse`, die anderen bekommen Änderungen über einen
 BroadcastChannel. Vorgelesen wird nur im Sprecher-Tab, also dem, den der Nutzer zuletzt bedient hat (ohne Sprecher im
-Leiter-Tab), und jede Ansage genau einmal. Ohne Lock oder BroadcastChannel (etwa über eine LAN-IP) hält jeder Tab seine eigene
-Verbindung, und das Sprechen bleibt trotzdem bei einem Tab.
+Leiter-Tab), und jede Ansage genau einmal. Ohne Web Locks (etwa über eine LAN-IP, Tailscale, `.local` oder ohne sicheren
+Kontext) lauscht jeder Tab selbst; gesprochen wird dann nur im zuletzt geklickten Tab, und schließt der, schweigt es bis
+zum nächsten Klick oder Tabwechsel. Dort hält jeder Sitzungstab zwei Dauerverbindungen; ab etwa drei Sitzungstabs stockt
+der Browser (HTTP/1.1, 6 Verbindungen je Host). Über `localhost` (`live-plan open`) zeigte sich das in unseren Läufen
+nicht. Siehe #20.
 Tests: `node --test ansagen.test.ts liste.test.ts server.test.ts` (brauchen bun), Mod: `claude plugin test mod`.
 
 ## Firstmate-Cockpit
