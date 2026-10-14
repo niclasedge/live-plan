@@ -343,17 +343,12 @@ function listeSitzungen() {
     if (!ort || !r) continue;
     const um = Number.isFinite(r.aktualisiert) ? new Date(r.aktualisiert).toISOString() : "";
     const da = eintraege.find((e) => e.repo === ort.repo && e.slug === id);
-    // Eine beendete Sitzung (#27) wartet auf niemanden mehr: ihre offenen Fragen zaehlen in der Liste
-    // nicht. Ohne Register bleibt die Zahl, eine mit `live-plan neu` angelegte Sitzung hat keines.
-    const beendet = r.beendet !== undefined;
     if (da) {
-      Object.assign(da, { pfad: ort.repoPfad, live: true, beendet, geaendert: um > da.geaendert ? um : da.geaendert });
-      if (beendet && da.offeneFragen) da.offeneFragen = 0;
+      Object.assign(da, { pfad: ort.repoPfad, live: true, beendet: r.beendet !== undefined, geaendert: um > da.geaendert ? um : da.geaendert });
       continue;
     }
     const kopf = ort.yaml ? kopfVon(ort.yaml, id) : { titel: typeof r.fortschritt?.titel === "string" && r.fortschritt.titel ? r.fortschritt.titel : id, offeneFragen: null };
-    if (beendet && kopf.offeneFragen) kopf.offeneFragen = 0;
-    eintraege.push({ repo: ort.repo, slug: id, ...kopf, geaendert: um, pfad: ort.repoPfad, live: true, beendet });
+    eintraege.push({ repo: ort.repo, slug: id, ...kopf, geaendert: um, pfad: ort.repoPfad, live: true, beendet: r.beendet !== undefined });
   }
   return eintraege.sort((a, b) => (a.geaendert < b.geaendert ? 1 : a.geaendert > b.geaendert ? -1 : 0));
 }
@@ -1394,7 +1389,8 @@ async function antworte(req: Request, server: Bun.Server): Promise<Response> {
       if (typeof koerper?.frage !== "string") return json({ fehler: "frage muss Text sein" }, 400);
       const ergebnis = await zieheZurueck(pfad, koerper.frage, koerper.grund);
       if (ergebnis.art === "unbekannt") return json({ fehler: `Frage ${koerper.frage} unbekannt` }, 404);
-      if (ergebnis.art === "entschieden") return json({ fehler: `${koerper.frage} ist schon entschieden (${ergebnis.entscheidung})` }, 409);
+      // Das Feld `entschieden` sagt es der Mod (schonEntschieden), `fehler` dem Menschen.
+      if (ergebnis.art === "entschieden") return json({ fehler: `${koerper.frage} ist schon entschieden (${ergebnis.entscheidung})`, entschieden: ergebnis.entscheidung }, 409);
       if (ergebnis.art === "nicht-aenderbar") return json({ fehler: ergebnis.grund }, 409);
       if (ergebnis.art === "fehler") return json({ fehler: ergebnis.grund }, 500);
       await liesSitzung(pfad);

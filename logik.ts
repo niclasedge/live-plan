@@ -384,6 +384,8 @@ export function pruefePlan(roh: unknown): { plan: Plan; fehler: Fehler[] } {
       blockiert: texte(eintrag.blockiert, `${pfad}.blockiert`),
       entscheidung: text(eintrag.entscheidung, `${pfad}.entscheidung`, false) ?? "",
     };
+    // Leerraum ist keine Entscheidung, wie im Band und in der Mod.
+    if (!frage.entscheidung.trim()) frage.entscheidung = "";
     const grund = text(eintrag.grund, `${pfad}.grund`, false);
     if (grund) frage.grund = grund;
     const zurueck = text(eintrag.zurueckgezogen, `${pfad}.zurueckgezogen`, false);
@@ -2448,7 +2450,7 @@ export function zieheFrageZurueckImText(text: string, frage: string, grund: stri
   const { block } = gefunden;
   const entscheidung = feldText(block, "entscheidung");
   if (entscheidung === null) return { art: "fehler", grund: `entscheidung von ${frage} ist kein einzeiliger Wert` };
-  if (entscheidung !== "") return { art: "entschieden", entscheidung };
+  if (entscheidung.trim() !== "") return { art: "entschieden", entscheidung };
   const schon = feldText(block, "zurueckgezogen");
   if (schon === null) return { art: "fehler", grund: `zurueckgezogen von ${frage} ist kein einzeiliger Wert` };
   if (schon.trim() !== "") return { art: "ok", text };

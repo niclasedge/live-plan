@@ -45,9 +45,13 @@ const offen = (f: PlanFrage): boolean => !entscheidung(f) && !zurueckgezogen(f)
 // Why a question is withdrawn: the reason the live-plan shows next to it.
 const ABGEBROCHEN = 'in der Sitzung abgebrochen'
 const UNBEANTWORTET = 'in der Sitzung nicht beantwortet'
-const NICHT_GESPIEGELT = 'in der Sitzung beantwortet, live-plan nicht erreichbar'
+// A free `response` next to several questions belongs to none of them.
+const FREI = 'im Chat frei beantwortet, keiner Frage zuzuordnen'
 const NICHT_ERREICHBAR = 'live-plan nicht erreichbar'
 const BEENDET = 'Sitzung beendet'
+// The chat's answer that the YAML did not take is lost (accepted): the reason says so.
+const NICHT_GESPEICHERT = (status: number | null): string =>
+  `im Chat beantwortet, ${status === null ? 'live-plan nicht erreichbar' : `vom live-plan abgelehnt (HTTP ${status})`} – Antwort nicht gespeichert`
 
 const fragenAus = (d: Daten): PlanFrage[] =>
   Array.isArray(d.plan?.fragen) ? d.plan.fragen.filter((f): f is PlanFrage => !!f && typeof f === 'object') : []
@@ -164,23 +168,36 @@ async function posten($: EngineInterface, url: string, koerper: object): Promise
   return { ok: false, status, text }
 }
 
-async function entscheiden($: EngineInterface, api: string, frage: string, wahl: string, eigen = false): Promise<boolean> {
-  return (await posten($, `${api}/entscheidung`, { frage, wahl, ...(eigen ? { eigen: true } : {}) })).ok
+function entscheiden($: EngineInterface, api: string, frage: string, wahl: string, eigen = false): Promise<{ ok: boolean; status: number | null }> {
+  return posten($, `${api}/entscheidung`, { frage, wahl, ...(eigen ? { eigen: true } : {}) })
+}
+
+// A decided question is not withdrawn. The server says so in the field `entschieden` of its 409,
+// the script with exit code ENTSCHIEDEN_EXIT; their prose is for people (zurueckziehen.test.ts
+// couples both to the real server and script).
+export const ENTSCHIEDEN_EXIT = 3
+export function schonEntschieden(r: { status: number | null; text: string }): boolean {
+  if (r.status !== 409) return false
+  try {
+    const j = JSON.parse(r.text) as { entschieden?: unknown } | null
+    return typeof j?.entschieden === 'string'
+  } catch {
+    return false
+  }
 }
 
 // Withdraws questions the session closed without a decision (#27): through the server, else the
-// script, which writes the YAML itself; a decided one stays (both say `ist schon entschieden`).
-// What neither reaches is said in the transcript, so the live-plan's open question is no silent lie.
-const ENTSCHIEDEN = 'ist schon entschieden'
+// script, which writes the YAML itself; a decided one stays. What neither reaches is said in the
+// transcript, so the live-plan's open question is no silent lie.
 async function zurueckziehen($: EngineInterface, ort: Ort, ids: readonly string[], grund: string): Promise<void> {
   for (const id of ids) {
     const r = await posten($, `${ort.api}/zurueckziehen`, { frage: id, grund })
-    if (r.ok || (r.status === 409 && r.text.includes(ENTSCHIEDEN))) continue
+    if (r.ok || schonEntschieden(r)) continue
     const skript = await skriptPfad($)
     const lauf = skript
       ? await $.process.run(['bun', skript, 'frage-zurueck', id, grund, '--sitzung', ort.id], { cwd: ort.wurzel, timeoutMs: LAUF_MS }).catch(() => null)
       : null
-    if (lauf && (lauf.exitCode === 0 || lauf.stderr.includes(ENTSCHIEDEN))) continue
+    if (lauf && (lauf.exitCode === 0 || lauf.exitCode === ENTSCHIEDEN_EXIT)) continue
     $.ui.log(`live-plan: ${id} nicht zurueckgezogen (${grund})`)
   }
 }
@@ -263,16 +280,15 @@ async function vorbereiten(
 }
 
 // Waits until every question `ids` names is decided in the browser: answers by question
-// text, or null once `stop` aborts or a question is gone or withdrawn. A failed read is no
-// answer (H2): it reads again a beat later, while the hook's budget has room for the wait
-// (a `$.clock` wait counts against it).
+// text, or null once `stop` aborts (the chat answered, the call ended) or a question is gone or
+// withdrawn. A failed read is no answer (H2): it reads again a beat later, as long as it takes;
+// the hook's budget pauses while the chat dialog (`next`) runs.
 async function browserAntwort(
   $: EngineInterface,
   api: string,
   ids: string[],
   fragen: readonly Frage[],
   stop: AbortSignal,
-  budget: { readonly remainingMs: number },
 ): Promise<Record<string, string> | null> {
   while (!stop.aborted) {
     const d = await bis(planHolen($, api), stop)
@@ -290,7 +306,7 @@ async function browserAntwort(
       const w = await bis($.http.fetch(`${api}/warte?seit=${seit}&hoechstens_ms=${WARTE_MS}`), stop)
       if (w?.ok) continue
     }
-    if (stop.aborted || budget.remainingMs < 2 * TAKT_MS) return null
+    if (stop.aborted) return null
     await $.clock.sleep(TAKT_MS, { signal: stop }).catch(() => undefined)
   }
   return null
@@ -318,8 +334,7 @@ const antwortText = (roh: unknown): string =>
 async function spiegeln($: EngineInterface, ort: Ort, fragen: readonly Frage[], ids: string[], ergebnis: unknown): Promise<void> {
   const chat = chatAntworten(ergebnis)
   if (!chat) return zurueckziehen($, ort, ids, ABGEBROCHEN)
-  const unbeantwortet: string[] = []
-  const ungespiegelt: string[] = []
+  const zurueck: { id: string; grund: string }[] = []
   for (const [i, f] of fragen.entries()) {
     const id = ids[i]!
     let wahl = antwortText(chat.antworten.get(f.question))
@@ -327,11 +342,14 @@ async function spiegeln($: EngineInterface, ort: Ort, fragen: readonly Frage[], 
     if (!wahl.trim() && fragen.length === 1) wahl = chat.frei
     const label = f.options.some(o => o.label === wahl)
     const text = label ? wahl : einzeilig(wahl)
-    if (!text) unbeantwortet.push(id)
-    else if (!(await entscheiden($, ort.api, id, text, !label))) ungespiegelt.push(id)
+    if (!text) {
+      zurueck.push({ id, grund: chat.frei.trim() ? FREI : UNBEANTWORTET })
+      continue
+    }
+    const r = await entscheiden($, ort.api, id, text, !label)
+    if (!r.ok) zurueck.push({ id, grund: NICHT_GESPEICHERT(r.status) })
   }
-  await zurueckziehen($, ort, unbeantwortet, UNBEANTWORTET)
-  await zurueckziehen($, ort, ungespiegelt, NICHT_GESPIEGELT)
+  for (const { id, grund } of zurueck) await zurueckziehen($, ort, [id], grund)
 }
 
 // ---------------------------------------------------------------------------
@@ -405,15 +423,14 @@ const JEDES_ENDE = ['answer', 'aborted', 'refusal', 'error'] as const
 // register.tsx holds session.end without a matcher: this one selects every session.
 const JEDE_SITZUNG = /(?:)/
 
-// At the session's end no one waits on its open questions: those this hook put into the
-// live-plan (`gemeldet`) are withdrawn. A decided one stays, as do the agent's own.
+// At the session's end no one waits on its open questions: every open one is withdrawn, the
+// agent's own too, so list and page agree (B1). A decided or withdrawn one stays.
 async function sitzungsende($: EngineInterface, sitzung: string): Promise<void> {
   const ort = await ortVon($)
   if (!ort || ort.id !== sitzung) return
   const d = await planHolen($, ort.api)
   if (!d) return
-  const m = await merkerVon($, ort.id)
-  const ids = fragenAus(d).flatMap(f => (typeof f.id === 'string' && offen(f) && m.gemeldet.includes(f.id) ? [f.id] : []))
+  const ids = fragenAus(d).flatMap(f => (typeof f.id === 'string' && offen(f) ? [f.id] : []))
   await zurueckziehen($, ort, ids, BEENDET)
 }
 
@@ -477,7 +494,7 @@ export const fragenRegistrieren: Register = (on, options) => {
       const chatSieg: Promise<Sieg> = chat.then(r => ({ chat: r }))
       chatSieg.catch(() => undefined)
       // A browser that gives up leaves the race to the chat.
-      const browserSieg: Promise<Sieg> = browserAntwort($, ort.api, ids, fragen, stop.signal, next.budget).then(a =>
+      const browserSieg: Promise<Sieg> = browserAntwort($, ort.api, ids, fragen, stop.signal).then(a =>
         a ? { browser: a } : chatSieg,
       )
       const sieg = await Promise.race([chatSieg, browserSieg]).catch(gescheitert)

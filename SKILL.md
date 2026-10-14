@@ -221,15 +221,17 @@ in `entscheidung` (`Postgres, SQLite`) und gilt nicht als eigene Antwort.
 
 Zurueckgezogen: Schliesst die Sitzung eine Frage ohne Entscheidung, traegt die Mod
 `zurueckgezogen: GRUND` in die Frage: `in der Sitzung abgebrochen` (Esc, ein unterbrochener
-Dialog), `in der Sitzung nicht beantwortet` (keine oder leere Antwort), `in der Sitzung beantwortet,
-live-plan nicht erreichbar` (die Antwort liess sich nicht spiegeln) und `Sitzung beendet` (am Ende
-der Sitzung alle offenen Fragen, die die Mod angelegt hat; Ihre eigenen bleiben). Eine
-zurueckgezogene Frage gilt nirgends mehr als offen: nicht unter Wartet auf Sie, nicht in der
-Jetzt-Zeile, nicht in `stand --kurz`, nicht im Band der Mod und nicht in der Zahl der Liste; die
-Ansicht zeigt sie ausgegraut mit dem Grund. Eine entschiedene Frage wird nie zurueckgezogen, eine
-schon zurueckgezogene behaelt ihren ersten Grund, und eine Entscheidung danach gilt trotzdem. Wer
-dieselbe Frage erneut stellt, stellt eine neue. In der Liste zaehlt eine Sitzung, deren Register
-`beendet` traegt, keine offenen Fragen; ohne Register bleibt die Zahl.
+Dialog), `in der Sitzung nicht beantwortet` (keine, leere oder keine Text-Antwort), `im Chat frei
+beantwortet, keiner Frage zuzuordnen` (eine freie Antwort bei mehreren Fragen, ohne eigene Wahl
+fuer diese), `im Chat beantwortet, live-plan nicht erreichbar – Antwort nicht gespeichert` bzw.
+`im Chat beantwortet, vom live-plan abgelehnt (HTTP STATUS) – Antwort nicht gespeichert` (die
+Chat-Antwort liess sich nicht spiegeln und geht verloren) und `Sitzung beendet` (am Ende der
+Sitzung jede noch offene Frage, auch Ihre eigenen). Eine zurueckgezogene Frage gilt nirgends mehr
+als offen: nicht unter Wartet auf Sie, nicht in der Jetzt-Zeile, nicht in `stand --kurz`, nicht im
+Band der Mod und nicht in der Zahl der Liste; die Ansicht zeigt sie ausgegraut mit dem Grund. Eine
+entschiedene Frage wird nie zurueckgezogen, eine schon zurueckgezogene behaelt ihren ersten Grund,
+und eine Entscheidung danach gilt trotzdem. Wer dieselbe Frage erneut stellt, stellt eine neue.
+Eine `entscheidung` aus Leerraum gilt als keine. Die Liste zaehlt offene Fragen wie die Seite.
 
 ```bash
 echo '{"fragen":[{"frage":"Welche Variante?","kopf":"Variante","optionen":[{"label":"A","beschreibung":"billig","empfohlen":true},{"label":"B"}]}]}' \
@@ -245,10 +247,11 @@ Datei bleibt dann unveraendert. `stand --kurz` nennt Titel, Thema, das Blatt `je
 Fragen samt Optionen, laufende Schritte und die uebrigen Blaetter in Offen; die Mod setzt es in
 den System-Prompt. `frage-zurueck` schreibt `zurueckgezogen` wie der Server (eine Zeile,
 gegengelesen, atomar), der Grund hoechstens 200 Zeichen in einer Zeile, ohne Angabe `ohne Angabe`;
-eine entschiedene oder unbekannte Frage endet mit Exit 1, eine schon zurueckgezogene mit Exit 0 und
-ihrem ersten Grund. Der Server nimmt dasselbe als `POST /api/REPO/SLUG/zurueckziehen` mit
-`{frage, grund}`: 200, unbekannte Frage 404, entschiedene 409, sonst wie die Entscheidung (400,
-413, 415).
+eine entschiedene Frage endet mit Exit 3, eine unbekannte mit Exit 1, eine schon zurueckgezogene
+mit Exit 0 und ihrem ersten Grund. Der Server nimmt dasselbe als `POST /api/REPO/SLUG/zurueckziehen`
+mit `{frage, grund}`: 200, unbekannte Frage 404, entschiedene 409 mit `{fehler, entschieden: WAHL}`,
+eine nicht zeilenweise aenderbare 409 ohne `entschieden`, sonst wie die Entscheidung (400, 413,
+415). Die Mod liest das Feld `entschieden` und Exit 3, nicht den Wortlaut.
 
 ## Dokumentation und Handout
 

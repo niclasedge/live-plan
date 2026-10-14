@@ -28,8 +28,12 @@ const antwort = (status: number, text: string) => ({ value: { status, ok: status
 
 // The world beneath the plugin: the live-plan script and server in memory, a mocked clock.
 // `live-plan frage` appends F<n>; `/warte` answers once a decision lands or after 20 s.
-// `/zurueckziehen` and `live-plan frage-zurueck` withdraw an undecided question; `postFehler` POSTs
-// to `/entscheidung` answer 500 first; `unaenderbar`: the file cannot be changed line by line (409).
+// `/zurueckziehen` and `live-plan frage-zurueck` withdraw an undecided question; a decided one they
+// name in the field `entschieden` (409) and with exit 3, their prose differs from the server's on
+// purpose: the mod reads only field and exit code (K2). `postFehler` POSTs to `/entscheidung` answer
+// `postStatus` (500) first; `unaenderbar`: the file cannot be changed line by line (409);
+// `entschiedenUnterwegs`: the browser decides a question just before its withdrawal arrives;
+// `zurueckOhneServer`: `/zurueckziehen` is not reachable, the script withdraws.
 function welt(
   on: On,
   opts: {
@@ -39,7 +43,10 @@ function welt(
     skriptDa?: boolean
     store?: Record<string, unknown>
     postFehler?: number
+    postStatus?: number
     unaenderbar?: boolean
+    entschiedenUnterwegs?: string
+    zurueckOhneServer?: boolean
   } = {},
 ) {
   const clock = mock.clock(on, { now: 10_000 })
@@ -65,15 +72,20 @@ function welt(
     wecker = []
     for (const r of w) r()
   }
-  // Withdraws `id` unless it is decided; false for a decided or unknown one.
+  // Withdraws `id` unless it is decided: 'ok', else 'entschieden' or 'unbekannt'.
   const zurueckziehen = (id: string, grund: string, weg: 'server' | 'skript') => {
     const f = plan.fragen.find(x => x.id === id)
-    if (!f || f.entscheidung) return false
+    if (f && !f.entscheidung && opts.entschiedenUnterwegs) f.entscheidung = opts.entschiedenUnterwegs
+    if (!f) return 'unbekannt' as const
+    if (f.entscheidung) return 'entschieden' as const
     zurueck.push({ frage: id, grund, weg })
     f.zurueckgezogen ??= grund
     plan.verlauf += 1
-    return true
+    return 'ok' as const
   }
+  const lauf = (exitCode: number, stderr = '') => ({
+    value: { exitCode, stdout: '', stderr, isStdoutTruncated: false, isStderrTruncated: false },
+  })
 
   on('fs.stat', ($, e) =>
     opts.skriptDa === false
@@ -92,13 +104,10 @@ function welt(
       })
       return ok(`${JSON.stringify({ ids, url: URL_SEITE })}\n`)
     }
-    if (e.argv[2] === 'frage-zurueck' && opts.unaenderbar) {
-      return { value: { exitCode: 1, stdout: '', stderr: 'live-plan: eine Frage steht in Flow-Form\n', isStdoutTruncated: false, isStderrTruncated: false } }
-    }
+    if (e.argv[2] === 'frage-zurueck' && opts.unaenderbar) return lauf(1, 'live-plan: eine Frage steht in Flow-Form\n')
     if (e.argv[2] === 'frage-zurueck') {
-      const erfolg = zurueckziehen(e.argv[3]!, e.argv[4]!, 'skript')
-      const stderr = erfolg ? '' : `live-plan: ${e.argv[3]} ist schon entschieden\n`
-      return { value: { exitCode: erfolg ? 0 : 1, stdout: '', stderr, isStdoutTruncated: false, isStderrTruncated: false } }
+      const r = zurueckziehen(e.argv[3]!, e.argv[4]!, 'skript')
+      return r === 'ok' ? lauf(0) : r === 'entschieden' ? lauf(3, `live-plan: ${e.argv[3]} steht\n`) : lauf(1, `live-plan: ${e.argv[3]} fehlt\n`)
     }
     if (e.argv[2] === 'start' && opts.startHilft !== false) plan.server = true
     return ok()
@@ -110,7 +119,7 @@ function welt(
       posts.push(b)
       if (postFehler > 0) {
         postFehler -= 1
-        return antwort(500, '{"fehler":"kaputt"}')
+        return antwort(opts.postStatus ?? 500, '{"fehler":"kaputt"}')
       }
       entscheiden(b.frage, b.wahl)
       return antwort(200, '{"ok":true}')
@@ -118,9 +127,13 @@ function welt(
     if (e.init?.method === 'POST' && e.url === `${API}/zurueckziehen` && opts.unaenderbar) {
       return antwort(409, '{"fehler":"eine Frage steht in Flow-Form"}')
     }
+    if (e.init?.method === 'POST' && e.url === `${API}/zurueckziehen` && opts.zurueckOhneServer) return { deny: 'ECONNREFUSED' }
     if (e.init?.method === 'POST' && e.url === `${API}/zurueckziehen`) {
       const b = JSON.parse(e.init.body ?? '{}') as { frage: string; grund: string }
-      return zurueckziehen(b.frage, b.grund, 'server') ? antwort(200, '{"ok":true}') : antwort(409, `{"fehler":"${b.frage} ist schon entschieden"}`)
+      const r = zurueckziehen(b.frage, b.grund, 'server')
+      if (r === 'ok') return antwort(200, '{"ok":true}')
+      const f = plan.fragen.find(x => x.id === b.frage)
+      return r === 'entschieden' ? antwort(409, JSON.stringify({ fehler: 'steht', entschieden: f?.entscheidung })) : antwort(404, '{"fehler":"fehlt"}')
     }
     if (e.url === API) return antwort(200, JSON.stringify({ verlauf: plan.verlauf, plan: { fragen: plan.fragen } }))
     if (e.url.startsWith(`${API}/warte?`)) {
@@ -294,13 +307,14 @@ test('Rueckfall, wenn der Server auch nach start nicht antwortet: die angelegte 
   await w.clock.settle()
   await w.clock.advance(1_000)
   expect(await lauf).toMatchObject({ result: { answers: { 'Welche Datenbank?': 'SQLite' } } })
-  // The chat's answer cannot reach the server: the script closes the question in the YAML itself.
+  // The chat's answer cannot reach the server: the script closes the question in the YAML itself,
+  // and its reason says the answer is lost (S2: accepted, not stored elsewhere).
   expect(w.prozesse.map(p => p.argv.slice(2))).toEqual([
     ['frage', ID],
     ['start'],
-    ['frage-zurueck', 'F1', 'in der Sitzung beantwortet, live-plan nicht erreichbar', '--sitzung', ID],
+    ['frage-zurueck', 'F1', 'im Chat beantwortet, live-plan nicht erreichbar – Antwort nicht gespeichert', '--sitzung', ID],
   ])
-  expect(w.plan.fragen[0]!.zurueckgezogen).toBe('in der Sitzung beantwortet, live-plan nicht erreichbar')
+  expect(w.plan.fragen[0]!.zurueckgezogen).toBe('im Chat beantwortet, live-plan nicht erreichbar – Antwort nicht gespeichert')
   expect(w.status).toEqual([])
   expect(w.logs).toEqual([])
 })
@@ -490,7 +504,46 @@ test('bleibt die Spiegelung abgelehnt, wird die Frage zurueckgezogen statt offen
   await w.clock.advance(5_000)
   await lauf
   expect(w.posts).toHaveLength(2)
-  expect(w.zurueck).toEqual([{ frage: 'F1', grund: 'in der Sitzung beantwortet, live-plan nicht erreichbar', weg: 'server' }])
+  expect(w.zurueck).toEqual([{ frage: 'F1', grund: 'im Chat beantwortet, vom live-plan abgelehnt (HTTP 500) – Antwort nicht gespeichert', weg: 'server' }])
+})
+
+test('lehnt der live-plan die Antwort ab (422), wird nicht wiederholt, sondern zurueckgezogen', MIT_SKRIPT, async ($, on) => {
+  const w = welt(on, { postFehler: 2, postStatus: 422 })
+  w.chat('Postgres')
+  const lauf = $.tool.call({ tool: 'AskUserQuestion', questions: [FRAGE] })
+  await w.clock.settle()
+  await w.clock.advance(5_000)
+  await lauf
+  expect(w.posts).toEqual([{ frage: 'F1', wahl: 'Postgres' }])
+  expect(w.zurueck).toEqual([{ frage: 'F1', grund: 'im Chat beantwortet, vom live-plan abgelehnt (HTTP 422) – Antwort nicht gespeichert', weg: 'server' }])
+  expect(w.plan.fragen[0]).toMatchObject({ entscheidung: '' })
+})
+
+test('eine Antwort, die kein Text ist (Zahl, Objekt), zaehlt als unbeantwortet', MIT_SKRIPT, async ($, on) => {
+  const w = welt(on)
+  const ZWEITE = { ...FRAGE, question: 'Welcher Port?', options: [{ label: '4410' }, { label: '8080' }] }
+  w.chatEnde({ answers: { 'Welche Datenbank?': 42, 'Welcher Port?': { label: '4410' } } })
+  const lauf = $.tool.call({ tool: 'AskUserQuestion', questions: [FRAGE, ZWEITE] })
+  await w.clock.settle()
+  await w.clock.advance(5_000)
+  await lauf
+  expect(w.posts).toEqual([])
+  expect(w.zurueck.map(z => [z.frage, z.grund])).toEqual([
+    ['F1', 'in der Sitzung nicht beantwortet'],
+    ['F2', 'in der Sitzung nicht beantwortet'],
+  ])
+})
+
+test('eine freie Antwort (response) bei zwei Fragen: die ohne eigene Wahl wird mit passendem Grund zurueckgezogen', MIT_SKRIPT, async ($, on) => {
+  const w = welt(on)
+  const ZWEITE = { ...FRAGE, question: 'Welcher Port?', options: [{ label: '4410' }, { label: '8080' }] }
+  w.chatEnde({ answers: { 'Welche Datenbank?': 'SQLite' }, response: 'den Port spaeter' })
+  const lauf = $.tool.call({ tool: 'AskUserQuestion', questions: [FRAGE, ZWEITE] })
+  await w.clock.settle()
+  await w.clock.advance(5_000)
+  await lauf
+  expect(w.posts).toEqual([{ frage: 'F1', wahl: 'SQLite' }])
+  expect(w.zurueck.map(z => [z.frage, z.grund])).toEqual([['F2', 'im Chat frei beantwortet, keiner Frage zuzuordnen']])
 })
 
 test('ein Lesefehler laesst die Browser-Antwort nicht fallen: sie erreicht den Dialog trotzdem', MIT_SKRIPT, async ($, on) => {
@@ -509,6 +562,46 @@ test('ein Lesefehler laesst die Browser-Antwort nicht fallen: sie erreicht den D
   expect(w.dialog.abgebrochen).toBe(1)
 })
 
+test('auch ein langer Ausfall ueber viele Takte beendet die Browser-Antwort nicht: nur Chat oder Abbruch tun es', MIT_SKRIPT, async ($, on) => {
+  const w = welt(on)
+  w.chat('Postgres', 600_000)
+  const lauf = $.tool.call({ tool: 'AskUserQuestion', questions: [FRAGE] })
+  await w.clock.settle()
+  w.plan.server = false
+  await w.clock.advance(20_000)
+  for (let i = 0; i < 20; i++) await w.clock.advance(3_000)
+  w.plan.server = true
+  w.entscheiden('F1', 'SQLite')
+  await w.clock.advance(3_000)
+  expect(await lauf).toMatchObject({ result: { answers: { 'Welche Datenbank?': 'SQLite' } } })
+  expect(w.dialog.abgebrochen).toBe(1)
+})
+
+test('unterwegs im Browser entschieden: der Server sagt es im Feld entschieden, kein Skript, kein Hinweis', MIT_SKRIPT, async ($, on) => {
+  const w = welt(on, { entschiedenUnterwegs: 'Postgres' })
+  w.chatEnde({ deny: 'Der Nutzer hat abgelehnt' })
+  const lauf = $.tool.call({ tool: 'AskUserQuestion', questions: [FRAGE] })
+  await w.clock.settle()
+  await w.clock.advance(5_000)
+  await lauf
+  expect(w.prozesse.filter(p => p.argv[2] === 'frage-zurueck')).toEqual([])
+  expect(w.zurueck).toEqual([])
+  expect(w.logs).toEqual([])
+  expect(w.plan.fragen[0]).toMatchObject({ entscheidung: 'Postgres' })
+})
+
+test('unterwegs entschieden, ohne Server: das Skript sagt es mit Exit 3, kein Hinweis', MIT_SKRIPT, async ($, on) => {
+  const w = welt(on, { entschiedenUnterwegs: 'Postgres', zurueckOhneServer: true })
+  w.chatEnde({ deny: 'Der Nutzer hat abgelehnt' })
+  const lauf = $.tool.call({ tool: 'AskUserQuestion', questions: [FRAGE] })
+  await w.clock.settle()
+  await w.clock.advance(5_000)
+  await lauf
+  expect(w.prozesse.filter(p => p.argv[2] === 'frage-zurueck').map(p => p.argv.slice(3))).toEqual([['F1', 'in der Sitzung abgebrochen', '--sitzung', ID]])
+  expect(w.zurueck).toEqual([])
+  expect(w.logs).toEqual([])
+})
+
 test('laesst sich die Datei nicht aendern (409, nicht entschieden), versucht es das Skript und sagt es im Verlauf', MIT_SKRIPT, async ($, on) => {
   const w = welt(on, { unaenderbar: true })
   w.chatEnde({ deny: 'Der Nutzer hat abgelehnt' })
@@ -520,14 +613,23 @@ test('laesst sich die Datei nicht aendern (409, nicht entschieden), versucht es 
   expect(w.logs).toEqual(['live-plan: F1 nicht zurueckgezogen (in der Sitzung abgebrochen)'])
 })
 
-test('Sitzungsende zieht die offenen, von der Mod angelegten Fragen zurueck, sonst nichts', async ($, on) => {
+test('Sitzungsende zieht alle offenen Fragen der Sitzung zurueck, auch die des Agenten; entschiedene und zurueckgezogene bleiben', async ($, on) => {
   const w = welt(on, {
-    fragen: [{ ...OFFEN, id: 'F1' }, { ...OFFEN }, { ...OFFEN, id: 'F3', entscheidung: '8080' }],
+    fragen: [
+      { ...OFFEN, id: 'F1' },
+      { ...OFFEN },
+      { ...OFFEN, id: 'F3', entscheidung: '8080' },
+      { ...OFFEN, id: 'F4', zurueckgezogen: 'in der Sitzung abgebrochen' },
+    ],
+    // F2 never went through the mod (the agent wrote it): it is closed all the same (B1).
     store: { [`fragen:${ID}`]: { offen: [], gemeldet: ['F1', 'F3'] } },
   })
   await $.session.end({ reason: 'prompt_input_exit', sessionId: ID, resume: { id: ID } })
-  expect(w.zurueck).toEqual([{ frage: 'F1', grund: 'Sitzung beendet', weg: 'server' }])
-  expect(w.plan.fragen.map(f => f.zurueckgezogen)).toEqual(['Sitzung beendet', undefined, undefined])
+  expect(w.zurueck).toEqual([
+    { frage: 'F1', grund: 'Sitzung beendet', weg: 'server' },
+    { frage: 'F2', grund: 'Sitzung beendet', weg: 'server' },
+  ])
+  expect(w.plan.fragen.map(f => f.zurueckgezogen)).toEqual(['Sitzung beendet', 'Sitzung beendet', undefined, 'in der Sitzung abgebrochen'])
 })
 
 test('eine zurueckgezogene Frage meldet sich nicht als offen und wird nicht wieder aufgenommen', MIT_SKRIPT, async ($, on) => {

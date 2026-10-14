@@ -13,7 +13,7 @@
 //                              Bedarf wie neu --auto an; stdout: {"ids":[...],"url":"..."}
 //   live-plan frage-zurueck ID [GRUND] [--sitzung SLUG]
 //                              Frage ohne Entscheidung schliessen (#27): `zurueckgezogen: GRUND` (Vorgabe
-//                              "ohne Angabe"), auch ohne Server; eine entschiedene bleibt (Exit 1), eine schon
+//                              "ohne Angabe"), auch ohne Server; eine entschiedene bleibt (Exit 3), eine schon
 //                              zurueckgezogene behaelt ihren ersten Grund. SLUG fehlt: CLAUDE_SESSION_ID
 //   live-plan stand [SLUG] --kurz
 //                              Stand als Klartext fuer den System-Prompt (hoechstens 1500 Zeichen);
@@ -48,10 +48,13 @@ const NAME = /^[A-Za-z0-9._-]+$/;
 
 const schlafe = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-function abbruch(meldung: string): never {
+function abbruch(meldung: string, code = 1): never {
   console.error(`live-plan: ${meldung}`);
-  process.exit(1);
+  process.exit(code);
 }
+
+/** Exit-Code von `frage-zurueck` fuer eine schon entschiedene Frage (#27); die Mod liest ihn statt des Wortlauts. */
+const ENTSCHIEDEN_EXIT = 3;
 
 async function gesund(): Promise<{ pid: number; wurzel: string; wurzeln?: string[] } | null> {
   try {
@@ -416,7 +419,7 @@ function frageZurueck(slug: string, id: string, roh: string): void {
     }
     const f = pruefePlan(vorher).plan.fragen.find((x) => x.id === id);
     if (!f) abbruch(`Frage ${id} unbekannt`);
-    if (f.entscheidung) abbruch(`${id} ist schon entschieden (${f.entscheidung})`);
+    if (f.entscheidung) abbruch(`${id} ist schon entschieden (${f.entscheidung})`, ENTSCHIEDEN_EXIT);
     if (f.zurueckgezogen) {
       console.log(`${id} war schon zurueckgezogen: ${f.zurueckgezogen}`);
       return;
@@ -424,7 +427,7 @@ function frageZurueck(slug: string, id: string, roh: string): void {
     const ergebnis = zieheFrageZurueckImText(text, id, grund);
     if (ergebnis.art === "unbekannt") abbruch(`${id} steht nicht als Block in der Datei`);
     if (ergebnis.art === "fehler") abbruch(ergebnis.grund);
-    if (ergebnis.art === "entschieden") abbruch(`${id} ist schon entschieden (${ergebnis.entscheidung})`);
+    if (ergebnis.art === "entschieden") abbruch(`${id} ist schon entschieden (${ergebnis.entscheidung})`, ENTSCHIEDEN_EXIT);
     let nachher: unknown;
     try {
       nachher = Bun.YAML.parse(ergebnis.text);

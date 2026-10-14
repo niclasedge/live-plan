@@ -25,6 +25,7 @@ import {
   zieheFrageZurueckImText,
   zurueckGrund,
 } from "./logik.ts";
+import { ENTSCHIEDEN_EXIT, schonEntschieden } from "./mod/hooks/fragen.ts";
 
 const FRAGE = (id: string, extra: Record<string, unknown> = {}) => ({ id, frage: `${id}?`, optionen: [{ label: "A" }, { label: "B" }], entscheidung: "", ...extra });
 const PLAN = (fragen: unknown[]) => ({ v: 1, titel: "t", bahnen: [{ id: "b" }], wellen: [{ id: "w" }], schritte: [], fragen });
@@ -38,6 +39,19 @@ test("pruefePlan liest zurueckgezogen, frageOffen ist weder entschieden noch zur
   assert.equal(plan.fragen[0]!.zurueckgezogen, undefined);
   assert.deepEqual(plan.fragen.map(frageOffen), [true, false, false]);
   assert.deepEqual(offeneFragen(plan), ["F1"]);
+});
+
+// Review K5: Band und Mod lesen eine Entscheidung aus Leerraum als keine; pruefePlan genauso.
+test("eine Entscheidung aus Leerraum ist keine: offen in pruefePlan, frageOffen, Liste und beim Zurueckziehen", () => {
+  const { plan } = pruefePlan(PLAN([FRAGE("F1", { entscheidung: "  \t" }), FRAGE("F2", { entscheidung: " A " })]));
+  assert.equal(plan.fragen[0]!.entscheidung, "");
+  assert.deepEqual(plan.fragen.map(frageOffen), [true, false]);
+  assert.deepEqual(offeneFragen(plan), ["F1"]);
+  assert.equal(offeneFragenZahl(PLAN([FRAGE("F1", { entscheidung: " " })])), 1);
+  const text = 'v: 1\nfragen:\n  - id: F1\n    frage: Eins?\n    optionen: [{ label: A }]\n    entscheidung: "  "\n';
+  const r = zieheFrageZurueckImText(text, "F1", "Sitzung beendet");
+  assert.equal(r.art, "ok");
+  assert.equal(pruefePlan(Bun.YAML.parse((r as { text: string }).text)).plan.fragen[0]!.zurueckgezogen, "Sitzung beendet");
 });
 
 test("offeneFragenZahl (Liste) zaehlt eine zurueckgezogene Frage nicht", () => {
@@ -168,6 +182,7 @@ before(async () => {
   writeFileSync(path.join(ordner, "liste.yaml"), SITZUNG(BLOCK("F1") + BLOCK("F2") + "    zurueckgezogen: in der Sitzung abgebrochen\n"));
   writeFileSync(path.join(ordner, "aus.yaml"), SITZUNG(BLOCK("F1") + BLOCK("F2")));
   writeFileSync(path.join(ordner, "an.yaml"), SITZUNG(BLOCK("F1")));
+  writeFileSync(path.join(ordner, "flow.yaml"), SITZUNG('  - { id: F1, frage: "F1?", optionen: [{ label: A }], entscheidung: "" }\n'));
   writeFileSync(path.join(tmp, "cache", "sitzungen", "aus.json"), REGISTER("aus", 5));
   writeFileSync(path.join(tmp, "cache", "sitzungen", "an.json"), REGISTER("an"));
   const port = await freierPort();
@@ -213,14 +228,50 @@ test("POST zurueckziehen: entschieden 409, unbekannt 404, ohne frage 400, falsch
   assert.doesNotMatch(readFileSync(path.join(repo, ".live-plan", "s1.yaml"), "utf8"), /- id: F2\n(?: {4}.*\n)*? {4}zurueckgezogen/);
 });
 
-test("GET /api/liste: zurueckgezogene Fragen zaehlen nicht, eine beendete Sitzung wartet auf nichts", async () => {
-  const { sitzungen } = (await (await fetch(`${basis}/api/liste`)).json()) as { sitzungen: { slug: string; offeneFragen: number | null; beendet: boolean }[] };
-  const je = Object.fromEntries(sitzungen.map((s) => [s.slug, s]));
-  assert.equal(je.liste?.offeneFragen, 1);
+// Review B1: die Liste kennt keine Sonderregel fuer beendete Sitzungen. Sie zaehlt wie die Seite; die
+// Fragen einer beendeten Sitzung schliesst die Mod am Sitzungsende (`Sitzung beendet`).
+test("GET /api/liste zaehlt offene Fragen wie die Seite, auch fuer eine beendete Sitzung", async () => {
+  const liste = async () => {
+    const { sitzungen } = (await (await fetch(`${basis}/api/liste`)).json()) as { sitzungen: { slug: string; offeneFragen: number | null; beendet: boolean }[] };
+    return Object.fromEntries(sitzungen.map((s) => [s.slug, s]));
+  };
+  // Was die Seite unter Fragen an Sie zaehlt, aus denselben Daten, die der Browser bekommt.
+  const seite = async (slug: string) => {
+    const a = ansicht();
+    a.setze(await (await fetch(`${basis}/api/repo/${slug}`)).json());
+    return Number(/<span class="zaehler">(\d+) offen<\/span>/.exec(a.fragenAnSie())?.[1]);
+  };
+  const je = await liste();
   assert.equal(je.aus?.beendet, true);
-  assert.equal(je.aus?.offeneFragen, 0);
   assert.equal(je.an?.beendet, false);
-  assert.equal(je.an?.offeneFragen, 1);
+  for (const slug of ["liste", "aus", "an"]) assert.equal(je[slug]?.offeneFragen, await seite(slug), slug);
+  assert.deepEqual(["liste", "aus", "an"].map((slug) => je[slug]?.offeneFragen), [1, 2, 1]);
+  for (const frage of ["F1", "F2"]) assert.equal((await zurueck("aus", { frage, grund: "Sitzung beendet" })).status, 200);
+  assert.equal((await liste()).aus?.offeneFragen, 0);
+  assert.equal(await seite("aus"), 0);
+});
+
+// Review K2: "schon entschieden" steht im Feld `entschieden` des 409 und im Exit-Code des Skripts,
+// nicht im Wortlaut. Die Mod liest beides mit schonEntschieden und ENTSCHIEDEN_EXIT; dieser Test
+// fuehrt sie gegen den echten Server und das echte Skript.
+test("schon entschieden ist maschinenlesbar: Feld im 409 des Servers, eigener Exit-Code des Skripts, die Mod liest beides", async () => {
+  const entschieden = await zurueck("s1", { frage: "F2", grund: "x" });
+  const text = await entschieden.text();
+  assert.equal(entschieden.status, 409);
+  assert.equal((JSON.parse(text) as { entschieden?: unknown }).entschieden, "A");
+  assert.equal(schonEntschieden({ status: entschieden.status, text }), true);
+  const flow = await zurueck("flow", { frage: "F1", grund: "x" });
+  assert.equal(flow.status, 409);
+  assert.equal(schonEntschieden({ status: flow.status, text: await flow.text() }), false);
+  const unbekannt = await zurueck("s1", { frage: "F9" });
+  assert.equal(schonEntschieden({ status: unbekannt.status, text: await unbekannt.text() }), false);
+  const projekt = path.join(tmp, "projekt-k2");
+  mkdirSync(path.join(projekt, ".live-plan"), { recursive: true });
+  assert.equal(spawnSync("git", ["init", "-q"], { cwd: projekt }).status, 0);
+  writeFileSync(path.join(projekt, ".live-plan", "s.yaml"), SITZUNG(BLOCK("F1") + BLOCK("F2", "A")));
+  const skriptEntschieden = skript(projekt, "frage-zurueck", "F2", "--sitzung", "s");
+  assert.equal(skriptEntschieden.status, ENTSCHIEDEN_EXIT, skriptEntschieden.stderr);
+  assert.notEqual(skript(projekt, "frage-zurueck", "F9", "--sitzung", "s").status, ENTSCHIEDEN_EXIT);
 });
 
 // --- Skript: live-plan frage-zurueck ----------------------------------------------------------
@@ -246,7 +297,7 @@ test("live-plan frage-zurueck ID GRUND --sitzung SLUG schreibt ohne Server, ein 
   assert.match(nochmal.stdout, /F1 war schon zurueckgezogen/);
   assert.doesNotMatch(readFileSync(datei, "utf8"), /anders/);
   const entschieden = skript(projekt, "frage-zurueck", "F2", "--sitzung", "s");
-  assert.equal(entschieden.status, 1);
+  assert.equal(entschieden.status, 3);
   assert.match(entschieden.stderr, /F2 ist schon entschieden/);
   const unbekannt = skript(projekt, "frage-zurueck", "F9", "--sitzung", "s");
   assert.equal(unbekannt.status, 1);
