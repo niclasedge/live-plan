@@ -32,7 +32,9 @@ test("offeneFragenZahl: kein YAML-Objekt gibt keine Zahl", () => {
 interface Ansicht {
   fragenZelle: (zahl: unknown, href: string) => string;
   ansageSprechtext: (a: unknown) => string;
-  ansageZelle: (a: unknown) => string;
+  ansageDauer: (a: unknown, zps?: number) => number;
+  dauerText: (s: number) => string;
+  ansageZelle: (a: unknown, laeuft?: unknown, zps?: number) => string;
   letzteAnsagen: (liste: unknown) => Record<string, { zeit: number }>;
   einstellungenMenue: (z: unknown) => string;
   ansageLeiste: (z: unknown) => string;
@@ -118,7 +120,7 @@ test("ansageZelle: ▶ mit der Ansage im title und ihre Uhrzeit, ohne Ansage lee
   assert.equal(a.ansageZelle(undefined), '<td class="lp-ansage"></td>');
   const html = a.ansageZelle(ANSAGE(5, { text: 'Fertig, "PR" <offen>.' }));
   assert.match(html, new RegExp(`<button type="button" class="an-spiel" data-ansage="${JETZT - 300_000}" title="Fertig, &quot;PR&quot; &lt;offen&gt;\\." aria-label="Letzte Ansage vorlesen: live-plan 15:25">▶</button>`));
-  assert.match(html, /<span class="an-uhr mono"[^>]*>15:25<\/span><\/td>$/);
+  assert.match(html, /<span class="an-uhr mono"[^>]*>15:25<\/span> <span class="an-dauer">\(≈ 3 s\)<\/span><\/td>$/);
   assert.match(a.ansageZelle(ANSAGE(2 * 24 * 60)), />11\.10\. 15:30</);
 });
 
@@ -188,7 +190,7 @@ test("ansageLeiste: je Zeile ▶ mit der Zeit, Uhrzeit, Repo und Text; Text und 
   const html = a.ansageLeiste(LEISTE([ANSAGE(5, { repo: "firstmate", text: 'Fertig, "PR" <offen>.' })]));
   assert.match(html, new RegExp(`<button type="button" class="an-spiel" data-ansage="${JETZT - 300_000}" aria-label="Ansage vorlesen: firstmate 15:25">▶</button>`));
   assert.match(html, /<span class="an-uhr mono">15:25<\/span>/);
-  assert.match(html, /<b class="an-repo">firstmate<\/b>/);
+  assert.match(html, /<a class="an-repo" href="\/firstmate\/s-1" title="firstmate">firstmate<\/a>/);
   assert.match(html, /<span class="an-text" title="Fertig, &quot;PR&quot; &lt;offen&gt;\.">Fertig, &quot;PR&quot; &lt;offen&gt;\.<\/span>/);
 });
 
@@ -234,6 +236,109 @@ test("ansageLeiste: ohne Ansage der Leerzustand; Kopf mit ⚙-Menue und Hinweis 
   assert.match(html, /an-hinweis">Ein Klick auf die Seite schaltet den Ton frei\./);
 });
 
+/** Was gerade spricht: { zeit, pausiert } (der Zustand der Seite, s. laeuft in live-plan.js). */
+const LAUF = (zeit: number, pausiert = false) => ({ zeit, pausiert });
+/** Eine Leiste, in der die Ansage `laeuft` spricht; das Menue traegt denselben Zustand. */
+const LEISTE_LAUF = (ansagen: unknown[], laeuft: { zeit: number; pausiert: boolean }) => LEISTE(ansagen, { laeuft, menue: { ...MENUE, stopp: true } });
+
+test("ansageDauer: Zeichen je Sekunde (Vorgabe 14), aufgerundet, mindestens 1 s; der Repo-Name zaehlt mit", () => {
+  const { ansageDauer } = ansicht();
+  assert.equal(ansageDauer({ repo: "", text: "a".repeat(252) }), 18);
+  assert.equal(ansageDauer({ repo: "", text: "a".repeat(253) }), 19);
+  assert.equal(ansageDauer({ repo: "r", text: "a".repeat(249) }), 18);
+  assert.equal(ansageDauer({ repo: "", text: "a".repeat(252) }, 7), 36);
+  assert.equal(ansageDauer({ repo: "", text: "😀".repeat(14) }), 1, "ein Emoji ist ein Zeichen, kein Code-Einheiten-Paar");
+  assert.equal(ansageDauer({ repo: "", text: "" }), 1);
+});
+
+test("dauerText: unter einer Minute in Sekunden, ab einer Minute als m:ss", () => {
+  const { dauerText } = ansicht();
+  assert.equal(dauerText(18), "≈ 18 s");
+  assert.equal(dauerText(59), "≈ 59 s");
+  assert.equal(dauerText(60), "≈ 1:00 min");
+  assert.equal(dauerText(65), "≈ 1:05 min");
+  assert.equal(dauerText(125), "≈ 2:05 min");
+});
+
+test("ansageZelle: ▶ ruhend, ⏸ waehrend diese Ansage spricht, ▶ mit an-pausiert wenn pausiert; die anderen bleiben ▶", () => {
+  const a = ansicht();
+  a.setzeJetzt(JETZT);
+  const x = ANSAGE(5);
+  assert.match(a.ansageZelle(x, null), /<button type="button" class="an-spiel" data-ansage="\d+" title="[^"]*" aria-label="Letzte Ansage vorlesen: live-plan 15:25">▶<\/button>/);
+  assert.match(a.ansageZelle(x, LAUF(x.zeit)), /<button type="button" class="an-spiel an-laeuft" data-ansage="\d+" title="[^"]*" aria-label="Ansage anhalten: live-plan 15:25">⏸<\/button>/);
+  assert.match(a.ansageZelle(x, LAUF(x.zeit, true)), /<button type="button" class="an-spiel an-pausiert" data-ansage="\d+" title="[^"]*" aria-label="Ansage fortsetzen: live-plan 15:25">▶<\/button>/);
+  assert.doesNotMatch(a.ansageZelle(ANSAGE(1, { id: "s-2" }), LAUF(x.zeit)), /an-laeuft|an-pausiert/);
+});
+
+test("ansageZelle: die geschaetzte Dauer hinter der Uhrzeit, mit dem kalibrierten Wert", () => {
+  const a = ansicht();
+  a.setzeJetzt(JETZT);
+  const x = ANSAGE(5, { repo: "firstmate", text: 'Fertig, "PR" <offen>.' });
+  assert.match(a.ansageZelle(x), /<span class="an-uhr mono"[^>]*>15:25<\/span> <span class="an-dauer">\(≈ 3 s\)<\/span><\/td>$/);
+  assert.match(a.ansageZelle(x, null, 7), /<span class="an-dauer">\(≈ 5 s\)<\/span><\/td>$/);
+});
+
+test("ansageLeiste: hinter der Uhrzeit die geschaetzte Dauer in Klammern, mit dem zps der Leiste", () => {
+  const a = ansicht();
+  a.setzeJetzt(JETZT);
+  const x = ANSAGE(5, { repo: "firstmate", text: 'Fertig, "PR" <offen>.' });
+  assert.match(a.ansageLeiste(LEISTE([x])), /<span class="an-zeit"><span class="an-uhr mono">15:25<\/span> <span class="an-dauer">\(≈ 3 s\)<\/span><\/span><a class="an-repo"/);
+  assert.match(a.ansageLeiste(LEISTE([x], { zps: 7 })), /<span class="an-dauer">\(≈ 5 s\)<\/span>/);
+});
+
+test("ansageLeiste: vier Zellen je Zeile (Knopf, Zeit mit Dauer, Repo, Text), damit das Raster auf 390 px passt", () => {
+  const a = ansicht();
+  a.setzeJetzt(JETZT);
+  const html = a.ansageLeiste(LEISTE([ANSAGE(5, { repo: "Muster-Werkstatt-Archiv1", text: "Kurz." })]));
+  assert.match(html, /<li class="an-zeile"><button [^>]*>▶<\/button><span class="an-zeit"><span class="an-uhr mono">15:25<\/span> <span class="an-dauer">\(≈ \d+ s\)<\/span><\/span><a class="an-repo" href="\/Muster-Werkstatt-Archiv1\/s-1" title="Muster-Werkstatt-Archiv1">Muster-Werkstatt-Archiv1<\/a><span class="an-text" title="Kurz\.">Kurz\.<\/span><\/li>/);
+});
+
+test("ansageLeiste: der Repo-Name verweist auf die Sitzung, die eigene mit aria-current; ohne Id oder Repo bleibt er Text", () => {
+  const a = ansicht();
+  a.setzeJetzt(JETZT);
+  const html = a.ansageLeiste(LEISTE([
+    ANSAGE(1, { id: "s-x", repo: "ops-lab" }), ANSAGE(2, { id: "s-1", repo: "live-plan" }), ANSAGE(3, { id: "s-2", repo: "ops lab" }),
+    ANSAGE(4, { id: null, repo: "ohne" }), ANSAGE(5, { id: "s-3", repo: "" }),
+  ], { eigeneId: "s-1" }));
+  assert.match(html, /<a class="an-repo" href="\/ops-lab\/s-x" title="ops-lab">ops-lab<\/a>/);
+  assert.match(html, /<a class="an-repo" href="\/live-plan\/s-1" aria-current="page" title="live-plan">live-plan<\/a>/);
+  assert.match(html, /<a class="an-repo" href="\/ops%20lab\/s-2" title="ops lab">ops lab<\/a>/);
+  assert.match(html, /<b class="an-repo" title="ohne">ohne<\/b>/);
+  assert.match(html, /<b class="an-repo"><\/b>/);
+  assert.equal((html.match(/aria-current/g) ?? []).length, 1);
+});
+
+test("ansageLeiste: der volle Repo-Name steht im title, verlinkt wie ohne Link, denn die Anzeige kuerzt ihn mit Ellipse", () => {
+  const a = ansicht();
+  a.setzeJetzt(JETZT);
+  const lang = "Muster-Werkstatt-Archiv1-mit-einem-sehr-langen-Namen";
+  const html = a.ansageLeiste(LEISTE([ANSAGE(1, { id: "s-1", repo: lang }), ANSAGE(2, { id: null, repo: `${lang}-zwei` })]));
+  assert.match(html, new RegExp(`<a class="an-repo" href="/${lang}/s-1" title="${lang}">${lang}</a>`));
+  assert.match(html, new RegExp(`<b class="an-repo" title="${lang}-zwei">${lang}-zwei</b>`));
+});
+
+test("ansageLeiste: laufende Zeile ⏸ mit an-laeuft, pausierte ▶ mit an-pausiert, Stopp nur solange etwas spricht oder pausiert ist", () => {
+  const a = ansicht();
+  a.setzeJetzt(JETZT);
+  const eins = ANSAGE(1, { id: "s-1" }), zwei = ANSAGE(2, { id: "s-2" });
+  const spielt = a.ansageLeiste(LEISTE_LAUF([eins, zwei], LAUF(eins.zeit)));
+  assert.match(spielt, /<button type="button" class="an-spiel an-laeuft" data-ansage="\d+" aria-label="Ansage anhalten: live-plan 15:29">⏸<\/button>/);
+  assert.match(spielt, /<button type="button" class="an-spiel" data-ansage="\d+" aria-label="Ansage vorlesen: live-plan 15:28">▶<\/button>/);
+  assert.match(spielt, /<button type="button" class="an-stopp" data-ansage-stopp[^>]*>⏹ Stopp<\/button>/);
+  const pausiert = a.ansageLeiste(LEISTE_LAUF([eins, zwei], LAUF(eins.zeit, true)));
+  assert.match(pausiert, /<button type="button" class="an-spiel an-pausiert" data-ansage="\d+" aria-label="Ansage fortsetzen: live-plan 15:29">▶<\/button>/);
+  assert.match(pausiert, /data-ansage-stopp/);
+  const ruhend = a.ansageLeiste(LEISTE([eins, zwei]));
+  assert.doesNotMatch(ruhend, /an-laeuft|an-pausiert|data-ansage-stopp/);
+});
+
+test("einstellungenMenue: Stopp neben ⚙ nur solange etwas spricht, auch bei zugeklapptem Menue", () => {
+  const a = ansicht();
+  assert.doesNotMatch(a.einstellungenMenue(MENUE), /data-ansage-stopp/);
+  const zu = a.einstellungenMenue({ ...MENUE, auf: false, stopp: true });
+  assert.match(zu, /data-einst-auf aria-expanded="false"[^>]*>⚙ 🔊<\/button><button type="button" class="an-stopp" data-ansage-stopp[^>]*>⏹ Stopp<\/button>/);
+});
+
 // Ein Tab spricht (#18, Runde 2): sollSprechen entscheidet je Tab, ob er eine neue Ansage vorliest.
 const SPRECHEN = { vorlesen: true, frei: true, sprecher: null, tabId: "t-1", istLeiter: false, gesprochenBis: null, zeit: JETZT };
 
@@ -271,17 +376,41 @@ test("sollSprechen: ohne localStorage (sprecher und gesprochenBis null) entschei
   assert.equal(sollSprechen({ ...SPRECHEN, istLeiter: false }), false);
 });
 
+/** Eine Aeusserung der Attrappe: der Text und die Ereignisse, die der Browser ihr gibt (der Code setzt sie). */
+interface Aeusserung { text: string; onstart?: () => void; onend?: () => void; onerror?: () => void }
+
+/** Ein Klick-Ereignis wie vom Browser: ein Ziel, das `closest` fuer die Ansage-Auswahl kennt, mit den Attributen `attrs`. */
+const ereignis = (attrs: Record<string, string>) => ({
+  target: { closest: (sel: string) => (sel.includes("data-ansage") ? { hasAttribute: (n: string) => n in attrs, getAttribute: (n: string) => attrs[n] ?? null } : null) },
+});
+
 /**
  * Startet die Uebersicht mit Attrappen fuer Sprachausgabe, Ereignisquelle, Speicher und Web Locks. `sperre` ist "fehlt"
  * (kein navigator.locks, der Fallback) oder "abgelehnt" (der Lock wird verweigert, der .catch-Zweig greift).
+ * `startAnsagen` steht schon beim ersten Laden da (ohne Neuigkeit, also ohne Vorlesen); `vorher` ist der Speicher vor dem Start.
  */
-async function ansagenLauf(sperre: "fehlt" | "abgelehnt") {
+async function ansagenLauf(sperre: "fehlt" | "abgelehnt", startAnsagen: unknown[] = [], vorher: Record<string, string> = {}) {
   const gesprochen: string[] = [];
+  const protokoll: string[] = [];
+  const aeusserungen: Aeusserung[] = [];
   const klicks: Array<(e: unknown) => void> = [];
+  const wurzelKlicks: Array<(e: unknown) => void> = [];
   const quellen: Array<Record<string, () => void>> = [];
-  const speicher = new Map<string, string>();
-  let ansagen: unknown[] = [];
-  const wurzel = { innerHTML: "", querySelector: () => null, querySelectorAll: () => [], addEventListener: () => {}, contains: () => false };
+  const speicher = new Map<string, string>(Object.entries(vorher));
+  let ansagen: unknown[] = startAnsagen;
+  let pausiert = false;
+  // Ein Stueck DOM fuer die zwei Knoten, die der Stopp-Zustand einfuegt und entfernt: das Menue (⚙) und der Stopp daneben.
+  // innerHTML setzt, was im Markup steht; einfuegen und entfernen wirken auf denselben Zustand.
+  let wurzelHtml = "", menueDa = false, stoppDa = false;
+  const stoppKnoten = { remove: () => { stoppDa = false; }, focus: () => {} };
+  const menueKnoten = { focus: () => {}, insertAdjacentHTML: (_lage: string, html: string) => { if (html.includes("data-ansage-stopp")) stoppDa = true; } };
+  const wurzel = {
+    get innerHTML() { return wurzelHtml; },
+    set innerHTML(html: string) { wurzelHtml = html; menueDa = html.includes("data-einst-auf"); stoppDa = html.includes("data-ansage-stopp"); },
+    querySelector: (sel: string) => (sel === "[data-ansage-stopp]" && stoppDa ? stoppKnoten : sel === "[data-einst-auf]" && menueDa ? menueKnoten : null),
+    querySelectorAll: () => [], contains: () => false,
+    addEventListener: (typ: string, f: (e: unknown) => void) => { if (typ === "click") wurzelKlicks.push(f); },
+  };
   const doc = {
     getElementById: () => wurzel, documentElement: { dataset: {} }, visibilityState: "visible", activeElement: null, title: "",
     addEventListener: (typ: string, f: (e: unknown) => void) => { if (typ === "click") klicks.push(f); },
@@ -296,7 +425,19 @@ async function ansagenLauf(sperre: "fehlt" | "abgelehnt") {
       setItem: (k: string, v: string) => { speicher.set(k, String(v)); },
       removeItem: (k: string) => { speicher.delete(k); },
     },
-    speechSynthesis: { speak: (u: { text: string }) => { gesprochen.push(u.text); }, cancel: () => {}, getVoices: () => [] },
+    speechSynthesis: {
+      speak: (u: Aeusserung) => {
+        gesprochen.push(u.text);
+        if (u.text === "") return; // die Freischaltung spricht stumm und bleibt im Protokoll außen vor
+        protokoll.push("speak:" + u.text);
+        aeusserungen.push(u);
+      },
+      get paused() { return pausiert; },
+      cancel: () => { protokoll.push("cancel"); },
+      pause: () => { protokoll.push("pause"); pausiert = true; },
+      resume: () => { protokoll.push("resume"); pausiert = false; },
+      getVoices: () => [],
+    },
     SpeechSynthesisUtterance: class { text: string; volume = 1; constructor(t: string) { this.text = t; } },
     EventSource: function () {
       const hoert: Record<string, () => void> = {};
@@ -332,8 +473,274 @@ async function ansagenLauf(sperre: "fehlt" | "abgelehnt") {
       quellen.forEach((h) => h.geaendert?.());
       await warte();
     },
+    /** Die Aufrufe an speechSynthesis in der Reihenfolge: cancel, pause, resume und speak:TEXT (ohne die Freischaltung). */
+    protokoll: () => [...protokoll],
+    /** Ein Klick auf den ▶- oder ⏸-Knopf der Ansage mit dieser Zeit. */
+    klickeAnsage: (zeit: number) => { wurzelKlicks.forEach((f) => f(ereignis({ "data-ansage": String(zeit) }))); },
+    /** Ein Klick auf den Schalter Vorlesen an/aus im Menue. */
+    klickeAuto: () => { wurzelKlicks.forEach((f) => f(ereignis({ "data-ansage-auto": "" }))); },
+    /** Ein Klick auf den Stopp-Knopf. */
+    klickeStopp: () => { wurzelKlicks.forEach((f) => f(ereignis({ "data-ansage-stopp": "" }))); },
+    /** Ob der Stopp-Knopf im Markup steht. */
+    stoppSichtbar: () => stoppDa,
+    /** Die zuletzt gesprochene Aeusserung; ihre Ereignisse loest der Test selbst aus, wie der Browser es tut. */
+    letzte: (): Aeusserung => aeusserungen[aeusserungen.length - 1]!,
+    /** Die Uhr der Ansicht festsetzen (ms), damit eine Messung der Dauer deterministisch ist. */
+    jetzt: (ms: number) => (g.LivePlanAnsicht as Ansicht).setzeJetzt(ms),
+    speicher: () => speicher,
   };
 }
+
+const SCHLUESSEL_ZPS = "live-plan.zeichen-je-sekunde";
+const ANSAGE_EINS = { v: 1, zeit: 1000, id: "a", repo: "r", text: "Eins.", quelle: "test" };
+const ANSAGE_ZWEI = { v: 1, zeit: 2000, id: "b", repo: "r", text: "Zwei.", quelle: "test" };
+
+test("Klick: ▶ spielt sofort, ⏸ haelt an, ▶ setzt fort, eine andere Zeile bricht ab, Stopp hebt alles auf", async () => {
+  const lauf = await ansagenLauf("fehlt", [ANSAGE_ZWEI, ANSAGE_EINS]);
+  lauf.klickeAnsage(1000); // ruhend: spielt sofort (wie bisher, mit cancel davor)
+  lauf.klickeAnsage(1000); // laeuft diese Ansage: anhalten
+  lauf.klickeAnsage(1000); // pausiert diese Ansage: fortsetzen
+  lauf.klickeAnsage(2000); // eine andere Zeile: aufheben, abbrechen, dann die neue sprechen
+  lauf.klickeStopp();
+  assert.deepEqual(lauf.protokoll(), [
+    "cancel", "speak:r: Eins.",
+    "pause",
+    "resume",
+    "resume", "cancel", "speak:r: Zwei.",
+    "resume", "cancel",
+  ]);
+});
+
+test("Klick: der Stopp bei pausierter Ansage hebt die Pause vor dem Abbruch auf (Chrome haengt sonst)", async () => {
+  const lauf = await ansagenLauf("fehlt", [ANSAGE_EINS]);
+  lauf.klickeAnsage(1000);
+  lauf.klickeAnsage(1000);
+  lauf.klickeStopp();
+  assert.deepEqual(lauf.protokoll(), ["cancel", "speak:r: Eins.", "pause", "resume", "cancel"]);
+});
+
+test("Klick: nach dem Stopp spielt dieselbe Zeile wieder sofort, ohne Pause davor", async () => {
+  const lauf = await ansagenLauf("fehlt", [ANSAGE_EINS]);
+  lauf.klickeAnsage(1000);
+  lauf.klickeStopp();
+  lauf.klickeAnsage(1000);
+  assert.deepEqual(lauf.protokoll(), ["cancel", "speak:r: Eins.", "resume", "cancel", "cancel", "speak:r: Eins."]);
+});
+
+test("Abbruch: das Ende der abgebrochenen Ansage setzt die neue nicht zurueck und misst nicht", async () => {
+  const lauf = await ansagenLauf("fehlt", [ANSAGE_ZWEI, ANSAGE_EINS]);
+  lauf.klickeAnsage(1000);
+  const alt = lauf.letzte();
+  lauf.jetzt(10_000);
+  alt.onstart?.();
+  lauf.klickeAnsage(2000); // bricht Eins ab und spricht Zwei
+  lauf.jetzt(10_800);
+  alt.onend?.(); // der Browser meldet das Ende der abgebrochenen Ansage nach
+  lauf.klickeAnsage(2000); // Zwei laeuft noch: anhalten, nicht neu sprechen
+  assert.deepEqual(lauf.protokoll().slice(-2), ["speak:r: Zwei.", "pause"]);
+  assert.equal(lauf.speicher().has(SCHLUESSEL_ZPS), false);
+});
+
+test("Abbruch: das Fehler-Ende der abgebrochenen Ansage (onerror, Chrome: interrupted) setzt die neue nicht zurueck", async () => {
+  const lauf = await ansagenLauf("fehlt", [ANSAGE_ZWEI, ANSAGE_EINS]);
+  lauf.klickeAnsage(1000);
+  const alt = lauf.letzte();
+  alt.onstart?.();
+  lauf.klickeAnsage(2000); // bricht Eins ab und spricht Zwei
+  alt.onerror?.(); // die abgebrochene Ansage meldet ihren Abbruch als Fehler
+  lauf.klickeAnsage(2000); // Zwei laeuft noch: anhalten, nicht neu sprechen
+  assert.deepEqual(lauf.protokoll().slice(-2), ["speak:r: Zwei.", "pause"]);
+  assert.equal(lauf.speicher().has(SCHLUESSEL_ZPS), false);
+});
+
+test("Abbruch: ein verspaetet gemeldeter Beginn der abgebrochenen Ansage setzt den Lauf nicht auf sie", async () => {
+  const lauf = await ansagenLauf("fehlt", [ANSAGE_ZWEI, ANSAGE_EINS]);
+  lauf.klickeAnsage(1000);
+  const alt = lauf.letzte();
+  lauf.klickeAnsage(2000); // bricht Eins ab, Zwei laeuft
+  alt.onstart?.(); // der Browser meldet den Beginn von Eins erst jetzt
+  lauf.klickeAnsage(2000); // Zwei haelt an, nicht neu sprechen
+  assert.deepEqual(lauf.protokoll().slice(-2), ["speak:r: Zwei.", "pause"]);
+});
+
+test("Vorlesen von selbst: die naechste Ansage wartet hinter der laufenden, ohne Abbruch, und wird erst mit ihrem Beginn die laufende", async () => {
+  const lauf = await ansagenLauf("fehlt", [ANSAGE_EINS]);
+  lauf.klick(); // dieser Tab wird Sprecher
+  lauf.klickeAnsage(1000); // Eins spricht
+  lauf.letzte().onstart?.();
+  await lauf.neueAnsage(3000); // Neu kommt automatisch
+  const neu = lauf.letzte();
+  assert.deepEqual(lauf.protokoll(), ["cancel", "speak:r: Eins.", "speak:r: Neu"]);
+  lauf.klickeAnsage(1000); // der Knopf ist noch bei Eins: anhalten
+  lauf.klickeAnsage(1000); // und fortsetzen
+  neu.onstart?.(); // Neu beginnt: ab jetzt ist sie die laufende
+  lauf.klickeAnsage(3000); // Neu haelt an
+  assert.deepEqual(lauf.protokoll().slice(-3), ["pause", "resume", "pause"]);
+});
+
+test("Vorlesen aus stoppt eine laufende Ansage und leert die Warteschlange (stoppen)", async () => {
+  const lauf = await ansagenLauf("fehlt", [ANSAGE_EINS]);
+  lauf.klick();
+  lauf.klickeAnsage(1000);
+  lauf.letzte().onstart?.();
+  lauf.klickeAuto();
+  assert.deepEqual(lauf.protokoll(), ["cancel", "speak:r: Eins.", "resume", "cancel"]);
+});
+
+test("Vorlesen aus hebt eine Pause auf, die kein Ende mehr meldet, bevor der Abbruch kommt (Chrome haengt sonst)", async () => {
+  const lauf = await ansagenLauf("fehlt", [ANSAGE_EINS]);
+  lauf.klick();
+  lauf.klickeAnsage(1000);
+  lauf.letzte().onstart?.();
+  lauf.klickeAnsage(1000); // anhalten
+  lauf.letzte().onerror?.(); // der Browser beendet die pausierte Ansage mit einem Fehler; endeLauf hebt die Pause auf, der Abbruch den Rest
+  lauf.klickeAuto();
+  assert.deepEqual(lauf.protokoll().slice(-3), ["pause", "resume", "cancel"]);
+});
+
+test("Fehler-Ende: die laufende Ansage meldet onerror, der Stopp geht, und ein Klick auf die Zeile spielt neu statt zu pausieren", async () => {
+  const lauf = await ansagenLauf("fehlt", [ANSAGE_EINS]);
+  lauf.klickeAnsage(1000); // Eins spricht
+  lauf.letzte().onstart?.();
+  assert.equal(lauf.stoppSichtbar(), true, "Eins spricht");
+  lauf.letzte().onerror?.(); // der Browser beendet Eins mit einem Fehler
+  assert.equal(lauf.stoppSichtbar(), false, "nichts spricht und wartet mehr");
+  lauf.klickeAnsage(1000); // dieselbe Zeile: spielt neu, pausiert nicht
+  assert.deepEqual(lauf.protokoll(), ["cancel", "speak:r: Eins.", "cancel", "speak:r: Eins."]);
+});
+
+test("Fehler-Ende einer wartenden Ansage: die laufende bleibt laufend, ein Klick auf sie pausiert weiter", async () => {
+  const lauf = await ansagenLauf("fehlt", [ANSAGE_EINS]);
+  lauf.klick(); // dieser Tab spricht, Neues wird von selbst vorgelesen
+  lauf.klickeAnsage(1000); // A spricht
+  lauf.letzte().onstart?.();
+  await lauf.neueAnsage(3000); // B wartet hinter A
+  lauf.letzte().onerror?.(); // B meldet einen Fehler, bevor sie begonnen hat
+  assert.equal(lauf.stoppSichtbar(), true, "A spricht noch");
+  lauf.klickeAnsage(1000); // A anhalten
+  assert.deepEqual(lauf.protokoll().slice(-1), ["pause"]);
+});
+
+test("Pausiert und mit onerror beendet: endeLauf hebt die Pause auf, damit die naechste Ansage spricht", async () => {
+  const lauf = await ansagenLauf("fehlt", [ANSAGE_EINS]);
+  lauf.klick(); // dieser Tab spricht, Neues wird von selbst vorgelesen
+  lauf.klickeAnsage(1000); // Eins spricht
+  lauf.letzte().onstart?.();
+  lauf.klickeAnsage(1000); // anhalten
+  lauf.letzte().onerror?.(); // der Browser beendet die pausierte Ansage mit einem Fehler
+  await lauf.neueAnsage(3000); // Neu kommt von selbst und soll sprechen
+  assert.deepEqual(lauf.protokoll(), ["cancel", "speak:r: Eins.", "pause", "resume", "speak:r: Neu"]);
+});
+
+test("Stopp: bleibt, solange eine Ansage wartet, auch wenn die laufende endet und die naechste noch nicht begonnen hat", async () => {
+  const lauf = await ansagenLauf("fehlt", [ANSAGE_EINS]);
+  assert.equal(lauf.stoppSichtbar(), false, "ruhend kein Stopp");
+  lauf.klick(); // dieser Tab spricht, Neues wird von selbst vorgelesen
+  lauf.klickeAnsage(1000); // A spricht
+  const a = lauf.letzte();
+  a.onstart?.();
+  await lauf.neueAnsage(3000); // B wartet hinter A
+  const b = lauf.letzte();
+  assert.equal(lauf.stoppSichtbar(), true, "A laeuft, B wartet");
+  a.onend?.(); // A ist fertig, B hat noch keinen Beginn gemeldet
+  assert.equal(lauf.stoppSichtbar(), true, "B wartet noch");
+  b.onend?.(); // B endet, ohne dass ein Beginn kam
+  assert.equal(lauf.stoppSichtbar(), false, "nichts wartet mehr");
+});
+
+test("Stopp: das Ende einer abgebrochenen Ansage veraendert den Zaehler der neuen Warteschlange nicht", async () => {
+  const lauf = await ansagenLauf("fehlt", [ANSAGE_ZWEI, ANSAGE_EINS]);
+  lauf.klick();
+  lauf.klickeAnsage(1000); // Eins spricht
+  const alt = lauf.letzte();
+  lauf.klickeAnsage(2000); // bricht Eins ab, Zwei spricht
+  const zwei = lauf.letzte();
+  await lauf.neueAnsage(3000); // Neu wartet hinter Zwei
+  const neu = lauf.letzte();
+  alt.onend?.(); // das fremde Ende von Eins zaehlt nicht
+  assert.equal(lauf.stoppSichtbar(), true, "Zwei spricht, Neu wartet");
+  zwei.onend?.(); // Zwei ist fertig, Neu wartet noch
+  assert.equal(lauf.stoppSichtbar(), true, "Neu wartet noch, obwohl das fremde Ende kam");
+  neu.onend?.();
+  assert.equal(lauf.stoppSichtbar(), false);
+});
+
+test("Stopp: eine Ansage zaehlt hoechstens einmal, auch wenn Ende und Fehler beide kommen", async () => {
+  const lauf = await ansagenLauf("fehlt", [ANSAGE_EINS]);
+  lauf.klick();
+  lauf.klickeAnsage(1000); // A spricht
+  const a = lauf.letzte();
+  await lauf.neueAnsage(3000); // B wartet
+  a.onend?.();
+  a.onerror?.(); // dasselbe Ende noch einmal: zaehlt nicht doppelt
+  assert.equal(lauf.stoppSichtbar(), true, "B wartet noch");
+  lauf.letzte().onend?.();
+  assert.equal(lauf.stoppSichtbar(), false);
+});
+
+test("Stopp: der Stopp-Knopf leert die Warteschlange; die Ereignisse der abgebrochenen Ansagen danach lassen den Stopp weg", async () => {
+  const lauf = await ansagenLauf("fehlt", [ANSAGE_EINS]);
+  lauf.klick();
+  lauf.klickeAnsage(1000);
+  const a = lauf.letzte();
+  await lauf.neueAnsage(3000);
+  const b = lauf.letzte();
+  lauf.klickeStopp();
+  assert.equal(lauf.stoppSichtbar(), false, "nach dem Stopp kein Knopf");
+  a.onend?.();
+  b.onend?.();
+  assert.equal(lauf.stoppSichtbar(), false, "die alten Enden zaehlen nicht");
+});
+
+test("Kalibrierung: eine regulaer zu Ende gesprochene Ansage mischt ihre Zeichen je Sekunde gleitend ein (0,7 alt, 0,3 gemessen)", async () => {
+  const lauf = await ansagenLauf("fehlt", [ANSAGE_EINS]);
+  lauf.klickeAnsage(1000);
+  lauf.jetzt(10_000);
+  lauf.letzte().onstart?.();
+  lauf.jetzt(10_800);
+  lauf.letzte().onend?.(); // "r: Eins." sind 8 Zeichen in 0,8 s, also 10 je Sekunde: 0,7 * 14 + 0,3 * 10 = 12,8
+  assert.ok(Math.abs(Number(lauf.speicher().get(SCHLUESSEL_ZPS)) - 12.8) < 1e-9);
+});
+
+test("Kalibrierung: eine pausierte Ansage misst nicht", async () => {
+  const lauf = await ansagenLauf("fehlt", [ANSAGE_EINS]);
+  lauf.klickeAnsage(1000);
+  lauf.jetzt(10_000);
+  lauf.letzte().onstart?.();
+  lauf.klickeAnsage(1000); // anhalten
+  lauf.klickeAnsage(1000); // fortsetzen
+  lauf.jetzt(10_800);
+  lauf.letzte().onend?.();
+  assert.equal(lauf.speicher().has(SCHLUESSEL_ZPS), false);
+});
+
+test("Kalibrierung: Messwerte ausserhalb von 4 bis 40 Zeichen je Sekunde werden verworfen", async () => {
+  const lauf = await ansagenLauf("fehlt", [ANSAGE_EINS]);
+  lauf.klickeAnsage(1000); // 8 Zeichen in 3 s: 2,7 je Sekunde, zu langsam
+  lauf.jetzt(10_000);
+  lauf.letzte().onstart?.();
+  lauf.jetzt(13_000);
+  lauf.letzte().onend?.();
+  lauf.klickeAnsage(1000); // 8 Zeichen in 0,1 s: 80 je Sekunde, zu schnell
+  lauf.jetzt(20_000);
+  lauf.letzte().onstart?.();
+  lauf.jetzt(20_100);
+  lauf.letzte().onend?.();
+  assert.equal(lauf.speicher().has(SCHLUESSEL_ZPS), false);
+});
+
+test("Kalibrierung: ein gespeicherter Wert gilt nur innerhalb von 4 bis 40 (die Grenzen selbst zaehlen), sonst die Vorgabe 14", async () => {
+  const faelle: Array<[string, number]> = [["2", 14], ["41", 14], ["abc", 14], ["", 14], ["4", 4], ["40", 40]];
+  for (const [gespeichert, basis] of faelle) {
+    const lauf = await ansagenLauf("fehlt", [ANSAGE_EINS], { [SCHLUESSEL_ZPS]: gespeichert });
+    lauf.klickeAnsage(1000);
+    lauf.jetzt(10_000);
+    lauf.letzte().onstart?.();
+    lauf.jetzt(10_800);
+    lauf.letzte().onend?.(); // 8 Zeichen in 0,8 s: 10 je Sekunde gemessen
+    assert.ok(Math.abs(Number(lauf.speicher().get(SCHLUESSEL_ZPS)) - (0.7 * basis + 0.3 * 10)) < 1e-9, `gespeichert "${gespeichert}"`);
+  }
+});
 
 // Ein Tab ohne Web Locks lauscht selbst, leitet aber nicht (#18, Runde 3, R1): ohne Sprecher-Tab spricht keiner.
 test("Fallback ohne Lock: der zuletzt geklickte Tab spricht die neue Ansage (Gegenprobe)", async () => {

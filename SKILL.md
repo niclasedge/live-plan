@@ -292,6 +292,15 @@ dann nur im zuletzt geklickten Tab, und schliesst der, schweigt es bis zum naech
 jeder Sitzungstab zwei Dauerverbindungen; ab etwa drei Sitzungstabs stockt der Browser (HTTP/1.1, 6 je Host). Ueber
 `localhost` (`live-plan open`) zeigte sich das in unseren Laeufen nicht. Siehe #20.
 
+Die Steuerung der Ansagen (Uebersicht und Leiste): hinter der Uhrzeit steht die geschaetzte Dauer in Klammern, etwa
+`(≈ 5 s)`. Sie rechnet aus der Textlaenge geteilt durch die Zeichen je Sekunde dieses Browsers (Vorgabe 14); jede
+regulaer zu Ende gesprochene Ansage verschiebt den Wert gleitend auf das gemessene Tempo (0,7 alt, 0,3 neu). Der Wert
+liegt im localStorage des Browsers (`live-plan.zeichen-je-sekunde`), nicht in einer Datei. ▶ spielt eine Zeile sofort
+ab; laeuft sie, zeigt sie ⏸ (Klick haelt an), pausiert zeigt sie ▶ (Klick setzt fort). ⏹ Stopp erscheint neben ⚙,
+solange etwas spricht, pausiert ist oder wartet, und bricht ab und leert die Warteschlange. Die Steuerung gilt nur im
+Tab, der gerade spricht: nur dort stehen ⏸ und ⏹. Die anderen Tabs zeigen nur ▶; ein Klick dort startet in jenem Tab
+eine eigene Ausgabe. In der Leiste fuehrt der Repo-Name zur Sitzung, die eigene ist mit aria-current markiert.
+
 ## Grenzen
 
 - Der Browser schreibt nur `fragen[].entscheidung` und die Einstellungen der Sprachausgabe. Status, Schritte, Belege: nur Sie.

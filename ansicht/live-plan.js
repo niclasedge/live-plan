@@ -2226,6 +2226,16 @@
     var repo = a && a.repo ? String(a.repo) : "", text = a && a.text ? String(a.text) : "";
     return repo ? repo + ": " + text : text;
   }
+  /** Zeichen je Sekunde fuer die geschaetzte Dauer, bevor der Browser gemessen ist; Messwerte ausserhalb der Grenzen zaehlen nicht. */
+  var ZPS_VORGABE = 14, ZPS_GRENZEN = [4, 40];
+  /** Die geschaetzte Dauer einer Ansage in ganzen Sekunden: Zeichen (Codepunkte) je zps, aufgerundet, mindestens 1. */
+  function ansageDauer(a, zps) {
+    return Math.max(1, Math.ceil(Array.from(ansageSprechtext(a)).length / (zps || ZPS_VORGABE)));
+  }
+  /** Die Dauer als Text: unter einer Minute "≈ 18 s", ab einer Minute "≈ 1:05 min". */
+  function dauerText(s) {
+    return s < 60 ? "≈ " + s + " s" : "≈ " + Math.floor(s / 60) + ":" + zwei(s % 60) + " min";
+  }
   /** Die Uhrzeit einer Ansage, an einem anderen Tag mit Datum. */
   function ansageUhr(ms, jetzt) {
     var d = new Date(ms), n = new Date(jetzt === undefined ? jetztMs() : jetzt);
@@ -2242,12 +2252,41 @@
     });
     return je;
   }
-  /** Die Zelle Ansage einer Sitzung: ▶ spielt ihre neueste Ansage, daneben ihre Uhrzeit; ohne Ansage leer. */
-  function ansageZelle(a) {
+  /**
+   * Der Knopf einer Ansage: ▶ ruhend und pausiert, ⏸ waehrend sie spricht. `laeuft` ist { zeit, pausiert } oder null;
+   * `wort` steht im aria-label vor Repo und Uhrzeit, `zusatz` ist ein weiteres Attribut (der title der Uebersicht).
+   */
+  function spielKnopf(a, laeuft, wort, zusatz) {
+    var uhr = ansageUhr(a.zeit), dieser = !!laeuft && laeuft.zeit === a.zeit;
+    var klasse = dieser ? (laeuft.pausiert ? " an-pausiert" : " an-laeuft") : "";
+    var aria = dieser ? (laeuft.pausiert ? "Ansage fortsetzen: " : "Ansage anhalten: ") : wort;
+    return '<button type="button" class="an-spiel' + klasse + '" data-ansage="' + esc(a.zeit) + '"' + (zusatz || "") + ' aria-label="' +
+      esc(aria + a.repo + " " + uhr) + '">' + (dieser && !laeuft.pausiert ? "⏸" : "▶") + "</button>";
+  }
+  /** Die geschaetzte Dauer hinter der Uhrzeit, in Klammern; `zps` ist der gemessene Wert des Browsers, sonst die Vorgabe. */
+  function dauerSpanne(a, zps) {
+    return '<span class="an-dauer">(' + dauerText(ansageDauer(a, zps)) + ")</span>";
+  }
+  /** Der Stopp-Knopf neben ⚙, solange etwas spricht, pausiert ist oder eine Ansage wartet; sonst leer. `stopp` ist boolean. */
+  function stoppKnopf(stopp) {
+    return stopp ? '<button type="button" class="an-stopp" data-ansage-stopp title="Ansage stoppen und die Warteschlange leeren">⏹ Stopp</button>' : "";
+  }
+  /**
+   * Der Repo-Name einer Zeile als Verweis auf die Sitzung (Repo und Id wie in der Liste); die eigene Sitzung mit aria-current.
+   * Ohne Id oder ohne Repo bleibt er Text.
+   */
+  function repoName(a, eigen) {
+    // Der volle Name steht im title, weil die Anzeige ihn mit Ellipse kuerzt.
+    var titel = a.repo ? ' title="' + esc(a.repo) + '"' : "";
+    if (!a.id || !a.repo) return '<b class="an-repo"' + titel + ">" + esc(a.repo) + "</b>";
+    return '<a class="an-repo" href="' + esc("/" + encodeURIComponent(a.repo) + "/" + encodeURIComponent(a.id)) + '"' +
+      (eigen ? ' aria-current="page"' : "") + titel + ">" + esc(a.repo) + "</a>";
+  }
+  /** Die Zelle Ansage einer Sitzung: der Knopf (spielKnopf), daneben ihre Uhrzeit und die Dauer; ohne Ansage leer. */
+  function ansageZelle(a, laeuft, zps) {
     if (!a) return '<td class="lp-ansage"></td>';
-    var uhr = ansageUhr(a.zeit);
-    return '<td class="lp-ansage"><button type="button" class="an-spiel" data-ansage="' + esc(a.zeit) + '" title="' + esc(a.text) + '" aria-label="' +
-      esc("Letzte Ansage vorlesen: " + a.repo + " " + uhr) + '">▶</button> <span class="an-uhr mono" title="' + esc(ortszeit(isoVon(a.zeit))) + '">' + esc(uhr) + "</span></td>";
+    return '<td class="lp-ansage">' + spielKnopf(a, laeuft, "Letzte Ansage vorlesen: ", ' title="' + esc(a.text) + '"') + ' <span class="an-uhr mono" title="' +
+      esc(ortszeit(isoVon(a.zeit))) + '">' + esc(ansageUhr(a.zeit)) + "</span> " + dauerSpanne(a, zps) + "</td>";
   }
   /** Die Namen der Stimmen ohne Doppel, deutsche zuerst, je { name, lang }. */
   function stimmenListe(stimmen) {
@@ -2270,8 +2309,9 @@
   }
   /**
    * Das Einstellungsmenue im Kopf der Uebersicht: ⚙ klappt es auf, darin Vorlesen an/aus, die Stimme und die
-   * letzte Ansage nochmal. `z`: { kann, vorlesen, frei, stimmen, stimme, auf, letzte, fehler }; `kann` false, wenn
-   * der Browser nicht spricht, `frei` erst nach einem Klick auf die Seite.
+   * letzte Ansage nochmal. `z`: { kann, vorlesen, frei, stimmen, stimme, auf, letzte, fehler, stopp }; `kann` false, wenn
+   * der Browser nicht spricht, `frei` erst nach einem Klick auf die Seite. `stopp` (boolean) ist der Stopp-Knopf neben ⚙,
+   * nicht der Zustand der Zeilen (`laeuft`, s. ansageZeilen).
    */
   function einstellungenMenue(z) {
     z = z || {};
@@ -2279,7 +2319,7 @@
     var hinweis = !z.vorlesen ? "" : !z.kann ? "Dieser Browser kann nicht vorlesen." : !z.frei ? "Ein Klick auf die Seite schaltet den Ton frei." : "";
     var html = '<div class="lp-einst" data-testid="einstellungen">' +
       '<button type="button" class="lp-einst-knopf' + (z.vorlesen ? " an" : "") + '" data-einst-auf aria-expanded="' + (z.auf ? "true" : "false") + '" title="Einstellungen: Vorlesen und Stimme">⚙' + (z.vorlesen ? " 🔊" : "") + "</button>" +
-      (hinweis ? '<span class="an-hinweis">' + esc(hinweis) + "</span>" : "");
+      stoppKnopf(z.stopp) + (hinweis ?'<span class="an-hinweis">' + esc(hinweis) + "</span>" : "");
     if (!z.auf) return html + "</div>";
     var namen = stimmenListe(z.stimmen);
     var fehlt = z.stimme && !namen.some(function (s) { return s.name === z.stimme; });
@@ -2303,21 +2343,22 @@
   /**
    * Die Zeilen der Leiste: die neuesten LEISTE_N Ansagen aus allen Sitzungen (`z.ansagen`, neueste zuerst). Die Zeile der
    * eigenen Sitzung (`z.eigeneId`, die Id der Sitzung; der Repo-Name darf in einem Worktree abweichen) bekommt die Klasse an-eigen.
+   * `z.laeuft` ist der Zustand des Sprechens (spielKnopf), `z.zps` der gemessene Wert des Browsers (dauerSpanne).
    */
   function ansageZeilen(z) {
     var liste = (Array.isArray(z.ansagen) ? z.ansagen : []).slice(0, LEISTE_N);
     if (!liste.length) return '<p class="an-leer">Noch keine Ansage.</p>';
     return "<ol>" + liste.map(function (a) {
       var eigen = !!z.eigeneId && a.id === z.eigeneId;
-      var uhr = ansageUhr(a.zeit);
-      return '<li class="an-zeile' + (eigen ? " an-eigen" : "") + '"><button type="button" class="an-spiel" data-ansage="' + esc(a.zeit) + '" aria-label="' +
-        esc("Ansage vorlesen: " + a.repo + " " + uhr) + '">▶</button><span class="an-uhr mono">' + esc(uhr) + '</span><b class="an-repo">' + esc(a.repo) +
-        '</b><span class="an-text" title="' + esc(a.text) + '">' + esc(kurzText(a.text)) + "</span></li>";
+      return '<li class="an-zeile' + (eigen ? " an-eigen" : "") + '">' + spielKnopf(a, z.laeuft, "Ansage vorlesen: ") +
+        '<span class="an-zeit"><span class="an-uhr mono">' + esc(ansageUhr(a.zeit)) + "</span> " + dauerSpanne(a, z.zps) + "</span>" + repoName(a, eigen) +
+        '<span class="an-text" title="' + esc(a.text) + '">' + esc(kurzText(a.text)) + "</span></li>";
     }).join("") + "</ol>";
   }
   /**
    * Die Leiste Ansagen oben auf einer Sitzungsseite: Kopf mit dem ⚙-Menue (einstellungenMenue), darunter die Zeilen.
-   * `z`: { ansagen, eigeneId, menue }, menue wie einstellungenZustand().
+   * `z`: { ansagen, eigeneId, laeuft, zps, menue }; `laeuft` ist der Sprech-Zustand der Zeilen (spielKnopf), `zps` die
+   * gemessene Zeichen je Sekunde (dauerSpanne), `menue` wie einstellungenZustand().
    */
   function ansageLeiste(z) {
     return '<section class="an-leiste" data-testid="ansagen-leiste"><div class="an-leiste-kopf"><h2>Ansagen</h2>' + einstellungenMenue(z.menue) + "</div>" +
@@ -2338,6 +2379,8 @@
 
   G.LivePlanAnsicht = {
     ansageSprechtext: ansageSprechtext,
+    ansageDauer: ansageDauer,
+    dauerText: dauerText,
     ansageZelle: ansageZelle,
     ansageLeiste: ansageLeiste,
     sollSprechen: sollSprechen,
@@ -2868,10 +2911,16 @@
   // Ein Tab spricht (#18, Runde 2): TAB ist dieser Tab; der Sprecher-Schluessel nennt den Tab, den der Nutzer zuletzt bedient hat.
   var TAB = Math.random().toString(36).slice(2) + Date.now().toString(36);
   var KANAL_NAME = "live-plan-ansagen", SCHLUESSEL_SPRECHER = "live-plan.sprecher", SCHLUESSEL_GESPROCHEN = "live-plan.gesprochen";
-  var MENUE_FELDER = ["data-einst-auf", "data-ansage-auto", "data-ansage-stimme", "data-ansage-letzte"];
+  var MENUE_FELDER = ["data-einst-auf", "data-ansage-auto", "data-ansage-stimme", "data-ansage-letzte", "data-ansage-stopp"];
   var KANAL = null, istLeiter = false;
+  // Was gerade spricht: { zeit, pausiert, gepausiert, zeichen, start, nr, gezaehlt } oder null. Gesetzt beim Klick oder Beginn,
+  // geloescht beim Ende oder Abbruch. `pausiert` ist der Zustand jetzt; `gepausiert` merkt, ob die Ansage je pausiert war (eine
+  // solche misst die Dauer nicht). `zeichen` und `start` speisen die Kalibrierung, `nr` ist die Warteschlange (abbruchNr) und
+  // `gezaehlt`, ob die Ansage schon aus `wartend` gezaehlt ist (s. sprich und endeLauf).
+  // `wartend` zaehlt die Ansagen vom Sprechen bis zu ihrem Ende; `abbruchNr` ordnet Ereignisse ihrer Warteschlange zu.
+  var LAUFT = null, abbruchNr = 0, wartend = 0, SCHLUESSEL_ZPS = "live-plan.zeichen-je-sekunde";
   function einstellungenZustand() {
-    return { kann: !!SPRACHE, vorlesen: EINST.vorlesen, frei: ansageFrei, stimmen: SPRACHE ? SPRACHE.getVoices() : [], stimme: EINST.stimme, auf: einstAuf, letzte: ANSAGEN.length > 0, fehler: einstFehler };
+    return { kann: !!SPRACHE, vorlesen: EINST.vorlesen, frei: ansageFrei, stimmen: SPRACHE ? SPRACHE.getVoices() : [], stimme: EINST.stimme, auf: einstAuf, letzte: ANSAGEN.length > 0, fehler: einstFehler, stopp: stoppOffen() };
   }
   /** Das Menue neu; der Fokus bleibt bei dem Feld, das ihn hatte (ein Neuzeichnen ersetzt den Knoten). */
   function zeichneEinstellungen() {
@@ -2893,28 +2942,143 @@
     var neu = wurzel.querySelector("[" + feld + "]") || wurzel.querySelector("[data-einst-auf]");
     if (neu && !neu.disabled) neu.focus({ preventScroll: true });
   }
-  /** Was die Leiste auf einer Sitzungsseite braucht: alle Ansagen, die Sitzung der Seite (SLUG) und das Menue. */
+  /** Was die Leiste auf einer Sitzungsseite braucht: alle Ansagen, die Sitzung der Seite (SLUG), das Sprechen und das Menue. */
   function leisteZustand() {
-    return { ansagen: ANSAGEN, eigeneId: SLUG, menue: einstellungenZustand() };
+    return { ansagen: ANSAGEN, eigeneId: SLUG, laeuft: LAUFT, zps: zeichenJeSekunde(), menue: einstellungenZustand() };
+  }
+  /** Die Zeit der Ansage, deren Knopf in `el` den Fokus hat, sonst null; vor dem Neuzeichnen zu merken. */
+  function ansageFokus(el) {
+    var a = doc.activeElement;
+    return el && a && el.contains(a) && a.hasAttribute("data-ansage") ? a.getAttribute("data-ansage") : null;
+  }
+  /** Der Fokus geht nach dem Neuzeichnen auf den Knopf derselben Ansage zurueck, wenn es ihn noch gibt. */
+  function ansageFokusHer(el, zeit) {
+    var wieder = zeit && el.querySelector('[data-ansage="' + zeit + '"]');
+    if (wieder) wieder.focus({ preventScroll: true });
   }
   /** Nur die Zeilen der Leiste neu, das Menue bleibt. Ohne Leiste (noch kein Plan gezeichnet) geschieht nichts; das naechste Zeichnen bringt sie mit. */
   function zeichneLeiste() {
     var el = wurzel.querySelector("[data-ansage-liste]");
     if (!el) return;
-    var a = doc.activeElement;
-    var zeit = a && el.contains(a) && a.hasAttribute("data-ansage") ? a.getAttribute("data-ansage") : null;
+    var zeit = ansageFokus(el);
     el.innerHTML = ansageZeilen(leisteZustand());
-    var wieder = zeit && el.querySelector('[data-ansage="' + zeit + '"]');
-    if (wieder) wieder.focus({ preventScroll: true });
+    ansageFokusHer(el, zeit);
   }
-  /** Spricht eine Ansage; `sofort` bricht ab, was gerade laeuft, sonst reiht der Browser sie hinten an. */
+  /** Der Stopp-Knopf neben ⚙ kommt und geht mit dem Sprechen. Nur er wird eingefuegt oder entfernt, das Menue bleibt, damit eine offene Stimmenwahl nicht zugeht. */
+  function zeichneStopp() {
+    var alt = wurzel.querySelector("[data-ansage-stopp]"), offen = stoppOffen();
+    if (alt && !offen) {
+      var hatFokus = alt === doc.activeElement;
+      alt.remove();
+      if (hatFokus) menueFokusHer("data-einst-auf");
+    } else if (!alt && offen) {
+      var auf = wurzel.querySelector("[data-einst-auf]");
+      if (auf) auf.insertAdjacentHTML("afterend", stoppKnopf(offen));
+    }
+  }
+  /** Der Stopp steht, solange etwas spricht oder pausiert ist oder eine Ansage in der Warteschlange wartet (wartend, s. sprich). */
+  function stoppOffen() { return LAUFT || wartend > 0; }
+  /** Nur die Zeilen neu: die der Leiste oder die der Uebersicht. */
+  function zeichneZeilen() {
+    if (API) zeichneLeiste(); else zeichneListe();
+  }
+  /** Die Ansagen neu zeichnen: die Zeilen der Leiste oder der Uebersicht, dazu der Stopp-Knopf. */
+  function zeichneAnsagen() {
+    zeichneZeilen();
+    zeichneStopp();
+  }
+  /** Zeichen je Sekunde dieses Browsers, gemerkt aus den gelesenen Ansagen; fehlt der Wert oder liegt er ausserhalb, gilt die Vorgabe. */
+  function zeichenJeSekunde() {
+    var z = Number(lies(SCHLUESSEL_ZPS));
+    return z >= ZPS_GRENZEN[0] && z <= ZPS_GRENZEN[1] ? z : ZPS_VORGABE;
+  }
+  /**
+   * Eine regulaer zu Ende gesprochene Ansage (nicht abgebrochen, nicht pausiert) misst Zeichen je Sekunde und mischt den Wert
+   * gleitend in den gemerkten (0,7 alt, 0,3 gemessen). Messwerte ausserhalb ZPS_GRENZEN zaehlen nicht.
+   */
+  function kalibriere(lauf) {
+    if (lauf.start === null) return;
+    var gemessen = lauf.zeichen / ((jetztMs() - lauf.start) / 1000);
+    if (!(gemessen >= ZPS_GRENZEN[0] && gemessen <= ZPS_GRENZEN[1])) return;
+    merke(SCHLUESSEL_ZPS, String(0.7 * zeichenJeSekunde() + 0.3 * gemessen));
+  }
+  /**
+   * Bricht ab, was spricht oder pausiert ist. Eine Pause wird vorher aufgehoben, auch wenn keine Ansage mehr laeuft (die
+   * Synthese bliebe sonst pausiert, und Chrome haengt nach cancel). Die Nummer des Abbruchs macht die Ereignisse der
+   * abgebrochenen Ansagen ungueltig, und die Warteschlange ist danach leer.
+   */
+  function abbrechen() {
+    abbruchNr++;
+    wartend = 0;
+    if (SPRACHE) {
+      if (LAUFT || SPRACHE.paused) SPRACHE.resume();
+      SPRACHE.cancel();
+    }
+    LAUFT = null;
+  }
+  /** Haelt an, was spricht (der Klick auf ⏸ der laufenden Zeile). */
+  function pausieren() {
+    if (!LAUFT || LAUFT.pausiert) return;
+    SPRACHE.pause();
+    LAUFT.pausiert = true;
+    LAUFT.gepausiert = true;
+    zeichneAnsagen();
+  }
+  /** Setzt fort, was pausiert ist (der Klick auf ▶ der pausierten Zeile). */
+  function fortsetzen() {
+    if (!LAUFT || !LAUFT.pausiert) return;
+    SPRACHE.resume();
+    LAUFT.pausiert = false;
+    zeichneAnsagen();
+  }
+  /** Stoppt alles: die laufende oder pausierte Ansage und die Warteschlange der automatisch gelesenen. */
+  function stoppen() {
+    abbrechen();
+    zeichneAnsagen();
+  }
+  /**
+   * Spricht eine Ansage. `sofort` (der Klick) bricht ab, was gerade laeuft, und zeigt diese Ansage sofort als laufend; sonst
+   * reiht der Browser sie hinten an, und sie gilt erst mit ihrem Beginn (onstart) als laufend. Jede Ansage zaehlt von hier
+   * bis zu ihrem Ende in `wartend` (s. endeLauf); eine abgebrochene meldet ihr Ende nach und zaehlt dann nicht mehr.
+   */
   function sprich(a, sofort) {
     if (!SPRACHE || !a) return;
-    if (sofort) SPRACHE.cancel();
-    var u = new G.SpeechSynthesisUtterance(ansageSprechtext(a));
+    var text = ansageSprechtext(a);
+    if (sofort) abbrechen();
+    var lauf = { zeit: a.zeit, pausiert: false, gepausiert: false, zeichen: Array.from(text).length, start: null, nr: abbruchNr, gezaehlt: false };
+    wartend++;
+    if (sofort) {
+      LAUFT = lauf;
+      zeichneAnsagen();
+    } else zeichneStopp();
+    var u = new G.SpeechSynthesisUtterance(text);
     var stimme = stimmeWahl(SPRACHE.getVoices(), EINST.stimme);
     if (stimme) { u.voice = stimme; u.lang = stimme.lang; } else u.lang = "de-DE";
+    u.onstart = function () {
+      // Der Beginn einer abgebrochenen Ansage kann nach dem Abbruch eintreffen; ihre Nummer ist dann nicht mehr die aktuelle.
+      if (lauf.nr !== abbruchNr) return;
+      lauf.start = jetztMs(); LAUFT = lauf; zeichneAnsagen();
+    };
+    u.onend = function () {
+      if (LAUFT === lauf && !lauf.gepausiert) kalibriere(lauf);
+      endeLauf(lauf);
+    };
+    u.onerror = function () { endeLauf(lauf); };
     SPRACHE.speak(u);
+  }
+  /**
+   * Das Ende einer Ansage (onend oder onerror). Sie zaehlt aus `wartend`, hoechstens einmal und nur in der Warteschlange ihrer
+   * Generation: ein Ende nach einem Abbruch veraendert nichts. War sie die laufende, endet der Lauf mit ihr; ob noch etwas
+   * wartet, entscheidet der Zaehler, nicht ein Takt. So verschwindet der Stopp nicht zwischen zwei Ansagen. Endet eine
+   * pausierte Ansage, hebt das Ende die Pause auf, sonst spraeche die naechste Ansage nie.
+   */
+  function endeLauf(lauf) {
+    var zaehlt = !lauf.gezaehlt && lauf.nr === abbruchNr;
+    if (!zaehlt && LAUFT !== lauf) return;
+    if (zaehlt) { lauf.gezaehlt = true; wartend--; }
+    if (LAUFT === lauf && lauf.pausiert && SPRACHE.paused) SPRACHE.resume();
+    if (LAUFT === lauf) LAUFT = null;
+    zeichneAnsagen();
   }
   /** Laedt die Ansagen und verteilt sie; der Leiter-Tab gibt sie ueber den Kanal an die anderen Tabs weiter. */
   function ladeAnsagen() {
@@ -2938,7 +3102,7 @@
     ansagenBekannt = liste.reduce(function (m, a) { return Math.max(m, a.zeit); }, bekannt || 0);
     var ersteDa = !ANSAGEN.length && liste.length;
     ANSAGEN = liste;
-    if (API) zeichneLeiste(); else zeichneListe();
+    zeichneAnsagen();
     // "Letzte nochmal" geht erst mit einer Ansage; sonst bleibt das Menue, wie es ist (offene Stimmenwahl).
     if (ersteDa) zeichneEinstellungen();
     neu.forEach(function (a) { sprichNeue(a); });
@@ -3008,7 +3172,7 @@
   }
   /** Ein Klick auf Einstellungen oder einen Abspielknopf; true, wenn er ihnen galt. */
   function ansageKlick(e) {
-    var t = e.target.closest && e.target.closest("[data-einst-auf], [data-ansage-auto], [data-ansage-letzte], [data-ansage]");
+    var t = e.target.closest && e.target.closest("[data-einst-auf], [data-ansage-auto], [data-ansage-letzte], [data-ansage-stopp], [data-ansage]");
     if (!t) return false;
     if (t.hasAttribute("data-einst-auf")) {
       einstAuf = !einstAuf;
@@ -3018,12 +3182,16 @@
     } else if (t.hasAttribute("data-ansage-auto")) {
       var an = !EINST.vorlesen;
       if (an) tonFreischalten(SPRACHE, G.SpeechSynthesisUtterance);
-      else if (SPRACHE) SPRACHE.cancel();
+      else stoppen();
       speichereEinstellungen({ vorlesen: an });
     } else if (t.hasAttribute("data-ansage-letzte")) sprich(ANSAGEN[0], true);
+    else if (t.hasAttribute("data-ansage-stopp")) stoppen();
     else {
+      // Die laufende Ansage haelt an oder setzt fort; jede andere Zeile spielt sofort.
       var zeit = Number(t.getAttribute("data-ansage"));
-      sprich(ANSAGEN.find(function (a) { return a.zeit === zeit; }), true);
+      if (LAUFT && LAUFT.zeit === zeit) {
+        if (LAUFT.pausiert) fortsetzen(); else pausieren();
+      } else sprich(ANSAGEN.find(function (a) { return a.zeit === zeit; }), true);
     }
     return true;
   }
@@ -3089,18 +3257,18 @@
   function zeichneListe() {
     var daten = LISTE;
     if (!daten) return;
-    var letzte = letzteAnsagen(ANSAGEN);
+    var letzte = letzteAnsagen(ANSAGEN), zps = zeichenJeSekunde();
     var zeilen = daten.sitzungen.map(function (e) {
       var href = "/" + encodeURIComponent(e.repo) + "/" + encodeURIComponent(e.slug);
       // S5: eine Sitzung aus dem Register traegt die Marke live (beendet grau), der volle Repo-Pfad steht im title.
       var marke = e.live ? ' <span class="lv-marke' + (e.beendet ? " aus" : "") + '">' + (e.beendet ? "beendet" : "live") + "</span>" : "";
       return '<tr><td title="' + esc(e.pfad || "") + '"><b>' + esc(e.repo) + '</b></td><td class="mono"><a href="' + esc(href) + '">' + esc(e.slug) + "</a>" + marke + "</td><td>" + esc(e.titel) +
-        "</td>" + fragenZelle(e.offeneFragen, href) + ansageZelle(letzte[e.repo + "\u0000" + e.slug]) + '<td class="mono klein">' + zeitAngabe(e.geaendert) + "</td></tr>";
+        "</td>" + fragenZelle(e.offeneFragen, href) + ansageZelle(letzte[e.repo + "\u0000" + e.slug], LAUFT, zps) + '<td class="mono klein">' + zeitAngabe(e.geaendert) + "</td></tr>";
     }).join("");
     doc.title = "Sitzungen · live-plan";
     // Das Menue bleibt beim Neuzeichnen der Liste derselbe Knoten (offene Stimmenwahl, Fokus).
     var menue = wurzel.querySelector(".lp-einst");
-    var fokus = menueFokus(menue);
+    var fokus = menueFokus(menue), zeitFokus = ansageFokus(wurzel);
     wurzel.innerHTML = '<header class="lp-kopf"><div class="lp-oben"><h1>Sitzungen</h1>' + (menue ? "<div data-einst-platz></div>" : einstellungenMenue(einstellungenZustand())) + themaSchalter() + "</div>" +
       '<p class="lp-ziel">Lebende Dokumente aus <span class="mono">REPO/.live-plan/SLUG.yaml</span> unter <span class="mono">' + esc(daten.wurzel) + "</span> und laufende Claude-Sitzungen aus dem Register</p></header>" + hostTeil(hostAuf) +
       '<table class="lp-liste" data-testid="tabelle-sitzungen"><thead><tr><th>repo</th><th>sitzung</th><th>titel</th><th>fragen</th><th>ansage</th><th>geaendert</th></tr></thead><tbody>' +
@@ -3108,6 +3276,7 @@
     var platz = wurzel.querySelector("[data-einst-platz]");
     if (platz) platz.replaceWith(menue);
     menueFokusHer(fokus);
+    ansageFokusHer(wurzel, zeitFokus);
   }
 
   function lausche() {
