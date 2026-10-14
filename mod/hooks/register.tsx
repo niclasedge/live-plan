@@ -14,8 +14,9 @@
 // from tool.call on Read/Edit/Write/NotebookEdit/Grep/Glob.
 //
 // Ansagen: at the end of each answered turn of the main session the final answer goes to
-// `live-plan sage --auto` on stdin; the script cleans and shortens it, skips a trivial one and one
-// the session already announced itself this turn, and appends it to LIVE_PLAN_CACHE/ansagen.jsonl.
+// `live-plan sage --auto` on stdin; the script cleans it (code blocks fall away), keeps the whole text
+// up to 8000 characters, skips a trivial one and one the session already announced itself this turn,
+// and appends it to LIVE_PLAN_CACHE/ansagen.jsonl.
 
 import type { EngineInterface, PluginOptions, Register, SessionRateLimit, SessionUsage } from 'claude-code'
 import { fragenRegistrieren, sprengradiusRegistrieren } from './fragen'
@@ -118,7 +119,7 @@ const DATEI_WERKZEUGE = new Map<string, Art>([
   ['NotebookEdit', 'geschrieben'],
 ])
 const TAKT_MS = 1000
-// What of a turn's answer goes to `sage --auto`; the script keeps the first sentences only.
+// What of a turn's answer goes to `sage --auto`; the script keeps its whole spoken text, up to 8000 characters.
 const ANTWORT_HOECHSTENS = 20_000
 
 // ---------------------------------------------------------------------------

@@ -191,7 +191,7 @@ test("ansageLeiste: je Zeile ▶ mit der Zeit, Uhrzeit, Repo und Text; Text und 
   assert.match(html, new RegExp(`<button type="button" class="an-spiel" data-ansage="${JETZT - 300_000}" aria-label="Ansage vorlesen: firstmate 15:25">▶</button>`));
   assert.match(html, /<span class="an-uhr mono">15:25<\/span>/);
   assert.match(html, /<a class="an-repo" href="\/firstmate\/s-1" title="firstmate">firstmate<\/a>/);
-  assert.match(html, /<span class="an-text" title="Fertig, &quot;PR&quot; &lt;offen&gt;\.">Fertig, &quot;PR&quot; &lt;offen&gt;\.<\/span>/);
+  assert.match(html, new RegExp(`<button type="button" class="an-text" data-ansage-text="${JETZT - 300_000}" aria-expanded="false"><span>Fertig, &quot;PR&quot; &lt;offen&gt;\\.</span></button>`));
 });
 
 test("ansageLeiste: eigene Sitzung hervorgehoben ueber die Id; der Repo-Name darf aus einem Worktree abweichen", () => {
@@ -203,16 +203,20 @@ test("ansageLeiste: eigene Sitzung hervorgehoben ueber die Id; der Repo-Name dar
   assert.deepEqual(zeilen.map((z) => z.startsWith(" an-eigen")), [false, true, true]);
 });
 
-test("ansageLeiste: langer Text gekuerzt mit Ellipse, der volle Text im title", () => {
+test("ansageLeiste: der ganze Text steht in der Zeile, eingeklappt; aufgeklappt aus z.aufgeklappt; die Dauer rechnet mit dem ganzen Text (#26)", () => {
   const a = ansicht();
   a.setzeJetzt(JETZT);
-  const lang = "Wort ".repeat(60).trim();
-  const html = a.ansageLeiste(LEISTE([ANSAGE(1, { text: lang })]));
-  const kurz = /<span class="an-text" title="[^"]*">([^<]*)<\/span>/.exec(html)![1]!;
-  assert.equal(Array.from(kurz).length, 90);
-  assert.ok(kurz.endsWith("…"));
-  assert.match(html, new RegExp(`title="${lang}"`));
-  assert.match(a.ansageLeiste(LEISTE([ANSAGE(1, { text: "Kurz." })])), /<span class="an-text" title="Kurz\.">Kurz\.<\/span>/);
+  const lang = "Wort ".repeat(300).trim();
+  const x = ANSAGE(1, { text: lang });
+  const html = a.ansageLeiste(LEISTE([x]));
+  const text = /<button type="button" class="an-text" data-ansage-text="(\d+)" aria-expanded="false"><span>([^<]*)<\/span><\/button>/.exec(html)!;
+  assert.equal(Number(text[1]), x.zeit);
+  assert.equal(text[2], lang, "nicht mehr nach 90 Zeichen gekuerzt");
+  assert.doesNotMatch(html, /…/);
+  // Gesprochen wird "live-plan: " und der ganze Text, 1510 Zeichen; bei 14 je Sekunde 108 s.
+  assert.match(html, /<span class="an-dauer">\(≈ 1:48 min\)<\/span>/);
+  const auf = a.ansageLeiste(LEISTE([x, ANSAGE(2)], { aufgeklappt: { [x.zeit]: true } }));
+  assert.deepEqual([...auf.matchAll(/data-ansage-text="(\d+)" aria-expanded="(true|false)"/g)].map((m) => [Number(m[1]), m[2]]), [[x.zeit, "true"], [JETZT - 120_000, "false"]]);
 });
 
 test("ansageLeiste: <script> im Text und im Repo wird escaped", () => {
@@ -290,7 +294,7 @@ test("ansageLeiste: vier Zellen je Zeile (Knopf, Zeit mit Dauer, Repo, Text), da
   const a = ansicht();
   a.setzeJetzt(JETZT);
   const html = a.ansageLeiste(LEISTE([ANSAGE(5, { repo: "Muster-Werkstatt-Archiv1", text: "Kurz." })]));
-  assert.match(html, /<li class="an-zeile"><button [^>]*>▶<\/button><span class="an-zeit"><span class="an-uhr mono">15:25<\/span> <span class="an-dauer">\(≈ \d+ s\)<\/span><\/span><a class="an-repo" href="\/Muster-Werkstatt-Archiv1\/s-1" title="Muster-Werkstatt-Archiv1">Muster-Werkstatt-Archiv1<\/a><span class="an-text" title="Kurz\.">Kurz\.<\/span><\/li>/);
+  assert.match(html, /<li class="an-zeile"><button [^>]*>▶<\/button><span class="an-zeit"><span class="an-uhr mono">15:25<\/span> <span class="an-dauer">\(≈ \d+ s\)<\/span><\/span><a class="an-repo" href="\/Muster-Werkstatt-Archiv1\/s-1" title="Muster-Werkstatt-Archiv1">Muster-Werkstatt-Archiv1<\/a><button type="button" class="an-text" data-ansage-text="\d+" aria-expanded="false"><span>Kurz\.<\/span><\/button><\/li>/);
 });
 
 test("ansageLeiste: der Repo-Name verweist auf die Sitzung, die eigene mit aria-current; ohne Id oder Repo bleibt er Text", () => {
@@ -379,9 +383,9 @@ test("sollSprechen: ohne localStorage (sprecher und gesprochenBis null) entschei
 /** Eine Aeusserung der Attrappe: der Text und die Ereignisse, die der Browser ihr gibt (der Code setzt sie). */
 interface Aeusserung { text: string; onstart?: () => void; onend?: () => void; onerror?: () => void }
 
-/** Ein Klick-Ereignis wie vom Browser: ein Ziel, das `closest` fuer die Ansage-Auswahl kennt, mit den Attributen `attrs`. */
+/** Ein Klick-Ereignis wie vom Browser: ein Ziel, das `closest` fuer die Ansage-Auswahl kennt, mit den Attributen `attrs` (setAttribute schreibt hinein). */
 const ereignis = (attrs: Record<string, string>) => ({
-  target: { closest: (sel: string) => (sel.includes("data-ansage") ? { hasAttribute: (n: string) => n in attrs, getAttribute: (n: string) => attrs[n] ?? null } : null) },
+  target: { closest: (sel: string) => (sel.includes("data-ansage") ? { hasAttribute: (n: string) => n in attrs, getAttribute: (n: string) => attrs[n] ?? null, setAttribute: (n: string, v: unknown) => { attrs[n] = String(v); } } : null) },
 });
 
 /**
@@ -481,6 +485,8 @@ async function ansagenLauf(sperre: "fehlt" | "abgelehnt", startAnsagen: unknown[
     klickeAuto: () => { wurzelKlicks.forEach((f) => f(ereignis({ "data-ansage-auto": "" }))); },
     /** Ein Klick auf den Stopp-Knopf. */
     klickeStopp: () => { wurzelKlicks.forEach((f) => f(ereignis({ "data-ansage-stopp": "" }))); },
+    /** Ein Klick auf den Text einer Zeile der Leiste; `attrs` sind die Attribute des Knopfs, der Klick schreibt hinein. */
+    klickeText: (attrs: Record<string, string>) => { wurzelKlicks.forEach((f) => f(ereignis(attrs))); },
     /** Ob der Stopp-Knopf im Markup steht. */
     stoppSichtbar: () => stoppDa,
     /** Die zuletzt gesprochene Aeusserung; ihre Ereignisse loest der Test selbst aus, wie der Browser es tut. */
@@ -517,6 +523,16 @@ test("Klick: der Stopp bei pausierter Ansage hebt die Pause vor dem Abbruch auf 
   lauf.klickeAnsage(1000);
   lauf.klickeStopp();
   assert.deepEqual(lauf.protokoll(), ["cancel", "speak:r: Eins.", "pause", "resume", "cancel"]);
+});
+
+test("Klick auf den Text einer Zeile klappt ihn auf und wieder zu, ohne vorzulesen (#26)", async () => {
+  const lauf = await ansagenLauf("fehlt", [ANSAGE_EINS]);
+  const text = { "data-ansage-text": "1000", "aria-expanded": "false" };
+  lauf.klickeText(text);
+  assert.equal(text["aria-expanded"], "true");
+  lauf.klickeText(text);
+  assert.equal(text["aria-expanded"], "false");
+  assert.deepEqual(lauf.protokoll(), [], "der Text spielt nicht ab");
 });
 
 test("Klick: nach dem Stopp spielt dieselbe Zeile wieder sofort, ohne Pause davor", async () => {

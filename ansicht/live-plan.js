@@ -2333,17 +2333,20 @@
       '<button type="button" data-ansage-letzte' + (z.letzte && z.kann ? "" : " disabled") + ">▶ Letzte Ansage nochmal</button>" +
       (z.fehler ? '<span class="an-fehler">' + esc(z.fehler) + "</span>" : "") + "</div></div>";
   }
-  /** Wie viele Ansagen die Leiste zeigt und nach wie vielen Zeichen ihr Text mit Ellipse endet (der volle Text steht im title). */
-  var LEISTE_N = 5, LEISTE_ZEICHEN = 90;
-  /** Der Text einer Ansage gekuerzt nach Zeichen, nicht nach Code-Einheiten, damit kein Emoji auseinanderbricht. */
-  function kurzText(t) {
-    var z = Array.from(String(t || ""));
-    return z.length > LEISTE_ZEICHEN ? z.slice(0, LEISTE_ZEICHEN - 1).join("") + "…" : z.join("");
+  /** Wie viele Ansagen die Leiste zeigt. */
+  var LEISTE_N = 5;
+  /**
+   * Der ganze Text einer Zeile als Knopf: eingeklappt auf zwei Zeilen (CSS), ein Klick oder Enter klappt ihn auf und zu.
+   * `auf` kommt aus z.aufgeklappt, damit ein Neuzeichnen den Zustand behaelt.
+   */
+  function textKnopf(a, auf) {
+    return '<button type="button" class="an-text" data-ansage-text="' + esc(a.zeit) + '" aria-expanded="' + (auf ? "true" : "false") + '"><span>' + esc(a.text) + "</span></button>";
   }
   /**
    * Die Zeilen der Leiste: die neuesten LEISTE_N Ansagen aus allen Sitzungen (`z.ansagen`, neueste zuerst). Die Zeile der
    * eigenen Sitzung (`z.eigeneId`, die Id der Sitzung; der Repo-Name darf in einem Worktree abweichen) bekommt die Klasse an-eigen.
-   * `z.laeuft` ist der Zustand des Sprechens (spielKnopf), `z.zps` der gemessene Wert des Browsers (dauerSpanne).
+   * `z.laeuft` ist der Zustand des Sprechens (spielKnopf), `z.zps` der gemessene Wert des Browsers (dauerSpanne),
+   * `z.aufgeklappt` je Zeit der Ansage, ob ihr Text aufgeklappt ist (textKnopf).
    */
   function ansageZeilen(z) {
     var liste = (Array.isArray(z.ansagen) ? z.ansagen : []).slice(0, LEISTE_N);
@@ -2352,13 +2355,14 @@
       var eigen = !!z.eigeneId && a.id === z.eigeneId;
       return '<li class="an-zeile' + (eigen ? " an-eigen" : "") + '">' + spielKnopf(a, z.laeuft, "Ansage vorlesen: ") +
         '<span class="an-zeit"><span class="an-uhr mono">' + esc(ansageUhr(a.zeit)) + "</span> " + dauerSpanne(a, z.zps) + "</span>" + repoName(a, eigen) +
-        '<span class="an-text" title="' + esc(a.text) + '">' + esc(kurzText(a.text)) + "</span></li>";
+        textKnopf(a, !!(z.aufgeklappt && z.aufgeklappt[a.zeit])) + "</li>";
     }).join("") + "</ol>";
   }
   /**
    * Die Leiste Ansagen oben auf einer Sitzungsseite: Kopf mit dem ⚙-Menue (einstellungenMenue), darunter die Zeilen.
-   * `z`: { ansagen, eigeneId, laeuft, zps, menue }; `laeuft` ist der Sprech-Zustand der Zeilen (spielKnopf), `zps` die
-   * gemessene Zeichen je Sekunde (dauerSpanne), `menue` wie einstellungenZustand().
+   * `z`: { ansagen, eigeneId, laeuft, zps, aufgeklappt, menue }; `laeuft` ist der Sprech-Zustand der Zeilen (spielKnopf),
+   * `zps` die gemessene Zeichen je Sekunde (dauerSpanne), `aufgeklappt` die aufgeklappten Texte (textKnopf), `menue` wie
+   * einstellungenZustand().
    */
   function ansageLeiste(z) {
     return '<section class="an-leiste" data-testid="ansagen-leiste"><div class="an-leiste-kopf"><h2>Ansagen</h2>' + einstellungenMenue(z.menue) + "</div>" +
@@ -2919,6 +2923,8 @@
   // `gezaehlt`, ob die Ansage schon aus `wartend` gezaehlt ist (s. sprich und endeLauf).
   // `wartend` zaehlt die Ansagen vom Sprechen bis zu ihrem Ende; `abbruchNr` ordnet Ereignisse ihrer Warteschlange zu.
   var LAUFT = null, abbruchNr = 0, wartend = 0, SCHLUESSEL_ZPS = "live-plan.zeichen-je-sekunde";
+  // Die aufgeklappten Texte der Leiste, je Zeit der Ansage; ein Neuzeichnen der Zeilen liest sie (leisteZustand).
+  var TEXT_AUF = {};
   function einstellungenZustand() {
     return { kann: !!SPRACHE, vorlesen: EINST.vorlesen, frei: ansageFrei, stimmen: SPRACHE ? SPRACHE.getVoices() : [], stimme: EINST.stimme, auf: einstAuf, letzte: ANSAGEN.length > 0, fehler: einstFehler, stopp: stoppOffen() };
   }
@@ -2942,27 +2948,35 @@
     var neu = wurzel.querySelector("[" + feld + "]") || wurzel.querySelector("[data-einst-auf]");
     if (neu && !neu.disabled) neu.focus({ preventScroll: true });
   }
-  /** Was die Leiste auf einer Sitzungsseite braucht: alle Ansagen, die Sitzung der Seite (SLUG), das Sprechen und das Menue. */
+  /** Was die Leiste auf einer Sitzungsseite braucht: alle Ansagen, die Sitzung der Seite (SLUG), das Sprechen, die aufgeklappten Texte und das Menue. */
   function leisteZustand() {
-    return { ansagen: ANSAGEN, eigeneId: SLUG, laeuft: LAUFT, zps: zeichenJeSekunde(), menue: einstellungenZustand() };
+    return { ansagen: ANSAGEN, eigeneId: SLUG, laeuft: LAUFT, zps: zeichenJeSekunde(), aufgeklappt: TEXT_AUF, menue: einstellungenZustand() };
   }
-  /** Die Zeit der Ansage, deren Knopf in `el` den Fokus hat, sonst null; vor dem Neuzeichnen zu merken. */
+  /** Der Knopf einer Ansage in `el` mit dem Fokus (▶ oder ihr Text) als Selektor, sonst null; vor dem Neuzeichnen zu merken. */
   function ansageFokus(el) {
     var a = doc.activeElement;
-    return el && a && el.contains(a) && a.hasAttribute("data-ansage") ? a.getAttribute("data-ansage") : null;
+    if (!el || !a || !el.contains(a)) return null;
+    var attr = ["data-ansage", "data-ansage-text"].find(function (x) { return a.hasAttribute(x); });
+    return attr ? "[" + attr + '="' + a.getAttribute(attr) + '"]' : null;
   }
-  /** Der Fokus geht nach dem Neuzeichnen auf den Knopf derselben Ansage zurueck, wenn es ihn noch gibt. */
-  function ansageFokusHer(el, zeit) {
-    var wieder = zeit && el.querySelector('[data-ansage="' + zeit + '"]');
+  /** Der Fokus geht nach dem Neuzeichnen auf denselben Knopf derselben Ansage zurueck, wenn es ihn noch gibt. */
+  function ansageFokusHer(el, sel) {
+    var wieder = sel && el.querySelector(sel);
     if (wieder) wieder.focus({ preventScroll: true });
+  }
+  /** Klappt den Text einer Zeile auf oder zu, ohne neu zu zeichnen (der Fokus bleibt); TEXT_AUF traegt es ins naechste Zeichnen. */
+  function textUmschalten(knopf) {
+    var zeit = knopf.getAttribute("data-ansage-text"), auf = knopf.getAttribute("aria-expanded") !== "true";
+    if (auf) TEXT_AUF[zeit] = true; else delete TEXT_AUF[zeit];
+    knopf.setAttribute("aria-expanded", auf ? "true" : "false");
   }
   /** Nur die Zeilen der Leiste neu, das Menue bleibt. Ohne Leiste (noch kein Plan gezeichnet) geschieht nichts; das naechste Zeichnen bringt sie mit. */
   function zeichneLeiste() {
     var el = wurzel.querySelector("[data-ansage-liste]");
     if (!el) return;
-    var zeit = ansageFokus(el);
+    var fokus = ansageFokus(el);
     el.innerHTML = ansageZeilen(leisteZustand());
-    ansageFokusHer(el, zeit);
+    ansageFokusHer(el, fokus);
   }
   /** Der Stopp-Knopf neben ⚙ kommt und geht mit dem Sprechen. Nur er wird eingefuegt oder entfernt, das Menue bleibt, damit eine offene Stimmenwahl nicht zugeht. */
   function zeichneStopp() {
@@ -3170,9 +3184,9 @@
       setTimeout(function () { ladeAnsagen(); ladeEinstellungen(); lauscheAnsagen(); }, 3000);
     };
   }
-  /** Ein Klick auf Einstellungen oder einen Abspielknopf; true, wenn er ihnen galt. */
+  /** Ein Klick auf Einstellungen, einen Abspielknopf oder den Text einer Zeile; true, wenn er ihnen galt. */
   function ansageKlick(e) {
-    var t = e.target.closest && e.target.closest("[data-einst-auf], [data-ansage-auto], [data-ansage-letzte], [data-ansage-stopp], [data-ansage]");
+    var t = e.target.closest && e.target.closest("[data-einst-auf], [data-ansage-auto], [data-ansage-letzte], [data-ansage-stopp], [data-ansage-text], [data-ansage]");
     if (!t) return false;
     if (t.hasAttribute("data-einst-auf")) {
       einstAuf = !einstAuf;
@@ -3186,6 +3200,7 @@
       speichereEinstellungen({ vorlesen: an });
     } else if (t.hasAttribute("data-ansage-letzte")) sprich(ANSAGEN[0], true);
     else if (t.hasAttribute("data-ansage-stopp")) stoppen();
+    else if (t.hasAttribute("data-ansage-text")) textUmschalten(t);
     else {
       // Die laufende Ansage haelt an oder setzt fort; jede andere Zeile spielt sofort.
       var zeit = Number(t.getAttribute("data-ansage"));

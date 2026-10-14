@@ -2,11 +2,11 @@
 
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { ANSAGEN_HOECHSTENS, EINSTELLUNGEN_VORGABE, einstellungenAus, einstellungenMit, einstellungenYaml, ansageText, ansagenAus, ansagenDatei, istTrivial, kurzAnsage, leseAnsagen, saetze, schonAngesagt, schreibeAnsage, sprechText, type Ansage } from "./ansagen.ts";
+import { ANSAGEN_HOECHSTENS, EINSTELLUNGEN_VORGABE, LESEN_HOECHSTENS, TEXT_HOECHSTENS, einstellungenAus, einstellungenMit, einstellungenYaml, ansageText, ansagenAus, ansagenDatei, istTrivial, kappeText, kurzAnsage, leseAnsagen, saetze, schonAngesagt, schreibeAnsage, sprechText, type Ansage } from "./ansagen.ts";
 
 const ANTWORT = `## Ergebnis
 
@@ -61,29 +61,76 @@ test("istTrivial und ansageText: kurze Quittungen nicht, Antworten gekuerzt, eig
   assert.equal(istTrivial("Erledigt, der PR ist offen."), false);
   assert.equal(ansageText("Captain, shipshape.", "auto"), null);
   assert.equal(ansageText("```\ncode\n```", "auto"), null);
-  assert.equal(ansageText("Eins ist fertig. Zwei ist fertig. Drei ist fertig. Vier ist fertig.", "auto"), "Eins ist fertig. Zwei ist fertig. Drei ist fertig.");
   // Selbst formuliert: auch kurz, bis sechs Saetze.
   assert.equal(ansageText("Build gruen.", "sage"), "Build gruen.");
   assert.equal(ansageText("A eins. B zwei. C drei. D vier. E fuenf. F sechs. G sieben.", "sage"), "A eins. B zwei. C drei. D vier. E fuenf. F sechs.");
 });
 
+// #26: die Zugende-Ansage nahm nur die ersten drei Saetze bis 300 Zeichen, oft blieb nur der erste.
+const LANGE_ANTWORT = `Der Umbau der Ansagen ist fertig, die Zugende-Ansage liest jetzt den ganzen Antworttext vor und nicht nur den Anfang.
+
+\`\`\`ts
+const geheim = kurzAnsage(sauber, 3, 300);
+\`\`\`
+
+Alle Tests laufen gruen, die der Ansagen ebenso wie die der Leiste auf der Seite einer Sitzung.
+In der Leiste steht der ganze Text, eingeklappt auf zwei Zeilen, und ein Klick klappt ihn auf.
+Die geschaetzte Dauer rechnet weiter mit dem gesprochenen Text, also mit dem ganzen.
+Offen bleibt nur das Review, danach kann der Pull Request gemergt werden.
+`;
+const LANGE_ANSAGE = [
+  "Der Umbau der Ansagen ist fertig, die Zugende-Ansage liest jetzt den ganzen Antworttext vor und nicht nur den Anfang.",
+  "Alle Tests laufen gruen, die der Ansagen ebenso wie die der Leiste auf der Seite einer Sitzung.",
+  "In der Leiste steht der ganze Text, eingeklappt auf zwei Zeilen, und ein Klick klappt ihn auf.",
+  "Die geschaetzte Dauer rechnet weiter mit dem gesprochenen Text, also mit dem ganzen.",
+  "Offen bleibt nur das Review, danach kann der Pull Request gemergt werden.",
+].join(" ");
+
+test("ansageText auto: der ganze Sprechtext der Antwort, alle Saetze ueber 300 Zeichen hinaus, ohne Codeblock (#26)", () => {
+  const text = ansageText(LANGE_ANTWORT, "auto");
+  assert.equal(text, LANGE_ANSAGE);
+  assert.ok(text!.length > 300, String(text!.length));
+  assert.equal(saetze(text!).length, 5);
+  for (const nie of ["geheim", "kurzAnsage", "const", "```"]) assert.ok(!text!.includes(nie), nie);
+  // Vorher: "Eins ist fertig. Zwei ist fertig. Drei ist fertig." – der vierte Satz fiel weg.
+  assert.equal(ansageText("Eins ist fertig. Zwei ist fertig. Drei ist fertig. Vier ist fertig.", "auto"), "Eins ist fertig. Zwei ist fertig. Drei ist fertig. Vier ist fertig.");
+});
+
+test("kappeText: kurz bleibt, lang endet am letzten ganzen Satz vor der Grenze, ein riesiger Satz an einer Wortgrenze mit …", () => {
+  assert.equal(kappeText("Eins. Zwei.", 100), "Eins. Zwei.");
+  assert.equal(kappeText("Eins ist fertig. Zwei ist fertig. Drei ist fertig.", 40), "Eins ist fertig. Zwei ist fertig.");
+  // Ein kurzer Satz vor einem riesigen: nicht nur der kurze, sondern bis an die Grenze.
+  const riese = kappeText(`Kurz. ${"wort ".repeat(100)}ende.`, 60);
+  assert.ok(riese.length <= 60, riese);
+  assert.match(riese, /^Kurz\. wort wort .*wort…$/);
+});
+
+test("ansageText auto: ein Sprechtext ueber TEXT_HOECHSTENS endet am letzten ganzen Satz davor", () => {
+  assert.equal(TEXT_HOECHSTENS, 8000);
+  const satz = "Dieser Satz ist ein Teil einer sehr langen Antwort am Ende eines Zugs.";
+  const text = ansageText(Array.from({ length: 200 }, () => satz).join("\n"), "auto")!;
+  assert.ok(text.length <= TEXT_HOECHSTENS && text.length > TEXT_HOECHSTENS - satz.length - 1, String(text.length));
+  assert.ok(text.endsWith(satz), text.slice(-80));
+});
+
 const A = (zeit: number, extra: Partial<Ansage> = {}): Ansage => ({ v: 1, zeit, id: "s-1", repo: "proj", text: `Ansage ${zeit}.`, quelle: "auto", ...extra });
 
-test("ansagenAus: kaputte und fremde Zeilen fallen weg, URLs auch im gespeicherten Text, die letzten n", () => {
+test("ansagenAus: kaputte und fremde Zeilen fallen weg, ein zu langer Text wird gekappt statt verworfen, URLs auch im gespeicherten Text, die letzten n", () => {
   const zeilen = [
     JSON.stringify(A(1)),
     "{kaputt",
     JSON.stringify({ ...A(2), v: 2 }),
     JSON.stringify({ ...A(3), id: "../x" }),
     JSON.stringify({ ...A(4), quelle: "fremd" }),
-    JSON.stringify({ ...A(5), text: "x".repeat(1001) }),
+    JSON.stringify({ ...A(5), text: "Ein Satz. ".repeat(1000) }),
     JSON.stringify({ ...A(6), text: "Siehe https://geheim.example/pfad bitte." }),
     JSON.stringify({ ...A(7), id: null, quelle: "sage" }),
     "",
   ].join("\n");
   const liste = ansagenAus(zeilen);
-  assert.deepEqual(liste.map((a) => a.zeit), [1, 6, 7]);
-  assert.equal(liste[1]!.text, "Siehe bitte.");
+  assert.deepEqual(liste.map((a) => a.zeit), [1, 5, 6, 7]);
+  assert.ok(liste[1]!.text.length <= TEXT_HOECHSTENS && liste[1]!.text.endsWith("Ein Satz."), String(liste[1]!.text.length));
+  assert.equal(liste[2]!.text, "Siehe bitte.");
   assert.deepEqual(ansagenAus(zeilen, 2).map((a) => a.zeit), [6, 7]);
   assert.deepEqual(ansagenAus(""), []);
 });
@@ -99,6 +146,23 @@ test("schreibeAnsage: haengt an, haelt die Datei bei hoechstens n plus Puffer, l
     assert.ok(zeilen.length >= 20, String(zeilen.length));
     assert.deepEqual(leseAnsagen(datei, 20).map((a) => a.zeit), Array.from({ length: 20 }, (_, i) => 61 + i));
     assert.equal(ANSAGEN_HOECHSTENS, 200);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("schreibeAnsage: lange Ansagen halten die Datei bei hoechstens LESEN_HOECHSTENS, auch unter n plus Puffer Zeilen", () => {
+  const tmp = mkdtempSync(path.join(os.tmpdir(), "live-plan-ansagen-"));
+  try {
+    const datei = ansagenDatei(tmp);
+    // Gut 7 700 Zeichen je Ansage: 150 davon sind ueber 1 MiB, aber weniger Zeilen als n plus Puffer.
+    const text = "Ein langer Satz einer langen Ansage. ".repeat(210).trim();
+    for (let i = 1; i <= 150; i++) schreibeAnsage(datei, A(i, { text }));
+    assert.ok(statSync(datei).size <= LESEN_HOECHSTENS, String(statSync(datei).size));
+    // Gekuerzt wird nur vorne: die gelesenen enden mit der letzten und sind lueckenlos.
+    const zeiten = leseAnsagen(datei).map((a) => a.zeit);
+    assert.ok(zeiten.length >= 100, String(zeiten.length));
+    assert.deepEqual(zeiten, Array.from({ length: zeiten.length }, (_, i) => 151 - zeiten.length + i));
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }
@@ -222,6 +286,18 @@ test("live-plan sage: eigene Ansage mit Sitzung und Repo; danach entfaellt die a
       ["s-1", repo, "sage", "Der Build ist grün, siehe."],
       ["s-2", "proj", "auto", antwort],
     ]);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("live-plan sage --auto: speichert den ganzen Sprechtext einer langen Antwort, ohne Codeblock (#26)", (t) => {
+  if (spawnSync("bun", ["--version"]).status !== 0) return t.skip("bun fehlt");
+  const tmp = mkdtempSync(path.join(os.tmpdir(), "live-plan-sage-"));
+  try {
+    const lauf = sage(tmp, ["--auto", "--id", "s-1", "--seit", String(Date.now() - 1000), "--repo", "proj"], { stdin: LANGE_ANTWORT });
+    assert.equal(lauf.status, 0, lauf.stderr);
+    assert.deepEqual(leseAnsagen(ansagenDatei(tmp)).map((a) => [a.quelle, a.text]), [["auto", LANGE_ANSAGE]]);
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }
