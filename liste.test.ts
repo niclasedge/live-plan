@@ -36,6 +36,7 @@ interface Ansicht {
   letzteAnsagen: (liste: unknown) => Record<string, { zeit: number }>;
   einstellungenMenue: (z: unknown) => string;
   ansageLeiste: (z: unknown) => string;
+  sollSprechen: (z: unknown) => boolean;
   stimmenListe: (stimmen: unknown) => { name: string; lang: string }[];
   stimmeWahl: (stimmen: unknown, name: unknown) => { name: string } | null;
   tonFreischalten: (sprache: unknown, aeusserung: unknown) => void;
@@ -169,7 +170,7 @@ test("Stimmen: deutsche zuerst ohne Doppel; gespeicherter Name, sonst die erste 
   assert.match(fehlt, /„Hal“ fehlt in diesem Browser, es gilt die deutsche Vorgabe\./);
 });
 
-const LEISTE = (ansagen: unknown[], extra: Record<string, unknown> = {}) => ({ ansagen, eigenesRepo: null, eigeneId: null, menue: MENUE, ...extra });
+const LEISTE = (ansagen: unknown[], extra: Record<string, unknown> = {}) => ({ ansagen, eigeneId: null, menue: MENUE, ...extra });
 
 test("ansageLeiste: hoechstens fuenf Zeilen bei sieben Ansagen, die neueste zuerst", () => {
   const a = ansicht();
@@ -191,13 +192,13 @@ test("ansageLeiste: je Zeile ▶ mit der Zeit, Uhrzeit, Repo und Text; Text und 
   assert.match(html, /<span class="an-text" title="Fertig, &quot;PR&quot; &lt;offen&gt;\.">Fertig, &quot;PR&quot; &lt;offen&gt;\.<\/span>/);
 });
 
-test("ansageLeiste: eigene Sitzung hervorgehoben, fremde nicht (Repo und Id zusammen)", () => {
+test("ansageLeiste: eigene Sitzung hervorgehoben ueber die Id; der Repo-Name darf aus einem Worktree abweichen", () => {
   const a = ansicht();
   a.setzeJetzt(JETZT);
-  const ansagen = [ANSAGE(1, { id: "s-x", repo: "ops-lab" }), ANSAGE(2, { id: "s-1", repo: "live-plan" }), ANSAGE(3, { id: "s-1", repo: "anderes" })];
-  const html = a.ansageLeiste(LEISTE(ansagen, { eigenesRepo: "live-plan", eigeneId: "s-1" }));
+  const ansagen = [ANSAGE(1, { id: "s-x", repo: "ops-lab" }), ANSAGE(2, { id: "s-1", repo: "live-plan" }), ANSAGE(3, { id: "s-1", repo: "live-plan.worktree" })];
+  const html = a.ansageLeiste(LEISTE(ansagen, { eigeneId: "s-1" }));
   const zeilen = html.split('<li class="an-zeile').slice(1);
-  assert.deepEqual(zeilen.map((z) => z.startsWith(" an-eigen")), [false, true, false]);
+  assert.deepEqual(zeilen.map((z) => z.startsWith(" an-eigen")), [false, true, true]);
 });
 
 test("ansageLeiste: langer Text gekuerzt mit Ellipse, der volle Text im title", () => {
@@ -231,4 +232,41 @@ test("ansageLeiste: ohne Ansage der Leerzustand; Kopf mit ⚙-Menue und Hinweis 
   assert.doesNotMatch(html, /<li/);
   assert.match(html, /data-einst-auf aria-expanded="false"/);
   assert.match(html, /an-hinweis">Ein Klick auf die Seite schaltet den Ton frei\./);
+});
+
+// Ein Tab spricht (#18, Runde 2): sollSprechen entscheidet je Tab, ob er eine neue Ansage vorliest.
+const SPRECHEN = { vorlesen: true, frei: true, sprecher: null, tabId: "t-1", istLeiter: false, gesprochenBis: null, zeit: JETZT };
+
+test("sollSprechen: spricht nur der Sprecher-Tab, auch wenn ein anderer Tab der Leiter ist", () => {
+  const { sollSprechen } = ansicht();
+  assert.equal(sollSprechen({ ...SPRECHEN, sprecher: "t-1" }), true);
+  assert.equal(sollSprechen({ ...SPRECHEN, tabId: "t-2", istLeiter: true, sprecher: "t-1" }), false);
+  assert.equal(sollSprechen({ ...SPRECHEN, tabId: "t-2", istLeiter: false, sprecher: "t-1" }), false);
+});
+
+test("sollSprechen: ohne Sprecher spricht der Leiter-Tab, ein Nicht-Leiter nicht", () => {
+  const { sollSprechen } = ansicht();
+  assert.equal(sollSprechen({ ...SPRECHEN, istLeiter: true, sprecher: null }), true);
+  assert.equal(sollSprechen({ ...SPRECHEN, istLeiter: true, sprecher: "" }), true);
+  assert.equal(sollSprechen({ ...SPRECHEN, istLeiter: false, sprecher: null }), false);
+});
+
+test("sollSprechen: eine schon gesprochene Ansage (zeit <= gesprochenBis) wird nicht noch einmal gesprochen", () => {
+  const { sollSprechen } = ansicht();
+  assert.equal(sollSprechen({ ...SPRECHEN, sprecher: "t-1", gesprochenBis: JETZT }), false);
+  assert.equal(sollSprechen({ ...SPRECHEN, sprecher: "t-1", gesprochenBis: JETZT + 1 }), false);
+  assert.equal(sollSprechen({ ...SPRECHEN, sprecher: "t-1", gesprochenBis: JETZT - 1 }), true);
+});
+
+test("sollSprechen: nur bei Vorlesen an und freigeschaltetem Ton, auch im Sprecher-Tab", () => {
+  const { sollSprechen } = ansicht();
+  assert.equal(sollSprechen({ ...SPRECHEN, sprecher: "t-1", vorlesen: false }), false);
+  assert.equal(sollSprechen({ ...SPRECHEN, sprecher: "t-1", frei: false }), false);
+  assert.equal(sollSprechen({ ...SPRECHEN, istLeiter: true, frei: false }), false);
+});
+
+test("sollSprechen: ohne localStorage (sprecher und gesprochenBis null) entscheidet allein der Leiter", () => {
+  const { sollSprechen } = ansicht();
+  assert.equal(sollSprechen({ ...SPRECHEN, istLeiter: true }), true);
+  assert.equal(sollSprechen({ ...SPRECHEN, istLeiter: false }), false);
 });

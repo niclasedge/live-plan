@@ -125,6 +125,10 @@ vorgelesen. Oben unter dem Kopf steht die Leiste **Ansagen** mit den letzten fü
 zuerst. ▶ liest eine davon sofort vor; die Zeilen der geöffneten Sitzung sind hervorgehoben. Das Menü ⚙ in der Leiste
 ist das der Übersicht. Eine neue Ansage zeichnet nur die Leiste neu, nicht den Plan. Das Handout (`?handout=1`) bleibt
 ohne Leiste und ohne Ansagen.
+Mehrere Tabs teilen sich die Verbindung: ein Tab hält `GET /api/ereignisse`, die anderen bekommen Änderungen über einen
+BroadcastChannel. Vorgelesen wird nur im Sprecher-Tab, also dem, den der Nutzer zuletzt bedient hat (ohne Sprecher im
+Leiter-Tab), und jede Ansage genau einmal. Ohne Lock oder BroadcastChannel (etwa über eine LAN-IP) hält jeder Tab seine eigene
+Verbindung, und das Sprechen bleibt trotzdem bei einem Tab.
 Tests: `node --test ansagen.test.ts liste.test.ts server.test.ts` (brauchen bun), Mod: `claude plugin test mod`.
 
 ## Firstmate-Cockpit
