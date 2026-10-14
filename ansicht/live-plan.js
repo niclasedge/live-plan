@@ -1,6 +1,7 @@
 // live-plan (#257): die Ansicht, ohne Bibliothek. "/" zeigt die Liste aus /api/liste, je Sitzung mit ihrer neuesten
 // Ansage (GET /api/ansagen, neue per SSE /api/ereignisse, vorgelesen mit speechSynthesis; Vorlesen und Stimme im
-// Menue, GET und POST /api/einstellungen), "/REPO/SLUG" eine Sitzung aus /api/REPO/SLUG, neu gelesen bei jeder
+// Menue, GET und POST /api/einstellungen), "/REPO/SLUG" eine Sitzung aus /api/REPO/SLUG mit oben der Leiste Ansagen
+// (die letzten fuenf aller Sitzungen), neu gelesen bei jeder
 // Dateiaenderung (SSE /ereignisse). Ein Klick auf eine Option schickt POST .../entscheidung, ebenso eine eigene
 // Antwort (Freitext, mit eigen: true); alles andere aendert nur der Agent.
 //
@@ -55,6 +56,13 @@
       return G.localStorage ? G.localStorage.getItem(schluessel) : null;
     } catch (e) {
       return null;
+    }
+  }
+  function vergiss(schluessel) {
+    try {
+      if (G.localStorage) G.localStorage.removeItem(schluessel);
+    } catch (e) {
+      /* privates Fenster: nichts zu loeschen */
     }
   }
   function merke(schluessel, wert) {
@@ -2205,7 +2213,7 @@
    */
   function seite(modalHtml) {
     if (handout) return handoutSeite();
-    return '<div class="lp-inhalt"' + (modalHtml ? " inert" : "") + ">" + kopf() + fehler() + ueberblickKarten() + teilEins() +
+    return '<div class="lp-inhalt"' + (modalHtml ? " inert" : "") + ">" + kopf() + ansageLeiste(leisteZustand()) + fehler() + ueberblickKarten() + teilEins() +
       hostTeil(hostAuf) + verbrauchTeil() + agentenAbschnitt() + fortschrittTeil() + blick() + jetzt(true) +
       '<div class="lp-teil1">' + fragenAnSie() + ueberblick() + "</div>" + firstmateTeil() + doku() + dateien() + fuss() +
       '<aside id="lp-drawer" class="lp-drawer' + (sel ? " open" : "") + '" data-testid="sitzung-drawer">' + (sel ? drawerInhalt(sel) : "") + "</aside></div>" +
@@ -2285,10 +2293,54 @@
       '<button type="button" data-ansage-letzte' + (z.letzte && z.kann ? "" : " disabled") + ">▶ Letzte Ansage nochmal</button>" +
       (z.fehler ? '<span class="an-fehler">' + esc(z.fehler) + "</span>" : "") + "</div></div>";
   }
+  /** Wie viele Ansagen die Leiste zeigt und nach wie vielen Zeichen ihr Text mit Ellipse endet (der volle Text steht im title). */
+  var LEISTE_N = 5, LEISTE_ZEICHEN = 90;
+  /** Der Text einer Ansage gekuerzt nach Zeichen, nicht nach Code-Einheiten, damit kein Emoji auseinanderbricht. */
+  function kurzText(t) {
+    var z = Array.from(String(t || ""));
+    return z.length > LEISTE_ZEICHEN ? z.slice(0, LEISTE_ZEICHEN - 1).join("") + "…" : z.join("");
+  }
+  /**
+   * Die Zeilen der Leiste: die neuesten LEISTE_N Ansagen aus allen Sitzungen (`z.ansagen`, neueste zuerst). Die Zeile der
+   * eigenen Sitzung (`z.eigeneId`, die Id der Sitzung; der Repo-Name darf in einem Worktree abweichen) bekommt die Klasse an-eigen.
+   */
+  function ansageZeilen(z) {
+    var liste = (Array.isArray(z.ansagen) ? z.ansagen : []).slice(0, LEISTE_N);
+    if (!liste.length) return '<p class="an-leer">Noch keine Ansage.</p>';
+    return "<ol>" + liste.map(function (a) {
+      var eigen = !!z.eigeneId && a.id === z.eigeneId;
+      var uhr = ansageUhr(a.zeit);
+      return '<li class="an-zeile' + (eigen ? " an-eigen" : "") + '"><button type="button" class="an-spiel" data-ansage="' + esc(a.zeit) + '" aria-label="' +
+        esc("Ansage vorlesen: " + a.repo + " " + uhr) + '">▶</button><span class="an-uhr mono">' + esc(uhr) + '</span><b class="an-repo">' + esc(a.repo) +
+        '</b><span class="an-text" title="' + esc(a.text) + '">' + esc(kurzText(a.text)) + "</span></li>";
+    }).join("") + "</ol>";
+  }
+  /**
+   * Die Leiste Ansagen oben auf einer Sitzungsseite: Kopf mit dem ⚙-Menue (einstellungenMenue), darunter die Zeilen.
+   * `z`: { ansagen, eigeneId, menue }, menue wie einstellungenZustand().
+   */
+  function ansageLeiste(z) {
+    return '<section class="an-leiste" data-testid="ansagen-leiste"><div class="an-leiste-kopf"><h2>Ansagen</h2>' + einstellungenMenue(z.menue) + "</div>" +
+      '<div class="an-leiste-liste" data-ansage-liste>' + ansageZeilen(z) + "</div></section>";
+  }
+
+  /**
+   * Spricht dieser Tab eine neue Ansage? Nur bei Vorlesen an und freigeschaltetem Ton. Der Sprecher (der Tab, den der
+   * Nutzer zuletzt bedient hat) spricht; ohne Sprecher der Leiter-Tab. Eine schon gesprochene Ansage (zeit nicht
+   * groesser als gesprochenBis) spricht nie ein zweites Mal. `z`: { vorlesen, frei, sprecher, tabId, istLeiter, gesprochenBis, zeit }.
+   */
+  function sollSprechen(z) {
+    if (!z.vorlesen || !z.frei) return false;
+    var wer = z.sprecher ? z.sprecher === z.tabId : !!z.istLeiter;
+    if (!wer) return false;
+    return z.gesprochenBis === null || z.gesprochenBis === undefined || z.zeit > z.gesprochenBis;
+  }
 
   G.LivePlanAnsicht = {
     ansageSprechtext: ansageSprechtext,
     ansageZelle: ansageZelle,
+    ansageLeiste: ansageLeiste,
+    sollSprechen: sollSprechen,
     letzteAnsagen: letzteAnsagen,
     einstellungenMenue: einstellungenMenue,
     stimmenListe: stimmenListe,
@@ -2364,9 +2416,24 @@
   function zeichne() {
     var dz = dateiZustand();
     var ez = eigenZustand();
+    var leiste = wurzel.querySelector(".an-leiste");
+    var fokus = leisteFokus(leiste);
     zeichneSeite();
+    stelleLeisteHer(leiste, fokus);
     stelleDateienHer(dz);
     stelleEigenHer(ez);
+  }
+  /** Die Leiste Ansagen bleibt beim Neuzeichnen des Plans derselbe Knoten (offene Stimmenwahl); das neue innerHTML setzt sie wieder ein. */
+  function stelleLeisteHer(alt, fokus) {
+    var neu = wurzel.querySelector(".an-leiste");
+    if (alt && neu) neu.replaceWith(alt);
+    // Der Knoten bleibt, der Fokus geht beim Herausnehmen verloren: er kommt zurueck, wo er war.
+    if (fokus && fokus.isConnected) fokus.focus({ preventScroll: true });
+  }
+  /** Das Element der Leiste mit dem Fokus, sonst null; vor dem Neuzeichnen zu merken. */
+  function leisteFokus(el) {
+    var a = doc.activeElement;
+    return el && a && el.contains(a) ? a : null;
   }
   /** Fokus und Auswahl im Feld einer eigenen Antwort; den Text traegt eigenText. */
   function eigenZustand() {
@@ -2413,7 +2480,7 @@
       doc.title = ((D.live && D.live.fortschritt && D.live.fortschritt.titel) || D.slug) + " · live-plan";
       var nurModal = diffModal(diffAuf) || fmModal(fmAuf);
       if (!nurModal) fmAuf = null;
-      wurzel.innerHTML = '<div class="lp-inhalt"' + (nurModal ? " inert" : "") + ">" + kopfNurLive() + live() + firstmateTeil() + dateien() + "</div>" + nurModal;
+      wurzel.innerHTML = '<div class="lp-inhalt"' + (nurModal ? " inert" : "") + ">" + kopfNurLive() + (handout ? "" : ansageLeiste(leisteZustand())) + live() + firstmateTeil() + dateien() + "</div>" + nurModal;
       nachModal(stand);
       return;
     }
@@ -2558,7 +2625,7 @@
   wurzel.addEventListener("click", function (e) {
     var th = e.target.closest(".lp-thema button[data-thema]");
     if (th) { setzeThema(th.dataset.thema); return; }
-    if (!API && ansageKlick(e)) return;
+    if (ansageKlick(e)) return;
     if (!D) return;
     var opt = e.target.closest(".lp-frage .opt button[data-frage]");
     if (opt) {
@@ -2780,23 +2847,65 @@
 
   function nichtGefunden() {
     doc.title = "nicht gefunden · live-plan";
+    // Die Leiste zeigt die Ansagen aller Sitzungen, auch wenn diese Sitzung fehlt; im Handout bleibt sie weg.
+    var leiste = wurzel.querySelector(".an-leiste"), fokus = leisteFokus(leiste);
     wurzel.innerHTML = '<header class="lp-kopf"><div class="lp-oben"><a class="lp-zurueck" href="/">alle Sitzungen</a>' + themaSchalter() + "</div><h1>Sitzung nicht gefunden</h1>" +
-      '<p class="lp-ziel mono">' + esc((REPO || "") + "/.live-plan/" + (SLUG || "") + ".yaml") + "</p></header>";
+      '<p class="lp-ziel mono">' + esc((REPO || "") + "/.live-plan/" + (SLUG || "") + ".yaml") + "</p></header>" + (handout ? "" : ansageLeiste(leisteZustand()));
+    stelleLeisteHer(leiste, fokus);
   }
 
-  // --- Ansagen auf der Uebersicht -------------------------------------------------------------
+  // --- Ansagen auf Uebersicht und Sitzung -----------------------------------------------------
   // Neue Ansagen und geaenderte Einstellungen meldet GET /api/ereignisse. Vorgelesen wird eine neue Ansage nur, solange
   // Vorlesen an ist und die Seite einen Klick oder eine Taste hatte, denn erst danach lassen Browser sie sprechen.
-  // Vorlesen und Stimme stehen zentral in einstellungen.yaml (GET und POST /api/einstellungen).
+  // Vorlesen und Stimme stehen zentral in einstellungen.yaml (GET und POST /api/einstellungen). Auf einer Sitzungsseite
+  // zeigt die Leiste oben die neuesten Ansagen aller Sitzungen; die Uebersicht zeigt sie in ihrer Liste.
+  // Ein Tab spricht (#18, Runde 2): den Lock haelt ein Tab und oeffnet die eine Verbindung, die anderen Tabs bekommen
+  // die Aenderungen ueber BroadcastChannel. Gesprochen wird im Sprecher-Tab (der zuletzt bediente), ohne Schluessel im Leiter.
+  // Gesprochen-Merkmal in localStorage verhindert eine doppelte Vorlesung auch bei Race-Conditions.
   var ANSAGEN = [], ansagenBekannt = null, ansageFrei = false;
   var EINST = { vorlesen: false, stimme: null }, einstAuf = false, einstFehler = "";
   var SPRACHE = G.speechSynthesis && G.SpeechSynthesisUtterance ? G.speechSynthesis : null;
+  // Ein Tab spricht (#18, Runde 2): TAB ist dieser Tab; der Sprecher-Schluessel nennt den Tab, den der Nutzer zuletzt bedient hat.
+  var TAB = Math.random().toString(36).slice(2) + Date.now().toString(36);
+  var KANAL_NAME = "live-plan-ansagen", SCHLUESSEL_SPRECHER = "live-plan.sprecher", SCHLUESSEL_GESPROCHEN = "live-plan.gesprochen";
+  var MENUE_FELDER = ["data-einst-auf", "data-ansage-auto", "data-ansage-stimme", "data-ansage-letzte"];
+  var KANAL = null, istLeiter = false;
   function einstellungenZustand() {
     return { kann: !!SPRACHE, vorlesen: EINST.vorlesen, frei: ansageFrei, stimmen: SPRACHE ? SPRACHE.getVoices() : [], stimme: EINST.stimme, auf: einstAuf, letzte: ANSAGEN.length > 0, fehler: einstFehler };
   }
+  /** Das Menue neu; der Fokus bleibt bei dem Feld, das ihn hatte (ein Neuzeichnen ersetzt den Knoten). */
   function zeichneEinstellungen() {
     var el = wurzel.querySelector(".lp-einst");
-    if (el) el.outerHTML = einstellungenMenue(einstellungenZustand());
+    if (!el) return;
+    var fokus = menueFokus(el);
+    el.outerHTML = einstellungenMenue(einstellungenZustand());
+    menueFokusHer(fokus);
+  }
+  /** Das Feld des Menues mit dem Fokus, als Attribut (der Knoten selbst wird beim Neuzeichnen ersetzt). */
+  function menueFokus(el) {
+    var a = doc.activeElement;
+    if (!el || !a || !el.contains(a)) return null;
+    return MENUE_FELDER.find(function (x) { return a.hasAttribute(x); }) || null;
+  }
+  /** Fokus auf das Feld zurueck; ist es weg (Menue zu), auf den ⚙-Knopf. */
+  function menueFokusHer(feld) {
+    if (!feld) return;
+    var neu = wurzel.querySelector("[" + feld + "]") || wurzel.querySelector("[data-einst-auf]");
+    if (neu && !neu.disabled) neu.focus({ preventScroll: true });
+  }
+  /** Was die Leiste auf einer Sitzungsseite braucht: alle Ansagen, die Sitzung der Seite (SLUG) und das Menue. */
+  function leisteZustand() {
+    return { ansagen: ANSAGEN, eigeneId: SLUG, menue: einstellungenZustand() };
+  }
+  /** Nur die Zeilen der Leiste neu, das Menue bleibt. Ohne Leiste (noch kein Plan gezeichnet) geschieht nichts; das naechste Zeichnen bringt sie mit. */
+  function zeichneLeiste() {
+    var el = wurzel.querySelector("[data-ansage-liste]");
+    if (!el) return;
+    var a = doc.activeElement;
+    var zeit = a && el.contains(a) && a.hasAttribute("data-ansage") ? a.getAttribute("data-ansage") : null;
+    el.innerHTML = ansageZeilen(leisteZustand());
+    var wieder = zeit && el.querySelector('[data-ansage="' + zeit + '"]');
+    if (wieder) wieder.focus({ preventScroll: true });
   }
   /** Spricht eine Ansage; `sofort` bricht ab, was gerade laeuft, sonst reiht der Browser sie hinten an. */
   function sprich(a, sofort) {
@@ -2807,23 +2916,44 @@
     if (stimme) { u.voice = stimme; u.lang = stimme.lang; } else u.lang = "de-DE";
     SPRACHE.speak(u);
   }
-  /** Laedt die Ansagen; was seit dem letzten Laden dazukam, liest sie bei Vorlesen an der Reihe nach vor. */
+  /** Laedt die Ansagen und verteilt sie; der Leiter-Tab gibt sie ueber den Kanal an die anderen Tabs weiter. */
   function ladeAnsagen() {
     return fetch("/api/ansagen", { cache: "no-store" }).then(function (r) {
       return r.ok ? r.json() : null;
     }).then(function (b) {
       if (!b || !Array.isArray(b.ansagen)) return;
-      var liste = b.ansagen.filter(function (a) { return a && typeof a.zeit === "number" && typeof a.text === "string"; });
-      var bekannt = ansagenBekannt;
-      var neu = bekannt === null ? [] : liste.filter(function (a) { return a.zeit > bekannt; }).reverse();
-      ansagenBekannt = liste.reduce(function (m, a) { return Math.max(m, a.zeit); }, bekannt || 0);
-      var ersteDa = !ANSAGEN.length && liste.length;
-      ANSAGEN = liste;
-      zeichneListe();
-      // "Letzte nochmal" geht erst mit einer Ansage; sonst bleibt das Menue, wie es ist (offene Stimmenwahl).
-      if (ersteDa) zeichneEinstellungen();
-      if (EINST.vorlesen && ansageFrei) neu.forEach(function (a) { sprich(a, false); });
+      var liste = filtern(b.ansagen);
+      verarbeiteAnsagen(liste);
+      if (istLeiter && KANAL) KANAL.postMessage({ art: "ansagen", ansagen: liste });
     }).catch(function () { /* das naechste Ereignis versucht es wieder */ });
+  }
+  /** Nur gueltige Ansagen: Zeit als Zahl, Text als Zeichenkette. */
+  function filtern(liste) {
+    return liste.filter(function (a) { return a && typeof a.zeit === "number" && typeof a.text === "string"; });
+  }
+  /** Zeigt die Liste (neueste zuerst) und spricht, was seit dem letzten Stand neu ist; das Wer regelt sprichNeue. */
+  function verarbeiteAnsagen(liste) {
+    var bekannt = ansagenBekannt;
+    var neu = bekannt === null ? [] : liste.filter(function (a) { return a.zeit > bekannt; }).reverse();
+    ansagenBekannt = liste.reduce(function (m, a) { return Math.max(m, a.zeit); }, bekannt || 0);
+    var ersteDa = !ANSAGEN.length && liste.length;
+    ANSAGEN = liste;
+    if (API) zeichneLeiste(); else zeichneListe();
+    // "Letzte nochmal" geht erst mit einer Ansage; sonst bleibt das Menue, wie es ist (offene Stimmenwahl).
+    if (ersteDa) zeichneEinstellungen();
+    neu.forEach(function (a) { sprichNeue(a); });
+  }
+  /** Spricht eine neue Ansage, wenn dieser Tab dran ist (sollSprechen), und merkt sich danach, dass sie gesprochen ist. */
+  function sprichNeue(a) {
+    var gesprochen = lies(SCHLUESSEL_GESPROCHEN);
+    var bis = gesprochen === null ? NaN : Number(gesprochen);
+    var darf = sollSprechen({
+      vorlesen: EINST.vorlesen, frei: ansageFrei, sprecher: lies(SCHLUESSEL_SPRECHER), tabId: TAB, istLeiter: istLeiter,
+      gesprochenBis: Number.isFinite(bis) ? bis : null, zeit: a.zeit,
+    });
+    if (!darf) return;
+    merke(SCHLUESSEL_GESPROCHEN, String(a.zeit));
+    sprich(a, false);
   }
   function ladeEinstellungen() {
     return fetch("/api/einstellungen", { cache: "no-store" }).then(function (r) {
@@ -2831,10 +2961,16 @@
     }).then(function (b) {
       if (!b || typeof b.vorlesen !== "boolean") return;
       var neu = { vorlesen: b.vorlesen, stimme: typeof b.stimme === "string" ? b.stimme : null };
-      if (neu.vorlesen === EINST.vorlesen && neu.stimme === EINST.stimme) return;
-      EINST = neu;
-      zeichneEinstellungen();
+      uebernehmeEinstellungen(neu);
+      if (istLeiter && KANAL) KANAL.postMessage({ art: "einstellungen", einst: neu });
     }).catch(function () { /* das naechste Ereignis versucht es wieder */ });
+  }
+  /** Eine Einstellung uebernehmen, die dieser Tab nicht selbst geaendert hat (Server oder Kanal). */
+  function uebernehmeEinstellungen(neu) {
+    if (!neu || typeof neu.vorlesen !== "boolean") return;
+    if (neu.vorlesen === EINST.vorlesen && neu.stimme === EINST.stimme) return;
+    EINST = { vorlesen: neu.vorlesen, stimme: typeof neu.stimme === "string" ? neu.stimme : null };
+    zeichneEinstellungen();
   }
   /** Schreibt eine Aenderung nach einstellungen.yaml; bis zur Antwort gilt sie schon, ein Fehler nimmt sie zurueck. */
   function speichereEinstellungen(aenderung) {
@@ -2846,12 +2982,21 @@
       return r.json().catch(function () { return {}; }).then(function (b) {
         if (!r.ok) throw new Error((b && b.fehler) || "HTTP " + r.status);
         EINST = { vorlesen: b.vorlesen === true, stimme: typeof b.stimme === "string" ? b.stimme : null };
+        // Die anderen Tabs erfahren die Aenderung ueber den Kanal, nicht erst ueber den Leiter.
+        if (KANAL) KANAL.postMessage({ art: "einstellungen", einst: EINST });
       });
     }).catch(function (err) {
       EINST = vorher;
       einstFehler = "Nicht gespeichert: " + err.message;
     }).then(zeichneEinstellungen);
   }
+  /** Was der Leiter-Tab ueber den Kanal verteilt: die Ansagen oder die Einstellungen. */
+  function kanalEmpfangen(m) {
+    if (!m || typeof m !== "object") return;
+    if (m.art === "ansagen" && Array.isArray(m.ansagen)) verarbeiteAnsagen(filtern(m.ansagen));
+    else if (m.art === "einstellungen") uebernehmeEinstellungen(m.einst);
+  }
+  /** Die Verbindung GET /api/ereignisse; nur der Leiter-Tab oeffnet sie (oder jeder Tab ohne Lock, s. startAnsagen). */
   function lauscheAnsagen() {
     if (!G.EventSource) return;
     var quelle = new EventSource("/api/ereignisse");
@@ -2882,13 +3027,55 @@
     }
     return true;
   }
-  /** Der erste Klick oder Tastendruck der Seite gibt die Sprachausgabe stumm frei; der Hinweis geht danach weg. */
+  /** Der erste Klick oder Tastendruck gibt die Sprachausgabe stumm frei; jeder Klick danach macht diesen Tab zum Sprecher. */
   function ansageFreigeben() {
-    if (ansageFrei) return;
-    tonFreischalten(SPRACHE, G.SpeechSynthesisUtterance);
-    ansageFrei = true;
-    // Erst nach dem Klick neu zeichnen, sonst ersetzte das Neuzeichnen den Knopf, bevor der Klick ihn erreicht.
-    if (wurzel.querySelector(".lp-einst .an-hinweis")) setTimeout(zeichneEinstellungen, 0);
+    if (!ansageFrei) {
+      tonFreischalten(SPRACHE, G.SpeechSynthesisUtterance);
+      ansageFrei = true;
+      // Erst nach dem Klick neu zeichnen, sonst ersetzte das Neuzeichnen den Knopf, bevor der Klick ihn erreicht.
+      if (wurzel.querySelector(".lp-einst .an-hinweis")) setTimeout(zeichneEinstellungen, 0);
+    }
+    sprecherSetzen();
+  }
+  /** Dieser Tab spricht die naechste Ansage: sein Name steht unter live-plan.sprecher (nur mit freigeschaltetem Ton). */
+  function sprecherSetzen() {
+    if (ansageFrei && lies(SCHLUESSEL_SPRECHER) !== TAB) merke(SCHLUESSEL_SPRECHER, TAB);
+  }
+  /** Laden, lauschen und die Freigabe der Sprachausgabe, gleich auf der Uebersicht und auf jeder Sitzungsseite. */
+  function startAnsagen() {
+    ladeAnsagen();
+    ladeEinstellungen();
+    // Ein Tab spricht (#18, Runde 2): den Lock haelt genau ein Tab und oeffnet darum die eine Verbindung GET /api/ereignisse.
+    // Die anderen Tabs bekommen Ansagen und Einstellungen ueber den Kanal. Ohne Lock oder Kanal lauscht jeder Tab selbst.
+    if (G.BroadcastChannel && G.navigator && G.navigator.locks) {
+      KANAL = new G.BroadcastChannel(KANAL_NAME);
+      KANAL.onmessage = function (e) { kanalEmpfangen(e.data); };
+      G.navigator.locks.request(KANAL_NAME, { mode: "exclusive" }, function () {
+        istLeiter = true;
+        // Was waehrend der Leiterlosigkeit kam, holt der neue Leiter nach.
+        ladeAnsagen();
+        ladeEinstellungen();
+        lauscheAnsagen();
+        return new Promise(function () { /* haelt den Lock, bis der Tab geschlossen wird */ });
+      }).catch(function () { lauscheAnsagen(); });
+    } else {
+      lauscheAnsagen();
+    }
+    doc.addEventListener("click", ansageFreigeben, true);
+    doc.addEventListener("keydown", ansageFreigeben, true);
+    doc.addEventListener("visibilitychange", function () { if (doc.visibilityState === "visible") sprecherSetzen(); });
+    // Schliesst der Sprecher, faellt das Sprechen an den Leiter-Tab (ohne Schluessel).
+    G.addEventListener("pagehide", function () { if (lies(SCHLUESSEL_SPRECHER) === TAB) vergiss(SCHLUESSEL_SPRECHER); });
+    doc.addEventListener("keydown", function (e) {
+      if (e.key !== "Escape" || !einstAuf) return;
+      einstAuf = false;
+      zeichneEinstellungen();
+    });
+    wurzel.addEventListener("change", function (e) {
+      if (e.target.matches && e.target.matches("[data-ansage-stimme]")) speichereEinstellungen({ stimme: e.target.value || null });
+    });
+    // Die Stimmen kommen in Chrome erst nach dem Laden.
+    if (SPRACHE && SPRACHE.addEventListener) SPRACHE.addEventListener("voiceschanged", zeichneEinstellungen);
   }
 
   // --- Liste aller Sitzungen ------------------------------------------------------------------
@@ -2913,12 +3100,14 @@
     doc.title = "Sitzungen · live-plan";
     // Das Menue bleibt beim Neuzeichnen der Liste derselbe Knoten (offene Stimmenwahl, Fokus).
     var menue = wurzel.querySelector(".lp-einst");
+    var fokus = menueFokus(menue);
     wurzel.innerHTML = '<header class="lp-kopf"><div class="lp-oben"><h1>Sitzungen</h1>' + (menue ? "<div data-einst-platz></div>" : einstellungenMenue(einstellungenZustand())) + themaSchalter() + "</div>" +
       '<p class="lp-ziel">Lebende Dokumente aus <span class="mono">REPO/.live-plan/SLUG.yaml</span> unter <span class="mono">' + esc(daten.wurzel) + "</span> und laufende Claude-Sitzungen aus dem Register</p></header>" + hostTeil(hostAuf) +
       '<table class="lp-liste" data-testid="tabelle-sitzungen"><thead><tr><th>repo</th><th>sitzung</th><th>titel</th><th>fragen</th><th>ansage</th><th>geaendert</th></tr></thead><tbody>' +
       (zeilen || '<tr><td colspan="6" class="leer">Keine Sitzung. <span class="mono">live-plan neu SLUG</span> legt eine an.</td></tr>') + "</tbody></table>";
     var platz = wurzel.querySelector("[data-einst-platz]");
     if (platz) platz.replaceWith(menue);
+    menueFokusHer(fokus);
   }
 
   function lausche() {
@@ -2952,27 +3141,15 @@
   if (!API) {
     liste();
     setInterval(liste, 15000);
-    ladeAnsagen();
-    ladeEinstellungen();
-    lauscheAnsagen();
-    doc.addEventListener("click", ansageFreigeben, true);
-    doc.addEventListener("keydown", ansageFreigeben, true);
-    doc.addEventListener("keydown", function (e) {
-      if (e.key !== "Escape" || !einstAuf) return;
-      einstAuf = false;
-      zeichneEinstellungen();
-    });
-    wurzel.addEventListener("change", function (e) {
-      if (e.target.matches && e.target.matches("[data-ansage-stimme]")) speichereEinstellungen({ stimme: e.target.value || null });
-    });
-    // Die Stimmen kommen in Chrome erst nach dem Laden.
-    if (SPRACHE && SPRACHE.addEventListener) SPRACHE.addEventListener("voiceschanged", zeichneEinstellungen);
+    startAnsagen();
     hostTaktObj = sichtbarTakt(doc, HOST_TAKT_MS, ladeHost);
     hostTaktObj.start();
     return;
   }
   laden();
+  // Das Handout (?handout=1) bleibt ohne Ansagen: es zeigt nur den Inhalt, und die Leiste gehoert nicht ins Bild.
   if (handout) return;
+  startAnsagen();
   ladeBaum();
   lausche();
   ladeAbo();

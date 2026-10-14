@@ -247,6 +247,18 @@ body { margin: 0; background: var(--s1); font-family: var(--font); }
 .an-stimme select { max-width: 260px; min-width: 0; padding: 2px 4px; border: 1px solid var(--line-2); border-radius: 6px; background: var(--s2); color: var(--ink-1); font: inherit; }
 .an-notiz { color: var(--ink-3); }
 .an-fehler { color: var(--rot); }
+/* Leiste Ansagen oben auf der Sitzungsseite: Kopf mit dem Menue ⚙, darunter die neuesten Ansagen aller Sitzungen. */
+.an-leiste { display: grid; gap: 8px; margin: 0 0 12px; padding: 10px 12px; border: 1px solid var(--line-1); border-radius: var(--r-s); background: var(--s2); }
+.an-leiste-kopf { display: flex; gap: 10px; align-items: center; min-width: 0; }
+.an-leiste-kopf h2 { margin: 0; font-family: var(--font-kopf); font-size: 13px; font-weight: 700; color: var(--ink-1); }
+.an-leiste ol { display: grid; grid-template-columns: 30px auto auto minmax(0, 1fr); gap: 2px 8px; margin: 0; padding: 0; list-style: none; }
+.an-zeile { display: grid; grid-column: 1 / -1; grid-template-columns: subgrid; align-items: center; min-width: 0; padding: 2px 6px; border-radius: 6px; }
+.an-zeile.an-eigen { background: color-mix(in srgb, var(--l1) 16%, transparent); }
+.an-zeile .an-spiel { width: 24px; height: 22px; padding: 0; border: 1px solid var(--line-2); border-radius: 6px; background: var(--s1); font-size: 11px; }
+.an-zeile .an-uhr { font-size: 12px; color: var(--ink-2); white-space: nowrap; }
+.an-zeile .an-repo { font-weight: 600; color: var(--ink-2); white-space: nowrap; }
+.an-zeile .an-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink-3); }
+.an-leer { margin: 0; color: var(--ink-3); }
 .hw-prozesse td.befehl { width: 40%; font-family: var(--mono); color: var(--ink-2); }
 .vb-trenn { color: var(--line-2); }
 .vb-sitzung { display: flex; gap: 6px; align-items: center; min-width: 0; white-space: nowrap; overflow: hidden; }

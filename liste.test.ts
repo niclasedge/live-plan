@@ -35,6 +35,8 @@ interface Ansicht {
   ansageZelle: (a: unknown) => string;
   letzteAnsagen: (liste: unknown) => Record<string, { zeit: number }>;
   einstellungenMenue: (z: unknown) => string;
+  ansageLeiste: (z: unknown) => string;
+  sollSprechen: (z: unknown) => boolean;
   stimmenListe: (stimmen: unknown) => { name: string; lang: string }[];
   stimmeWahl: (stimmen: unknown, name: unknown) => { name: string } | null;
   tonFreischalten: (sprache: unknown, aeusserung: unknown) => void;
@@ -166,4 +168,190 @@ test("Stimmen: deutsche zuerst ohne Doppel; gespeicherter Name, sonst die erste 
   const fehlt = a.einstellungenMenue({ ...MENUE, stimmen: STIMMEN, stimme: "Hal" });
   assert.match(fehlt, /<option value="" selected>Standard/);
   assert.match(fehlt, /„Hal“ fehlt in diesem Browser, es gilt die deutsche Vorgabe\./);
+});
+
+const LEISTE = (ansagen: unknown[], extra: Record<string, unknown> = {}) => ({ ansagen, eigeneId: null, menue: MENUE, ...extra });
+
+test("ansageLeiste: hoechstens fuenf Zeilen bei sieben Ansagen, die neueste zuerst", () => {
+  const a = ansicht();
+  a.setzeJetzt(JETZT);
+  const sieben = [1, 2, 3, 4, 5, 6, 7].map((min) => ANSAGE(min, { id: `s-${min}` }));
+  const html = a.ansageLeiste(LEISTE(sieben));
+  assert.equal((html.match(/<li class="an-zeile/g) ?? []).length, 5);
+  const zeiten = [...html.matchAll(/data-ansage="(\d+)"/g)].map((m) => Number(m[1]));
+  assert.deepEqual(zeiten, [1, 2, 3, 4, 5].map((min) => JETZT - min * 60_000));
+});
+
+test("ansageLeiste: je Zeile ▶ mit der Zeit, Uhrzeit, Repo und Text; Text und Repo escaped", () => {
+  const a = ansicht();
+  a.setzeJetzt(JETZT);
+  const html = a.ansageLeiste(LEISTE([ANSAGE(5, { repo: "firstmate", text: 'Fertig, "PR" <offen>.' })]));
+  assert.match(html, new RegExp(`<button type="button" class="an-spiel" data-ansage="${JETZT - 300_000}" aria-label="Ansage vorlesen: firstmate 15:25">▶</button>`));
+  assert.match(html, /<span class="an-uhr mono">15:25<\/span>/);
+  assert.match(html, /<b class="an-repo">firstmate<\/b>/);
+  assert.match(html, /<span class="an-text" title="Fertig, &quot;PR&quot; &lt;offen&gt;\.">Fertig, &quot;PR&quot; &lt;offen&gt;\.<\/span>/);
+});
+
+test("ansageLeiste: eigene Sitzung hervorgehoben ueber die Id; der Repo-Name darf aus einem Worktree abweichen", () => {
+  const a = ansicht();
+  a.setzeJetzt(JETZT);
+  const ansagen = [ANSAGE(1, { id: "s-x", repo: "ops-lab" }), ANSAGE(2, { id: "s-1", repo: "live-plan" }), ANSAGE(3, { id: "s-1", repo: "live-plan.worktree" })];
+  const html = a.ansageLeiste(LEISTE(ansagen, { eigeneId: "s-1" }));
+  const zeilen = html.split('<li class="an-zeile').slice(1);
+  assert.deepEqual(zeilen.map((z) => z.startsWith(" an-eigen")), [false, true, true]);
+});
+
+test("ansageLeiste: langer Text gekuerzt mit Ellipse, der volle Text im title", () => {
+  const a = ansicht();
+  a.setzeJetzt(JETZT);
+  const lang = "Wort ".repeat(60).trim();
+  const html = a.ansageLeiste(LEISTE([ANSAGE(1, { text: lang })]));
+  const kurz = /<span class="an-text" title="[^"]*">([^<]*)<\/span>/.exec(html)![1]!;
+  assert.equal(Array.from(kurz).length, 90);
+  assert.ok(kurz.endsWith("…"));
+  assert.match(html, new RegExp(`title="${lang}"`));
+  assert.match(a.ansageLeiste(LEISTE([ANSAGE(1, { text: "Kurz." })])), /<span class="an-text" title="Kurz\.">Kurz\.<\/span>/);
+});
+
+test("ansageLeiste: <script> im Text und im Repo wird escaped", () => {
+  const a = ansicht();
+  a.setzeJetzt(JETZT);
+  const html = a.ansageLeiste(LEISTE([ANSAGE(1, { repo: "<img src=x>", text: "<script>alert(1)</script>" })]));
+  assert.doesNotMatch(html, /<script/);
+  assert.doesNotMatch(html, /<img/);
+  assert.match(html, /&lt;script&gt;alert\(1\)&lt;\/script&gt;/);
+  assert.match(html, /&lt;img src=x&gt;/);
+});
+
+test("ansageLeiste: ohne Ansage der Leerzustand; Kopf mit ⚙-Menue und Hinweis vor dem ersten Klick", () => {
+  const a = ansicht();
+  const html = a.ansageLeiste(LEISTE([], { menue: { ...MENUE, auf: false, frei: false } }));
+  assert.match(html, /^<section class="an-leiste" data-testid="ansagen-leiste">/);
+  assert.match(html, /<h2>Ansagen<\/h2>/);
+  assert.match(html, /<p class="an-leer">Noch keine Ansage\.<\/p>/);
+  assert.doesNotMatch(html, /<li/);
+  assert.match(html, /data-einst-auf aria-expanded="false"/);
+  assert.match(html, /an-hinweis">Ein Klick auf die Seite schaltet den Ton frei\./);
+});
+
+// Ein Tab spricht (#18, Runde 2): sollSprechen entscheidet je Tab, ob er eine neue Ansage vorliest.
+const SPRECHEN = { vorlesen: true, frei: true, sprecher: null, tabId: "t-1", istLeiter: false, gesprochenBis: null, zeit: JETZT };
+
+test("sollSprechen: spricht nur der Sprecher-Tab, auch wenn ein anderer Tab der Leiter ist", () => {
+  const { sollSprechen } = ansicht();
+  assert.equal(sollSprechen({ ...SPRECHEN, sprecher: "t-1" }), true);
+  assert.equal(sollSprechen({ ...SPRECHEN, tabId: "t-2", istLeiter: true, sprecher: "t-1" }), false);
+  assert.equal(sollSprechen({ ...SPRECHEN, tabId: "t-2", istLeiter: false, sprecher: "t-1" }), false);
+});
+
+test("sollSprechen: ohne Sprecher spricht der Leiter-Tab, ein Nicht-Leiter nicht", () => {
+  const { sollSprechen } = ansicht();
+  assert.equal(sollSprechen({ ...SPRECHEN, istLeiter: true, sprecher: null }), true);
+  assert.equal(sollSprechen({ ...SPRECHEN, istLeiter: true, sprecher: "" }), true);
+  assert.equal(sollSprechen({ ...SPRECHEN, istLeiter: false, sprecher: null }), false);
+});
+
+test("sollSprechen: eine schon gesprochene Ansage (zeit <= gesprochenBis) wird nicht noch einmal gesprochen", () => {
+  const { sollSprechen } = ansicht();
+  assert.equal(sollSprechen({ ...SPRECHEN, sprecher: "t-1", gesprochenBis: JETZT }), false);
+  assert.equal(sollSprechen({ ...SPRECHEN, sprecher: "t-1", gesprochenBis: JETZT + 1 }), false);
+  assert.equal(sollSprechen({ ...SPRECHEN, sprecher: "t-1", gesprochenBis: JETZT - 1 }), true);
+});
+
+test("sollSprechen: nur bei Vorlesen an und freigeschaltetem Ton, auch im Sprecher-Tab", () => {
+  const { sollSprechen } = ansicht();
+  assert.equal(sollSprechen({ ...SPRECHEN, sprecher: "t-1", vorlesen: false }), false);
+  assert.equal(sollSprechen({ ...SPRECHEN, sprecher: "t-1", frei: false }), false);
+  assert.equal(sollSprechen({ ...SPRECHEN, istLeiter: true, frei: false }), false);
+});
+
+test("sollSprechen: ohne localStorage (sprecher und gesprochenBis null) entscheidet allein der Leiter", () => {
+  const { sollSprechen } = ansicht();
+  assert.equal(sollSprechen({ ...SPRECHEN, istLeiter: true }), true);
+  assert.equal(sollSprechen({ ...SPRECHEN, istLeiter: false }), false);
+});
+
+/**
+ * Startet die Uebersicht mit Attrappen fuer Sprachausgabe, Ereignisquelle, Speicher und Web Locks. `sperre` ist "fehlt"
+ * (kein navigator.locks, der Fallback) oder "abgelehnt" (der Lock wird verweigert, der .catch-Zweig greift).
+ */
+async function ansagenLauf(sperre: "fehlt" | "abgelehnt") {
+  const gesprochen: string[] = [];
+  const klicks: Array<(e: unknown) => void> = [];
+  const quellen: Array<Record<string, () => void>> = [];
+  const speicher = new Map<string, string>();
+  let ansagen: unknown[] = [];
+  const wurzel = { innerHTML: "", querySelector: () => null, querySelectorAll: () => [], addEventListener: () => {}, contains: () => false };
+  const doc = {
+    getElementById: () => wurzel, documentElement: { dataset: {} }, visibilityState: "visible", activeElement: null, title: "",
+    addEventListener: (typ: string, f: (e: unknown) => void) => { if (typ === "click") klicks.push(f); },
+    removeEventListener: () => {}, querySelector: () => null, querySelectorAll: () => [],
+  };
+  const antwort = (b: unknown, ok = true) => ({ ok, status: ok ? 200 : 404, json: async () => b });
+  const g: Record<string, unknown> = {
+    document: doc,
+    location: { pathname: "/", search: "" },
+    localStorage: {
+      getItem: (k: string) => speicher.get(k) ?? null,
+      setItem: (k: string, v: string) => { speicher.set(k, String(v)); },
+      removeItem: (k: string) => { speicher.delete(k); },
+    },
+    speechSynthesis: { speak: (u: { text: string }) => { gesprochen.push(u.text); }, cancel: () => {}, getVoices: () => [] },
+    SpeechSynthesisUtterance: class { text: string; volume = 1; constructor(t: string) { this.text = t; } },
+    EventSource: function () {
+      const hoert: Record<string, () => void> = {};
+      quellen.push(hoert);
+      return { addEventListener: (typ: string, f: () => void) => { hoert[typ] = f; }, close: () => {} };
+    },
+    navigator: sperre === "fehlt" ? {} : { locks: { request: () => Promise.reject(new Error("verweigert")) } },
+    BroadcastChannel: class { onmessage: unknown = null; postMessage() {} },
+    setInterval: () => 1, clearInterval: () => {}, setTimeout: () => 1,
+    addEventListener: () => {},
+    fetch: async (url: string) => {
+      if (url === "/api/ansagen") return antwort({ ansagen });
+      if (url === "/api/einstellungen") return antwort({ vorlesen: true, stimme: null });
+      if (url === "/api/liste") return antwort({ wurzel: "/w", sitzungen: [] });
+      return antwort(null, false);
+    },
+  };
+  g.globalThis = g;
+  vm.runInNewContext(readFileSync(path.join(import.meta.dirname, "ansicht", "live-plan.js"), "utf8"), g);
+  const warte = async () => { for (let i = 0; i < 20; i++) await new Promise((r) => setImmediate(r)); };
+  await warte();
+  return {
+    /** Gesprochene Texte; die Freischaltung spricht stumm einen leeren Text und zaehlt nicht. */
+    gesprochen: () => gesprochen.filter((t) => t !== ""),
+    sprecher: () => speicher.get("live-plan.sprecher") ?? null,
+    /** Ein Klick auf die Seite: dieser Tab wird Sprecher und schaltet die Sprachausgabe frei. */
+    klick: () => { klicks.forEach((f) => f({ target: { closest: () => null, hasAttribute: () => false } })); },
+    /** Wie das Schliessen des Sprecher-Tabs: sein Schluessel verschwindet. */
+    sprecherSchliessen: () => { speicher.delete("live-plan.sprecher"); },
+    /** Eine neue Ansage kommt an: Ereignis geaendert, dann Laden und Sprechen. */
+    neueAnsage: async (zeit: number) => {
+      ansagen = [{ v: 1, zeit, id: `a${zeit}`, repo: "r", text: "Neu", quelle: "test" }];
+      quellen.forEach((h) => h.geaendert?.());
+      await warte();
+    },
+  };
+}
+
+// Ein Tab ohne Web Locks lauscht selbst, leitet aber nicht (#18, Runde 3, R1): ohne Sprecher-Tab spricht keiner.
+test("Fallback ohne Lock: der zuletzt geklickte Tab spricht die neue Ansage (Gegenprobe)", async () => {
+  for (const sperre of ["fehlt", "abgelehnt"] as const) {
+    const lauf = await ansagenLauf(sperre);
+    lauf.klick();
+    assert.notEqual(lauf.sprecher(), null, sperre);
+    await lauf.neueAnsage(1000);
+    assert.equal(lauf.gesprochen().length, 1, sperre);
+  }
+});
+
+test("Fallback ohne Lock: ohne Sprecher-Tab spricht kein Tab, auch nicht der freigeschaltete", async () => {
+  for (const sperre of ["fehlt", "abgelehnt"] as const) {
+    const lauf = await ansagenLauf(sperre);
+    lauf.klick();
+    lauf.sprecherSchliessen();
+    await lauf.neueAnsage(1000);
+    assert.deepEqual(lauf.gesprochen(), [], sperre);
+  }
 });

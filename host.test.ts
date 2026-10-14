@@ -275,6 +275,7 @@ async function montiere(pfad: string, takte = 0): Promise<string> {
       addEventListener: () => {}, removeEventListener: () => {}, querySelector: () => null, querySelectorAll: () => [], title: "",
     },
     location: { pathname: pfad, search: "" },
+    addEventListener: () => {},
     setInterval: (f: () => void, ms: number) => (ms === 15000 && intervalle.push(f), 1), clearInterval: () => {}, setTimeout: () => 1,
     fetch: async (url: string) => {
       const antwort = (b: unknown, ok = true) => ({ ok, status: ok ? 200 : 404, json: async () => b });
