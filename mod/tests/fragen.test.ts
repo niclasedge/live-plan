@@ -33,7 +33,9 @@ const antwort = (status: number, text: string) => ({ value: { status, ok: status
 // purpose: the mod reads only field and exit code (K2). `postFehler` POSTs to `/entscheidung` answer
 // `postStatus` (500) first; `unaenderbar`: the file cannot be changed line by line (409);
 // `entschiedenUnterwegs`: the browser decides a question just before its withdrawal arrives;
-// `zurueckOhneServer`: `/zurueckziehen` is not reachable, the script withdraws.
+// `zurueckOhneServer`: `/zurueckziehen` is not reachable, the script withdraws;
+// `live-plan frage-zurueck --alle GRUND` withdraws every open question at once; `yamlDa` false:
+// the session has no YAML.
 function welt(
   on: On,
   opts: {
@@ -47,6 +49,7 @@ function welt(
     unaenderbar?: boolean
     entschiedenUnterwegs?: string
     zurueckOhneServer?: boolean
+    yamlDa?: boolean
   } = {},
 ) {
   const clock = mock.clock(on, { now: 10_000 })
@@ -88,7 +91,7 @@ function welt(
   })
 
   on('fs.stat', ($, e) =>
-    opts.skriptDa === false
+    (e.path.endsWith('.yaml') ? opts.yamlDa === false : opts.skriptDa === false)
       ? { deny: `ENOENT ${e.path}` }
       : { value: { kind: 'file' as const, size: 1, mtimeMs: 0, isLink: false } },
   )
@@ -105,6 +108,10 @@ function welt(
       return ok(`${JSON.stringify({ ids, url: URL_SEITE })}\n`)
     }
     if (e.argv[2] === 'frage-zurueck' && opts.unaenderbar) return lauf(1, 'live-plan: eine Frage steht in Flow-Form\n')
+    if (e.argv[2] === 'frage-zurueck' && e.argv[3] === '--alle') {
+      for (const f of plan.fragen.filter(x => !x.entscheidung && !x.zurueckgezogen)) zurueckziehen(f.id, e.argv[4]!, 'skript')
+      return lauf(0)
+    }
     if (e.argv[2] === 'frage-zurueck') {
       const r = zurueckziehen(e.argv[3]!, e.argv[4]!, 'skript')
       return r === 'ok' ? lauf(0) : r === 'entschieden' ? lauf(3, `live-plan: ${e.argv[3]} steht\n`) : lauf(1, `live-plan: ${e.argv[3]} fehlt\n`)
@@ -496,7 +503,7 @@ test('eine abgelehnte Spiegelung (HTTP 500) wird wiederholt', MIT_SKRIPT, async 
   expect(w.zurueck).toEqual([])
 })
 
-test('bleibt die Spiegelung abgelehnt, wird die Frage zurueckgezogen statt offen gelassen', MIT_SKRIPT, async ($, on) => {
+test('scheitert die Spiegelung zweimal (HTTP 500), wird die Frage mit Fehler-Grund zurueckgezogen statt offen gelassen', MIT_SKRIPT, async ($, on) => {
   const w = welt(on, { postFehler: 2 })
   w.chat('Postgres')
   const lauf = $.tool.call({ tool: 'AskUserQuestion', questions: [FRAGE] })
@@ -504,7 +511,7 @@ test('bleibt die Spiegelung abgelehnt, wird die Frage zurueckgezogen statt offen
   await w.clock.advance(5_000)
   await lauf
   expect(w.posts).toHaveLength(2)
-  expect(w.zurueck).toEqual([{ frage: 'F1', grund: 'im Chat beantwortet, vom live-plan abgelehnt (HTTP 500) – Antwort nicht gespeichert', weg: 'server' }])
+  expect(w.zurueck).toEqual([{ frage: 'F1', grund: 'im Chat beantwortet, Fehler im live-plan (HTTP 500) – Antwort nicht gespeichert', weg: 'server' }])
 })
 
 test('lehnt der live-plan die Antwort ab (422), wird nicht wiederholt, sondern zurueckgezogen', MIT_SKRIPT, async ($, on) => {
@@ -630,6 +637,34 @@ test('Sitzungsende zieht alle offenen Fragen der Sitzung zurueck, auch die des A
     { frage: 'F2', grund: 'Sitzung beendet', weg: 'server' },
   ])
   expect(w.plan.fragen.map(f => f.zurueckgezogen)).toEqual(['Sitzung beendet', 'Sitzung beendet', undefined, 'in der Sitzung abgebrochen'])
+})
+
+test('Sitzungsende ohne Server: das Skript zieht alle offenen Fragen in der YAML zurueck, in einem Aufruf', async ($, on) => {
+  const w = welt(on, {
+    server: false,
+    fragen: [{ ...OFFEN, id: 'F1' }, { ...OFFEN }, { ...OFFEN, id: 'F3', entscheidung: '8080' }],
+  })
+  await $.session.end({ reason: 'prompt_input_exit', sessionId: ID, resume: { id: ID } })
+  expect(w.prozesse.filter(p => p.argv[2] === 'frage-zurueck').map(p => p.argv.slice(2))).toEqual([
+    ['frage-zurueck', '--alle', 'Sitzung beendet', '--sitzung', ID],
+  ])
+  expect(w.plan.fragen.map(f => f.zurueckgezogen)).toEqual(['Sitzung beendet', 'Sitzung beendet', undefined])
+  expect(w.logs).toEqual([])
+})
+
+test('Sitzungsende ohne Server, das Skript scheitert: ein Hinweis im Verlauf', async ($, on) => {
+  const w = welt(on, { server: false, unaenderbar: true, fragen: [{ ...OFFEN }] })
+  await $.session.end({ reason: 'prompt_input_exit', sessionId: ID, resume: { id: ID } })
+  expect(w.plan.fragen[0]!.zurueckgezogen).toBeUndefined()
+  expect(w.logs).toEqual(['live-plan: offene Fragen nicht zurueckgezogen (Sitzung beendet)'])
+})
+
+test('Sitzungsende ohne Server und ohne YAML: nichts zu schliessen, kein Aufruf, kein Hinweis', async ($, on) => {
+  const w = welt(on, { server: false, yamlDa: false })
+  await $.session.end({ reason: 'prompt_input_exit', sessionId: ID, resume: { id: ID } })
+  // register.tsx runs `neu --auto` on its own; this hook calls nothing.
+  expect(w.prozesse.filter(p => p.argv[2] === 'frage-zurueck')).toEqual([])
+  expect(w.logs).toEqual([])
 })
 
 test('eine zurueckgezogene Frage meldet sich nicht als offen und wird nicht wieder aufgenommen', MIT_SKRIPT, async ($, on) => {

@@ -15,6 +15,8 @@
 //                              Frage ohne Entscheidung schliessen (#27): `zurueckgezogen: GRUND` (Vorgabe
 //                              "ohne Angabe"), auch ohne Server; eine entschiedene bleibt (Exit 3), eine schon
 //                              zurueckgezogene behaelt ihren ersten Grund. SLUG fehlt: CLAUDE_SESSION_ID
+//   live-plan frage-zurueck --alle [GRUND] [--sitzung SLUG]
+//                              alle offenen Fragen in einem Schreibvorgang (Sitzungsende ohne Server)
 //   live-plan stand [SLUG] --kurz
 //                              Stand als Klartext fuer den System-Prompt (hoechstens 1500 Zeichen);
 //                              ohne Sitzung leer
@@ -36,7 +38,7 @@ import { chmodSync, closeSync, constants, existsSync, fstatSync, ftruncateSync, 
 import os from "node:os";
 import path from "node:path";
 import { ansagenDatei, ansageText, leseAnsagen, schonAngesagt, schreibeAnsage } from "./ansagen.ts";
-import { CHROME_MAC, chromePfad, fragenEingabe, fuegeFragenAnImText, handoutName, kurzStand, naechsteFrageIds, pruefeAngehaengt, pruefePlan, yamlWert, zieheFrageZurueckImText, zurueckGrund } from "./logik.ts";
+import { CHROME_MAC, chromePfad, frageOffen, fragenEingabe, fuegeFragenAnImText, handoutName, kurzStand, naechsteFrageIds, pruefeAngehaengt, pruefePlan, yamlWert, zieheFrageZurueckImText, zurueckGrund } from "./logik.ts";
 
 const SKILL = import.meta.dir;
 const PORT = Number.parseInt(process.env.LIVE_PLAN_PORT ?? "", 10) || 4410;
@@ -404,8 +406,11 @@ async function frage(slug: string): Promise<void> {
   abbruch(`${datei} aendert sich laufend, nach drei Anlaeufen aufgegeben`);
 }
 
-/** Eine Frage zurueckziehen (#27), ohne Server; Ablauf wie zieheZurueck im Server: aendern, gegenlesen, atomar schreiben. */
-function frageZurueck(slug: string, id: string, roh: string): void {
+/**
+ * Fragen zurueckziehen (#27), ohne Server; Ablauf wie zieheZurueck im Server: aendern, gegenlesen,
+ * atomar schreiben. `id` null: alle offenen Fragen in einem Schreibvorgang (Sitzungsende ohne Server).
+ */
+function frageZurueck(slug: string, id: string | null, roh: string): void {
   const datei = path.join(sitzungsOrdner(gitWurzel()), `${slug}.yaml`);
   const grund = zurueckGrund(roh);
   for (let anlauf = 0; anlauf < 3; anlauf++) {
@@ -417,27 +422,45 @@ function frageZurueck(slug: string, id: string, roh: string): void {
     } catch (e) {
       abbruch(`YAML nicht lesbar: ${ersteZeile(e)}`);
     }
-    const f = pruefePlan(vorher).plan.fragen.find((x) => x.id === id);
-    if (!f) abbruch(`Frage ${id} unbekannt`);
-    if (f.entscheidung) abbruch(`${id} ist schon entschieden (${f.entscheidung})`, ENTSCHIEDEN_EXIT);
-    if (f.zurueckgezogen) {
-      console.log(`${id} war schon zurueckgezogen: ${f.zurueckgezogen}`);
-      return;
+    const fragen = pruefePlan(vorher).plan.fragen;
+    let ids: string[];
+    if (id === null) {
+      ids = fragen.filter(frageOffen).map((f) => f.id);
+      if (!ids.length) {
+        console.log("keine offene Frage");
+        return;
+      }
+    } else {
+      const f = fragen.find((x) => x.id === id);
+      if (!f) abbruch(`Frage ${id} unbekannt`);
+      if (f.entscheidung) abbruch(`${id} ist schon entschieden (${f.entscheidung})`, ENTSCHIEDEN_EXIT);
+      if (f.zurueckgezogen) {
+        console.log(`${id} war schon zurueckgezogen: ${f.zurueckgezogen}`);
+        return;
+      }
+      ids = [id];
     }
-    const ergebnis = zieheFrageZurueckImText(text, id, grund);
-    if (ergebnis.art === "unbekannt") abbruch(`${id} steht nicht als Block in der Datei`);
-    if (ergebnis.art === "fehler") abbruch(ergebnis.grund);
-    if (ergebnis.art === "entschieden") abbruch(`${id} ist schon entschieden (${ergebnis.entscheidung})`, ENTSCHIEDEN_EXIT);
+    let neuText = text;
+    for (const x of ids) {
+      const ergebnis = zieheFrageZurueckImText(neuText, x, grund);
+      if (ergebnis.art === "unbekannt") abbruch(`${x} steht nicht als Block in der Datei`);
+      if (ergebnis.art === "fehler") abbruch(ergebnis.grund);
+      if (ergebnis.art === "entschieden") abbruch(`${x} ist schon entschieden (${ergebnis.entscheidung})`, ENTSCHIEDEN_EXIT);
+      neuText = ergebnis.text;
+    }
     let nachher: unknown;
     try {
-      nachher = Bun.YAML.parse(ergebnis.text);
+      nachher = Bun.YAML.parse(neuText);
     } catch (e) {
       abbruch(`Ergebnis nicht lesbar: ${ersteZeile(e)}`);
     }
-    const neu = pruefePlan(nachher).plan.fragen.find((x) => x.id === id);
-    if (neu?.zurueckgezogen !== grund || neu.entscheidung) abbruch(`zurueckgezogen von ${id} liesse sich nicht unveraendert zuruecklesen`);
-    if (schreibeAtomar(datei, ergebnis.text, text)) {
-      console.log(`${id} zurueckgezogen: ${grund}`);
+    const neu = pruefePlan(nachher).plan.fragen;
+    for (const x of ids) {
+      const f = neu.find((y) => y.id === x);
+      if (f?.zurueckgezogen !== grund || f.entscheidung) abbruch(`zurueckgezogen von ${x} liesse sich nicht unveraendert zuruecklesen`);
+    }
+    if (schreibeAtomar(datei, neuText, text)) {
+      console.log(`${ids.join(", ")} zurueckgezogen: ${grund}`);
       return;
     }
   }
@@ -771,9 +794,14 @@ switch (befehl) {
     const sitzung = i >= 0 ? rest[i + 1] : undefined;
     if (i >= 0 && (sitzung === undefined || sitzung.startsWith("--"))) abbruch("--sitzung braucht einen SLUG");
     const frei = rest.filter((a, j) => (i < 0 || (j !== i && j !== i + 1)) && !a.startsWith("--"));
+    const slug = () => sitzungsSlug(befehl, sitzung === undefined ? [] : [sitzung]);
+    if (rest.includes("--alle")) {
+      frageZurueck(slug(), null, frei.join(" "));
+      break;
+    }
     const [id, ...grund] = frei;
     if (!id) abbruch("frage-zurueck braucht die Id einer Frage");
-    frageZurueck(sitzungsSlug(befehl, sitzung === undefined ? [] : [sitzung]), id, grund.join(" "));
+    frageZurueck(slug(), id, grund.join(" "));
     break;
   }
   case "handout": {
@@ -794,6 +822,6 @@ switch (befehl) {
     await stop();
     break;
   default:
-    console.error("Aufruf: live-plan start | open [SLUG] | neu [SLUG] [--auto] | warte SLUG [--hoechstens MS] | frage [SLUG] | frage-zurueck ID [GRUND] [--sitzung SLUG] | stand [SLUG] --kurz | handout [SLUG] | sage TEXT | stop");
+    console.error("Aufruf: live-plan start | open [SLUG] | neu [SLUG] [--auto] | warte SLUG [--hoechstens MS] | frage [SLUG] | frage-zurueck ID|--alle [GRUND] [--sitzung SLUG] | stand [SLUG] --kurz | handout [SLUG] | sage TEXT | stop");
     process.exit(befehl === undefined || befehl === "-h" || befehl === "--help" ? 0 : 2);
 }

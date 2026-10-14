@@ -223,10 +223,12 @@ Zurueckgezogen: Schliesst die Sitzung eine Frage ohne Entscheidung, traegt die M
 `zurueckgezogen: GRUND` in die Frage: `in der Sitzung abgebrochen` (Esc, ein unterbrochener
 Dialog), `in der Sitzung nicht beantwortet` (keine, leere oder keine Text-Antwort), `im Chat frei
 beantwortet, keiner Frage zuzuordnen` (eine freie Antwort bei mehreren Fragen, ohne eigene Wahl
-fuer diese), `im Chat beantwortet, live-plan nicht erreichbar – Antwort nicht gespeichert` bzw.
-`im Chat beantwortet, vom live-plan abgelehnt (HTTP STATUS) – Antwort nicht gespeichert` (die
+fuer diese), `im Chat beantwortet, live-plan nicht erreichbar – Antwort nicht gespeichert`,
+`im Chat beantwortet, vom live-plan abgelehnt (HTTP 4xx) – Antwort nicht gespeichert` bzw.
+`im Chat beantwortet, Fehler im live-plan (HTTP 5xx) – Antwort nicht gespeichert` (die
 Chat-Antwort liess sich nicht spiegeln und geht verloren) und `Sitzung beendet` (am Ende der
-Sitzung jede noch offene Frage, auch Ihre eigenen). Eine zurueckgezogene Frage gilt nirgends mehr
+Sitzung jede noch offene Frage, auch Ihre eigenen; laeuft der Server nicht, schreibt das Skript
+sie mit `frage-zurueck --alle` direkt in die YAML). Eine zurueckgezogene Frage gilt nirgends mehr
 als offen: nicht unter Wartet auf Sie, nicht in der Jetzt-Zeile, nicht in `stand --kurz`, nicht im
 Band der Mod und nicht in der Zahl der Liste; die Ansicht zeigt sie ausgegraut mit dem Grund. Eine
 entschiedene Frage wird nie zurueckgezogen, eine schon zurueckgezogene behaelt ihren ersten Grund,
@@ -238,6 +240,7 @@ echo '{"fragen":[{"frage":"Welche Variante?","kopf":"Variante","optionen":[{"lab
   | $LP frage [SLUG]  # haengt F<n> an fragen: an, gibt {"ids":["F2"],"url":"..."} aus
 $LP stand [SLUG] --kurz   # Stand als Klartext, hoechstens 1500 Zeichen; ohne Sitzung leer
 $LP frage-zurueck F2 [GRUND] [--sitzung SLUG]   # zurueckgezogen: GRUND, auch ohne Server
+$LP frage-zurueck --alle [GRUND] [--sitzung SLUG]   # alle offenen Fragen in einem Schreibvorgang
 ```
 
 `frage` vergibt die naechsten freien `F<n>`, schreibt `beschreibung` als `beispiel` und `grund`
@@ -248,7 +251,8 @@ Fragen samt Optionen, laufende Schritte und die uebrigen Blaetter in Offen; die 
 den System-Prompt. `frage-zurueck` schreibt `zurueckgezogen` wie der Server (eine Zeile,
 gegengelesen, atomar), der Grund hoechstens 200 Zeichen in einer Zeile, ohne Angabe `ohne Angabe`;
 eine entschiedene Frage endet mit Exit 3, eine unbekannte mit Exit 1, eine schon zurueckgezogene
-mit Exit 0 und ihrem ersten Grund. Der Server nimmt dasselbe als `POST /api/REPO/SLUG/zurueckziehen`
+mit Exit 0 und ihrem ersten Grund. Mit `--alle` zieht es jede offene Frage in einem Schreibvorgang
+zurueck und nennt sie auf stdout; ist keine offen, endet es mit Exit 0 und `keine offene Frage`. Der Server nimmt dasselbe als `POST /api/REPO/SLUG/zurueckziehen`
 mit `{frage, grund}`: 200, unbekannte Frage 404, entschiedene 409 mit `{fehler, entschieden: WAHL}`,
 eine nicht zeilenweise aenderbare 409 ohne `entschieden`, sonst wie die Entscheidung (400, 413,
 415). Die Mod liest das Feld `entschieden` und Exit 3, nicht den Wortlaut.

@@ -806,7 +806,9 @@ function dokuPunkte(doku: Doku | undefined): [string, unknown][] {
 function eintraegeVon(plan: Plan): Eintragswerte {
   const werte: Eintragswerte = new Map();
   for (const s of plan.schritte) werte.set(s.id, { werte: Object.fromEntries(SCHRITT_FELDER.map((f) => [f, s[f]])), erstes: s.status });
-  for (const f of plan.fragen) werte.set(f.id, { werte: Object.fromEntries(FRAGE_FELDER.map((k) => [k, f[k]])), erstes: f.entscheidung });
+  // Leerraum als Entscheidung ist keine: ein frueher gesehener Stand mit "  " gilt wie der neue "".
+  const ohneLeerraum = (k: string, w: unknown) => (k === "entscheidung" && typeof w === "string" && !w.trim() ? "" : w);
+  for (const f of plan.fragen) werte.set(f.id, { werte: Object.fromEntries(FRAGE_FELDER.map((k) => [k, ohneLeerraum(k, f[k])])), erstes: f.entscheidung });
   // Ein gesehener Stand aus einer Fassung vor S23 hat keine der beiden Listen.
   for (const a of plan.anforderungen ?? []) werte.set(a.id, { werte: Object.fromEntries(ANFORDERUNG_FELDER.map((k) => [k, a[k]])), erstes: a.text, art: "anforderung" });
   for (const e of plan.entscheidungen ?? []) werte.set(e.id, { werte: Object.fromEntries(ENTSCHEIDUNG_FELDER.map((k) => [k, e[k]])), erstes: e.titel, art: "entscheidung" });

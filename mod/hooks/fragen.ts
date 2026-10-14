@@ -8,7 +8,8 @@
 //    beneath"). The chat winning stops the poll and mirrors its choice into the YAML; an answer
 //    that is no option's label (Claude Code's "Other") goes there as an own answer (`eigen`).
 //    A question the chat closes without an answer (Esc, an interrupt, none given) is withdrawn
-//    (`zurueckgezogen`, #27), as are the open ones this hook asked when the session ends.
+//    (`zurueckgezogen`, #27). When the session ends, every open question of its plan is withdrawn,
+//    the agent's own too; without the server the script does it in the YAML.
 // 2. Decisions on questions the hook did not ask (written by the agent into the YAML) wake the
 //    session: `$.prompt.submit` when idle, else collected until the running turn completes.
 // 3. A native notification once per open question.
@@ -50,8 +51,11 @@ const FREI = 'im Chat frei beantwortet, keiner Frage zuzuordnen'
 const NICHT_ERREICHBAR = 'live-plan nicht erreichbar'
 const BEENDET = 'Sitzung beendet'
 // The chat's answer that the YAML did not take is lost (accepted): the reason says so.
+// No connection, a refusal (4xx), or the server failing (5xx).
 const NICHT_GESPEICHERT = (status: number | null): string =>
-  `im Chat beantwortet, ${status === null ? 'live-plan nicht erreichbar' : `vom live-plan abgelehnt (HTTP ${status})`} – Antwort nicht gespeichert`
+  `im Chat beantwortet, ${
+    status === null ? 'live-plan nicht erreichbar' : status >= 500 ? `Fehler im live-plan (HTTP ${status})` : `vom live-plan abgelehnt (HTTP ${status})`
+  } – Antwort nicht gespeichert`
 
 const fragenAus = (d: Daten): PlanFrage[] =>
   Array.isArray(d.plan?.fragen) ? d.plan.fragen.filter((f): f is PlanFrage => !!f && typeof f === 'object') : []
@@ -424,14 +428,24 @@ const JEDES_ENDE = ['answer', 'aborted', 'refusal', 'error'] as const
 const JEDE_SITZUNG = /(?:)/
 
 // At the session's end no one waits on its open questions: every open one is withdrawn, the
-// agent's own too, so list and page agree (B1). A decided or withdrawn one stays.
+// agent's own too, so list and page agree (B1). A decided or withdrawn one stays. Without the
+// server (off, crashed) the script withdraws them in the YAML, all in one call within
+// session.end's short bound; a session without a YAML has nothing to close.
 async function sitzungsende($: EngineInterface, sitzung: string): Promise<void> {
   const ort = await ortVon($)
   if (!ort || ort.id !== sitzung) return
   const d = await planHolen($, ort.api)
-  if (!d) return
-  const ids = fragenAus(d).flatMap(f => (typeof f.id === 'string' && offen(f) ? [f.id] : []))
-  await zurueckziehen($, ort, ids, BEENDET)
+  if (d) {
+    const ids = fragenAus(d).flatMap(f => (typeof f.id === 'string' && offen(f) ? [f.id] : []))
+    return zurueckziehen($, ort, ids, BEENDET)
+  }
+  const yaml = await $.fs.stat(`${ort.wurzel}/.live-plan/${ort.id}.yaml`).catch(() => undefined)
+  if (!yaml || yaml.kind !== 'file') return
+  const skript = await skriptPfad($)
+  const lauf = skript
+    ? await $.process.run(['bun', skript, 'frage-zurueck', '--alle', BEENDET, '--sitzung', ort.id], { cwd: ort.wurzel, timeoutMs: LAUF_MS }).catch(() => null)
+    : null
+  if (lauf?.exitCode !== 0) $.ui.log(`live-plan: offene Fragen nicht zurueckgezogen (${BEENDET})`)
 }
 
 export const fragenRegistrieren: Register = (on, options) => {

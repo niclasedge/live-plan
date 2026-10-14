@@ -44,7 +44,12 @@ Ansicht als Live-Block zeigt. Dazu kommen die Werkzeuge `progress` und `step`, A
 Sprengradius, der riskante Bash-Befehle bis zur Freigabe anhält. Schließt die Sitzung eine Frage
 ohne Entscheidung (Esc im Dialog, Abbruch, keine Antwort, Sitzungsende), zieht der Mod sie im
 live-plan zurück (`zurueckgezogen: GRUND` in der Frage); sie wartet dann nirgends mehr und steht
-ausgegraut mit ihrem Grund in der Ansicht. In einer Terminal-Sitzung:
+ausgegraut mit ihrem Grund in der Ansicht. Am Sitzungsende gilt das für jede offene Frage, auch ohne
+laufenden Server (dann schreibt `live-plan frage-zurueck --alle` die YAML); Liste und Seite zählen gleich:
+
+![Beendete Sitzung: in der Liste keine offene Frage, auf der Seite F1 und F2 zurückgezogen](docs/fragen-sitzungsende.png)
+
+In einer Terminal-Sitzung:
 
 ```
 /plugin install live-plan-sitzung --marketplace niclasedge/live-plan

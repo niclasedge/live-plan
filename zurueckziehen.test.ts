@@ -21,6 +21,7 @@ import {
   setzeEntscheidungImText,
   spurbild,
   ueberblick,
+  vergleiche,
   zeiten,
   zieheFrageZurueckImText,
   zurueckGrund,
@@ -52,6 +53,18 @@ test("eine Entscheidung aus Leerraum ist keine: offen in pruefePlan, frageOffen,
   const r = zieheFrageZurueckImText(text, "F1", "Sitzung beendet");
   assert.equal(r.art, "ok");
   assert.equal(pruefePlan(Bun.YAML.parse((r as { text: string }).text)).plan.fragen[0]!.zurueckgezogen, "Sitzung beendet");
+});
+
+// Review N2: ein vor K5 gesehener Stand traegt noch "  "; gegen den neuen ("") ist das keine Aenderung.
+test("vergleiche: eine gesehene Entscheidung aus Leerraum gegen die normalisierte ergibt keinen Verlaufseintrag", () => {
+  const alt = pruefePlan(PLAN([FRAGE("F1"), FRAGE("F2")])).plan;
+  alt.fragen[0]!.entscheidung = "  ";
+  alt.fragen[1]!.entscheidung = "\t";
+  const neu = pruefePlan(PLAN([FRAGE("F1", { entscheidung: "  " }), FRAGE("F2", { entscheidung: "A" })])).plan;
+  assert.deepEqual(
+    vergleiche(alt, neu, "2026-10-14T00:00:00.000Z").map((e) => [e.id, e.feld, e.von, e.nach]),
+    [["F2", "entscheidung", "", "A"]],
+  );
 });
 
 test("offeneFragenZahl (Liste) zaehlt eine zurueckgezogene Frage nicht", () => {
@@ -303,6 +316,33 @@ test("live-plan frage-zurueck ID GRUND --sitzung SLUG schreibt ohne Server, ein 
   assert.equal(unbekannt.status, 1);
   assert.match(unbekannt.stderr, /Frage F9 unbekannt/);
   assert.equal(skript(projekt, "frage-zurueck", "--sitzung", "s").status, 1);
+});
+
+// Review N1: Sitzungsende ohne Server. Die Mod ruft das Skript einmal fuer alle offenen Fragen, damit
+// session.end in seiner kurzen Frist bleibt; geschrieben wird in einem Schritt.
+test("live-plan frage-zurueck --alle GRUND --sitzung SLUG zieht alle offenen Fragen in einem Schreibvorgang zurueck", () => {
+  const projekt = path.join(tmp, "projekt-alle");
+  mkdirSync(path.join(projekt, ".live-plan"), { recursive: true });
+  assert.equal(spawnSync("git", ["init", "-q"], { cwd: projekt }).status, 0);
+  const datei = path.join(projekt, ".live-plan", "s.yaml");
+  writeFileSync(datei, SITZUNG(BLOCK("F1") + BLOCK("F2", "A") + BLOCK("F3") + "    zurueckgezogen: in der Sitzung abgebrochen\n" + BLOCK("F4")));
+  const r = skript(projekt, "frage-zurueck", "--alle", "Sitzung", "beendet", "--sitzung", "s");
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /F1, F4 zurueckgezogen: Sitzung beendet/);
+  const fragen = pruefePlan(Bun.YAML.parse(readFileSync(datei, "utf8"))).plan.fragen;
+  assert.deepEqual(
+    fragen.map((f) => [f.id, f.entscheidung, f.zurueckgezogen]),
+    [
+      ["F1", "", "Sitzung beendet"],
+      ["F2", "A", undefined],
+      ["F3", "", "in der Sitzung abgebrochen"],
+      ["F4", "", "Sitzung beendet"],
+    ],
+  );
+  const nochmal = skript(projekt, "frage-zurueck", "--alle", "Sitzung beendet", "--sitzung", "s");
+  assert.equal(nochmal.status, 0, nochmal.stderr);
+  assert.match(nochmal.stdout, /keine offene Frage/);
+  assert.equal(skript(projekt, "frage-zurueck", "--alle", "x", "--sitzung", "fehlt").status, 1);
 });
 
 // --- Ansicht -----------------------------------------------------------------------------------
