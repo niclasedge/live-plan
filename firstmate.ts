@@ -371,8 +371,10 @@ function befehle(home: string, w: Worker, backend: string, sitzung: string | nul
     b.push({ zweck: "oeffnen", befehl: `tmux switch-client -t ${q(ziel)} 2>/dev/null || tmux attach -t ${q(ziel)}` });
     b.push({ zweck: "Pane lesen", befehl: `tmux capture-pane -p -J -t ${q(ziel)} -S -200 | less -R +G` });
   } else if (ziel) b.push({ zweck: `oeffnen (${backend})`, befehl: `# Backend ${backend}, Ziel ${ziel}` });
-  b.push({ zweck: "Status", befehl: `tail -n 20 -f ${q(path.join(state, `${w.id}.status`))}` });
+  // -F statt -f: die Statusdatei entsteht erst mit der ersten Meldung und tail -F wartet darauf
+  b.push({ zweck: "Status", befehl: `tail -n 20 -F ${q(path.join(state, `${w.id}.status`))}` });
   b.push({ zweck: "Zustand", befehl: `FM_HOME=${q(home)} ${q(path.join(home, "bin", "fm-crew-state.sh"))} ${q(w.id)}` });
+  b.push({ zweck: "Live-Ansicht", befehl: `FM_HOME=${q(home)} ${q(path.join(home, "bin", "fm-peek.sh"))} ${q(w.id)}` });
   b.push({ zweck: "Meta", befehl: `cat ${q(path.join(state, `${w.id}.meta`))}` });
   b.push({ zweck: "Inbox", befehl: `ls -l ${q(path.join(state, `${w.id}.inbox`))}` });
   for (const name of ["brief.md", "report.md"]) {
@@ -445,6 +447,13 @@ export function zustandAus(status: Worker["status"], lebt: boolean | null): Zust
 
 export function zustand(w: Worker): Zustand {
   return zustandAus(w.status, w.fenster.lebt);
+}
+
+// Der Zustand, wie die Karte ihn zeigt: ein lebendes Fenster ohne Statuszeile arbeitet, hat aber noch
+// nichts gemeldet (Worker melden nur Phasenwechsel). Ohne tmux-Befund bleibt es unbekannt.
+export type KartenZustand = Zustand | "ohne-meldung";
+export function kartenZustand(z: Zustand, w: Pick<Worker, "fenster" | "status">): KartenZustand {
+  return z === "unknown" && w.fenster.lebt === true && w.status.letzte === null ? "ohne-meldung" : z;
 }
 
 // https://github.com/o/r/pull/7 -> o/r#7, sonst die Adresse wie sie ist.
@@ -572,12 +581,50 @@ export function leseProjekte(home: string, worker: Worker[]): Projekt[] {
 
 // --- Sicht fuer die Ansicht ----------------------------------------------------------------
 
-// Was die Ansicht von der Meta eines Workers zeigt; alles andere bleibt im Home.
-const META_SICHTBAR = ["project", "kind", "mode", "yolo", "harness", "model", "effort", "backend", "remote_host", "window", "terminal", "worktree", "branch", "pr"];
+// Die Meta der Karte in Gruppen; was in keiner Gruppe steht, landet unter "alle". kind steht im Kopf der Karte.
+const META_GRUPPEN: [string, string[]][] = [
+  ["Ort", ["project", "worktree", "branch", "window", "terminal"]],
+  ["Lauf", ["harness", "model", "effort", "backend", "remote_host"]],
+  ["Liefern", ["mode", "yolo", "pr"]],
+];
+// Interne Schluessel, die nur unter "alle" erscheinen; kind steht zusaetzlich im Kopf der Karte.
+const META_INTERN = ["endpoint_task_id", "tasktmp", "busy_gen", "spawn_gen", "kind"];
+const META_SICHTBAR = new Set([...META_GRUPPEN.flatMap(([, keys]) => keys), ...META_INTERN]);
+// Schluessel, die nach einem Geheimnis aussehen, zeigt die Sicht nie, auch wenn sie bekannt waeren (zweite Sperre).
+const META_GEHEIM = /token|secret|key|pass|auth/i;
 export const VERLAUF_N = 12;
+
+export interface MetaEintrag {
+  schluessel: string;
+  wert: string;
+}
+
+export interface MetaGruppe {
+  name: string;
+  eintraege: MetaEintrag[];
+}
+
+// Die Meta nur mit bekannten Schluesseln, ohne Geheimes und ohne leere Werte.
+export function sichtbareMeta(meta: Meta): Meta {
+  const sicht: Meta = {};
+  for (const [k, v] of Object.entries(meta)) if (META_SICHTBAR.has(k) && !META_GEHEIM.test(k) && v) sicht[k] = v;
+  return sicht;
+}
+
+// Die Gruppen Ort, Lauf, Liefern und dann alle (der Rest, sortiert) aus der sichtbaren Meta.
+export function metaGruppen(meta: Meta): MetaGruppe[] {
+  const sicht = sichtbareMeta(meta);
+  const eintrag = (schluessel: string): MetaEintrag => ({ schluessel, wert: sicht[schluessel] });
+  const gruppiert = new Set(META_GRUPPEN.flatMap(([, keys]) => keys));
+  const gruppen = META_GRUPPEN.map(([name, keys]) => ({ name, eintraege: keys.filter((k) => Object.hasOwn(sicht, k)).map(eintrag) }));
+  const rest = Object.keys(sicht).filter((k) => !gruppiert.has(k)).sort();
+  return [...gruppen, { name: "alle", eintraege: rest.map(eintrag) }];
+}
 
 export interface WorkerSicht extends Omit<Worker, "fenster"> {
   zustand: Zustand;
+  zustandKarte: KartenZustand;
+  metaGruppen: MetaGruppe[];
   fenster: Omit<Worker["fenster"], "pane">;
   verlauf: StatusZeile[];
 }
@@ -588,16 +635,16 @@ export interface FirstmateSicht extends Omit<Lagebild, "worker"> {
   flotte: Flotte;
 }
 
-// Worker samt Zustand und den letzten VERLAUF_N Statuszeilen, ohne Pane-Zeilen und ohne Meta
-// ausserhalb von META_SICHTBAR, dazu die Projekte und die Flotte (Aufgaben des Tages je Repo). Fragt tmux nie nach dem Inhalt eines Panes.
+// Worker samt Zustand, Meta in Gruppen und den letzten VERLAUF_N Statuszeilen, ohne Pane-Zeilen und ohne
+// Geheimes aus der Meta, dazu die Projekte und die Flotte (Aufgaben des Tages je Repo). Fragt tmux nie nach dem Inhalt eines Panes.
 export function firstmateSicht(home: string, o: { register?: string } = {}): FirstmateSicht {
   const l = lagebild({ home, pane: false });
   const worker = l.worker.map((w): WorkerSicht => {
     const { pane: _, ...fenster } = w.fenster;
-    const meta: Meta = {};
-    for (const k of META_SICHTBAR) if (w.meta[k]) meta[k] = w.meta[k];
+    const meta = sichtbareMeta(w.meta);
     const verlauf = parseStatus(lies(path.join(home, "state", `${w.id}.status`)) ?? "").slice(-VERLAUF_N);
-    return { ...w, meta, fenster, zustand: zustand(w), verlauf };
+    const z = zustand(w);
+    return { ...w, meta, metaGruppen: metaGruppen(meta), fenster, zustand: z, zustandKarte: kartenZustand(z, w), verlauf };
   });
   const zustaende = new Map(worker.map((w) => [w.id, w.zustand] as const));
   return { ...l, worker, projekte: leseProjekte(home, l.worker), flotte: flotte(home, { register: o.register, jetzt: l.zeit, zustaende }) };

@@ -302,6 +302,7 @@ type Ansicht = {
   setzeAufgabeDetail: (id: string, d: unknown) => void;
   flotteTeil: () => string;
   flAufgabeModal: (id: string) => string;
+  fmModal: (id: string) => string;
 };
 function ansicht(): Ansicht {
   const g: Record<string, unknown> = {
@@ -474,7 +475,124 @@ test("flAufgabeModal: Zeitleiste fehlt -> Hinweis; Anweisungen, Bericht und Zeit
   assert.doesNotMatch(h2, /<b>x/);
 });
 
-// --- derselbe Endpunkt gegen einen echten Server ----------------------------------------------
+// --- Karte eines Workers (fmModal): Kopf, Meta in Gruppen, Statusverlauf, Steuerung, Befehle --------
+
+// Ein Worker so, wie firstmate.ts ihn in der Sicht liefert (erfundene Werte, Meta ohne Geheimes).
+function workerFuerKarte(extra: Record<string, unknown> = {}) {
+  return {
+    id: "k-1", titel: "titel " + BOESE, gestartet: JETZT - 1800, zustand: "working", zustandKarte: "ohne-meldung",
+    meta: { project: "/p/alpha", kind: "ship", harness: "claude", model: "claude-opus-5-5", effort: "xhigh", worktree: "/w/k-1", branch: "fm/k-1", window: "fm:k-1", mode: "no-mistakes", pr: "https://github.com/o/r/pull/7", busy_gen: "g5.7", spawn_gen: `s${JETZT - 1800}.4` },
+    metaGruppen: [
+      { name: "Ort", eintraege: [{ schluessel: "project", wert: "/p/alpha" }, { schluessel: "worktree", wert: "/w/k-1" }, { schluessel: "branch", wert: "fm/k-1" }, { schluessel: "window", wert: "fm:k-1" }] },
+      { name: "Lauf", eintraege: [{ schluessel: "harness", wert: "claude" }, { schluessel: "model", wert: "claude-opus-5-5" }, { schluessel: "effort", wert: "xhigh" }] },
+      { name: "Liefern", eintraege: [{ schluessel: "mode", wert: "no-mistakes" }, { schluessel: "pr", wert: "https://github.com/o/r/pull/7" }] },
+      { name: "alle", eintraege: [{ schluessel: "busy_gen", wert: "g5.7" }, { schluessel: "spawn_gen", wert: `s${JETZT - 1800}.4` }] },
+    ],
+    fenster: { ziel: "fm:k-1", lebt: true, befehl: "claude", aktivitaet: JETZT - 60 },
+    busy: null,
+    status: { letzte: null, zeilen: 0, offen: [] },
+    verlauf: [],
+    inbox: { wartend: ["001.msg", "002.msg"], erledigt: 5 },
+    worktree: { pfad: "/w/k-1", da: false, zweig: null, upstream: null, ahead: null, behind: null, geaendert: null, letzterCommit: null },
+    daten: { ordner: "/h/data/k-1", dateien: ["brief.md"] },
+    befehle: [
+      { zweck: "Status", befehl: "tail -n 20 -F /h/state/k-1.status" },
+      { zweck: "Zustand", befehl: "FM_HOME=/h /h/bin/fm-crew-state.sh k-1" },
+      { zweck: "Live-Ansicht", befehl: "FM_HOME=/h /h/bin/fm-peek.sh k-1" },
+    ],
+    ...extra,
+  };
+}
+function karteFuer(worker: unknown) {
+  return { home: "/h", zeit: JETZT, worker: [worker], projekte: [], flotte: { jetzt: JETZT, t0: JETZT - 7200, t1: JETZT + 1800, jetztProzent: 80, achse: [], repos: [] } };
+}
+
+test("fmModal Kopf: Aufgabe, Repo, Art, Modell und Effort, Laufzeit; ohne Meldung steht arbeitet, noch keine Meldung", () => {
+  const a = ansicht();
+  a.setzeFirstmate(karteFuer(workerFuerKarte()));
+  const h = a.fmModal("k-1");
+  assert.match(h, /<span class="pfad">arbeitet, noch keine Meldung<\/span>/);
+  assert.match(h, /<dt>Repo<\/dt><dd>alpha<\/dd><dt>Art<\/dt><dd>Umsetzung<\/dd>/);
+  assert.match(h, /<dt>Modell<\/dt><dd>claude-opus-5-5 · xhigh<\/dd>/);
+  assert.match(h, /<dt>Laufzeit<\/dt><dd>30 min<\/dd>/);
+  assert.match(h, /class="fm-zeichen"/);
+  // der Titel kommt aus dem Backlog und ist maskiert
+  assert.doesNotMatch(h, /<img src=x onerror/);
+  assert.match(h, /&lt;img src=x onerror=alert\(1\)&gt;/);
+});
+
+test("fmModal Kopf: nach der letzten Meldung ist die Laufzeit bis zu ihr gezaehlt, der Zustand heisst in Worten", () => {
+  const a = ansicht();
+  const letzte = { verb: "done", at: JETZT - 600, key: null, text: "PR fertig", roh: "" };
+  a.setzeFirstmate(karteFuer(workerFuerKarte({ zustand: "done", zustandKarte: "done", status: { letzte, zeilen: 1, offen: [] }, verlauf: [letzte] })));
+  const h = a.fmModal("k-1");
+  assert.match(h, /<span class="pfad">fertig<\/span>/);
+  assert.match(h, /<dt>Laufzeit<\/dt><dd>20 min<\/dd>/);
+});
+
+test("fmModal Meta: Ort, Lauf und Liefern offen; alle eingeklappt und nur dort die Zaehler", () => {
+  const a = ansicht();
+  a.setzeFirstmate(karteFuer(workerFuerKarte()));
+  const h = a.fmModal("k-1");
+  const [ort, lauf, liefern] = ["Ort", "Lauf", "Liefern"].map((n) => h.indexOf(`<div class="fm-untertitel">${n}</div>`));
+  assert.ok(ort > 0 && lauf > ort && liefern > lauf, "Gruppen in dieser Reihenfolge");
+  assert.match(h, /<dt>branch<\/dt><dd>fm\/k-1<\/dd>/);
+  assert.match(h, /<dt>effort<\/dt><dd>xhigh<\/dd>/);
+  assert.match(h, /<details class="fm-alle" data-fl-det="w:k-1\/alle"><summary>alle · 2<\/summary>/, "alle ist zugeklappt");
+  assert.match(h, /<dt>busy_gen<\/dt><dd>g5\.7<\/dd>/);
+  assert.doesNotMatch(h.slice(0, h.indexOf('class="fm-alle"')), /busy_gen/, "Zaehler stehen nur hinter alle");
+});
+
+test("fmModal Statusverlauf: je Zeile Versatz zum Start und Zustand als Marke; neueste zuerst; Text maskiert", () => {
+  const a = ansicht();
+  const verlauf = [
+    { verb: "working", at: JETZT - 1500, key: null, text: "Plan steht", roh: "" },
+    { verb: "needs-decision", at: JETZT - 600, key: "k-frage", text: "Option <b>A</b> oder B", roh: "" },
+  ];
+  a.setzeFirstmate(karteFuer(workerFuerKarte({ zustand: "needs-decision", zustandKarte: "needs-decision", status: { letzte: verlauf[1], zeilen: 2, offen: [verlauf[1]] }, verlauf })));
+  const h = a.fmModal("k-1");
+  assert.match(h, /<span class="pfad">wartet auf Entscheidung<\/span>/);
+  assert.match(h, /<span class="fm-zeit"[^>]*>\+20 min<\/span><span class="fl-marke fm-tag fm-v-needs-decision">needs-decision \[k-frage\]<\/span>Option &lt;b&gt;A&lt;\/b&gt; oder B/);
+  assert.ok(h.indexOf("+20 min") < h.indexOf("+5 min"), "neueste zuerst");
+  assert.match(h, /<span class="fl-marke fm-tag fm-v-working">working<\/span>Plan steht/);
+  assert.doesNotMatch(h, /Noch keine Meldung/);
+});
+
+test("fmModal Statusverlauf: ohne Zeile steht der Grund, warum die Liste leer ist", () => {
+  const a = ansicht();
+  a.setzeFirstmate(karteFuer(workerFuerKarte()));
+  const h = a.fmModal("k-1");
+  assert.match(h, /Noch keine Meldung: Worker melden nur Phasenwechsel, die Statusdatei entsteht mit der ersten Meldung\./);
+});
+
+test("fmModal Statusverlauf: eine offene Zeile steht nur im Verlauf; eine aeltere, die der Verlauf nicht mehr zeigt, steht vorab", () => {
+  const a = ansicht();
+  const alt = { verb: "blocked", at: JETZT - 3600, key: "alt", text: "API fehlt", roh: "blocked [at=1] [key=alt]: API fehlt" };
+  const neu = { verb: "needs-decision", at: JETZT - 600, key: "k-frage", text: "Option A", roh: "needs-decision [at=2] [key=k-frage]: Option A" };
+  a.setzeFirstmate(karteFuer(workerFuerKarte({ zustand: "needs-decision", zustandKarte: "needs-decision", status: { letzte: neu, zeilen: 20, offen: [alt, neu] }, verlauf: [neu] })));
+  const h = a.fmModal("k-1");
+  assert.equal(h.split("Option A").length - 1, 1, "die offene Zeile steht einmal");
+  assert.match(h, /Offene Entscheidungen und Blocker/);
+  assert.ok(h.indexOf("API fehlt") < h.indexOf("Option A"), "die aeltere offene Zeile steht vorab");
+});
+
+test("fmModal Steuerung: wartende und erledigte Nachrichten der Inbox", () => {
+  const a = ansicht();
+  a.setzeFirstmate(karteFuer(workerFuerKarte()));
+  const h = a.fmModal("k-1");
+  assert.match(h, /<h3 class="fm-h">Steuerung<\/h3><dl class="fm-felder"><dt>wartend<\/dt><dd>2 · 001\.msg, 002\.msg<\/dd><dt>erledigt<\/dt><dd>5<\/dd><\/dl>/);
+});
+
+test("fmModal Befehle: tail -F und fm-peek mit Kopierknopf; Reihenfolge Kopf, Meta, Verlauf, Steuerung, Befehle", () => {
+  const a = ansicht();
+  a.setzeFirstmate(karteFuer(workerFuerKarte()));
+  const h = a.fmModal("k-1");
+  assert.match(h, /<code>tail -n 20 -F \/h\/state\/k-1\.status<\/code><button type="button" class="kopieren" data-kopiere="tail -n 20 -F \/h\/state\/k-1\.status">kopieren<\/button>/);
+  assert.match(h, /<span class="fm-zweck">Live-Ansicht<\/span><code>FM_HOME=\/h \/h\/bin\/fm-peek\.sh k-1<\/code><button type="button" class="kopieren" data-kopiere="FM_HOME=\/h \/h\/bin\/fm-peek\.sh k-1">kopieren<\/button>/);
+  const marken = ['class="fm-felder fm-kopf"', '<h3 class="fm-h">Meta', '<h3 class="fm-h">Statusverlauf', '<h3 class="fm-h">Steuerung</h3>', '<h3 class="fm-h">Befehle</h3>'].map((m) => h.indexOf(m));
+  assert.ok(marken.every((i) => i > 0), JSON.stringify(marken));
+  assert.deepEqual([...marken].sort((x, y) => x - y), marken);
+});
 
 const ID = "fm-sitzung";
 let tmp: string;

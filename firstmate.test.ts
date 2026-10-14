@@ -7,8 +7,8 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { test } from "node:test";
 import * as firstmate from "./firstmate.ts";
-import { firstmateSicht, githubRepo, holePrs, istFirstmateHome, leseProjekte, parseProjekte, prVorrat, VERLAUF_N } from "./firstmate.ts";
-import type { GhLauf } from "./firstmate.ts";
+import { firstmateSicht, githubRepo, holePrs, istFirstmateHome, kartenZustand, leseProjekte, metaGruppen, parseProjekte, prVorrat, VERLAUF_N, zustandAus } from "./firstmate.ts";
+import type { GhLauf, Worker } from "./firstmate.ts";
 import * as cockpit from "./cockpit.ts";
 
 // Ein leeres Home mit dem Aufbau, an dem man es erkennt.
@@ -218,7 +218,7 @@ test("firstmateSicht: Zustand, Verlauf, nur sichtbare Meta, Projekte; ohne tmux-
   try {
     const status = Array.from({ length: VERLAUF_N + 3 }, (_, i) => `working [at=${1000 + i}]: Schritt ${i}`);
     status.push("needs-decision [at=2000] [key=k]: welche Option?");
-    writeFileSync(path.join(home, "state", "t-1.meta"), "project=/p/alpha\nkind=ship\nharness=claude\ntasktmp=/tmp/x\ngeheim=1\n");
+    writeFileSync(path.join(home, "state", "t-1.meta"), "project=/p/alpha\nkind=ship\nharness=claude\ntasktmp=/tmp/x\ngeheim=1\nendpoint_task_id=e-9\n");
     writeFileSync(path.join(home, "state", "t-1.status"), status.join("\n") + "\n");
     writeFileSync(path.join(home, "data", "backlog.md"), "## In flight\n- [ ] t-1 - Testaufgabe (repo: alpha)\n## Queued\n- [ ] q-2 - Danach blocked-by: t-1 (repo: alpha)\n");
     mkdirSync(path.join(home, "projects", "alpha"), { recursive: true });
@@ -231,7 +231,10 @@ test("firstmateSicht: Zustand, Verlauf, nur sichtbare Meta, Projekte; ohne tmux-
     assert.equal(w.titel, "Testaufgabe");
     assert.equal(w.verlauf.length, VERLAUF_N);
     assert.equal(w.verlauf.at(-1)?.text, "welche Option?");
-    assert.deepEqual(w.meta, { project: "/p/alpha", kind: "ship", harness: "claude" });
+    // nur bekannte Schluessel (unbekanntes "geheim" fehlt); Kind steht im Kopf der Karte, der Rest unter alle
+    assert.deepEqual(w.meta, { project: "/p/alpha", kind: "ship", harness: "claude", tasktmp: "/tmp/x", endpoint_task_id: "e-9" });
+    assert.deepEqual(w.metaGruppen.find((g) => g.name === "Lauf")?.eintraege, [{ schluessel: "harness", wert: "claude" }]);
+    assert.deepEqual(w.metaGruppen.find((g) => g.name === "alle")?.eintraege, [{ schluessel: "endpoint_task_id", wert: "e-9" }, { schluessel: "kind", wert: "ship" }, { schluessel: "tasktmp", wert: "/tmp/x" }]);
     assert.equal("pane" in w.fenster, false);
     assert.deepEqual(s.warteschlange?.map((a) => [a.id, a.wartet]), [["q-2", "wartet auf t-1"]]);
     assert.deepEqual(s.projekte.map((p) => [p.name, p.worker]), [["alpha", ["t-1"]]]);
@@ -241,7 +244,76 @@ test("firstmateSicht: Zustand, Verlauf, nur sichtbare Meta, Projekte; ohne tmux-
   }
 });
 
-test("keine Pane-Zeilen in der Sicht und in der JSON fuer den Server", { skip: spawnSync("tmux", ["-V"]).status !== 0 && "tmux fehlt" }, () => {
+test("befehle: Status mit tail -F, Live-Ansicht mit fm-peek direkt hinter dem Zustand", () => {
+  const home = neuesHome();
+  try {
+    writeFileSync(path.join(home, "state", "t-1.meta"), "project=/p/alpha\n");
+    // noch keine Statusdatei: tail -F folgt dem Namen und wartet, bis der Worker die erste Meldung schreibt
+    const [w] = firstmateSicht(home).worker;
+    assert.deepEqual(w.befehle.find((b) => b.zweck === "Status"), { zweck: "Status", befehl: `tail -n 20 -F ${path.join(home, "state", "t-1.status")}` });
+    const i = w.befehle.findIndex((b) => b.zweck === "Zustand");
+    assert.equal(w.befehle[i].befehl, `FM_HOME=${home} ${home}/bin/fm-crew-state.sh t-1`);
+    assert.deepEqual(w.befehle[i + 1], { zweck: "Live-Ansicht", befehl: `FM_HOME=${home} ${home}/bin/fm-peek.sh t-1` });
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("metaGruppen: Ort, Lauf, Liefern in fester Reihenfolge, der Rest unter alle (auch kind), leere Werte fehlen", () => {
+  const g = metaGruppen({
+    project: "/p/alpha", worktree: "/w/t-1", branch: "fm/t-1", window: "fm:t-1", terminal: "", harness: "claude", model: "claude-opus-5-5", effort: "xhigh",
+    backend: "tmux", remote_host: "", mode: "no-mistakes", yolo: "1", pr: "https://github.com/o/r/pull/7", kind: "ship", busy_gen: "g1.2", spawn_gen: "s1700000000.4", tasktmp: "/tmp/x",
+  });
+  assert.deepEqual(g.map((x) => x.name), ["Ort", "Lauf", "Liefern", "alle"]);
+  assert.deepEqual(g[0].eintraege.map((e) => e.schluessel), ["project", "worktree", "branch", "window"]);
+  assert.deepEqual(g[1].eintraege.map((e) => e.schluessel), ["harness", "model", "effort", "backend"]);
+  assert.deepEqual(g[2].eintraege.map((e) => e.schluessel), ["mode", "yolo", "pr"]);
+  assert.deepEqual(g[3].eintraege.map((e) => e.schluessel), ["busy_gen", "kind", "spawn_gen", "tasktmp"]);
+});
+
+test("metaGruppen: unbekannte Schluessel fehlen samt ihren Werten, auch ohne Geheimnis im Namen", () => {
+  const g = metaGruppen({ project: "/p/alpha", remote_url: "https://u:pw-geheim@host/r.git", zusatz: "ok", busy_gen: "g1.2" });
+  const text = JSON.stringify(g);
+  assert.equal(text.includes("pw-geheim"), false);
+  assert.equal(text.includes("zusatz"), false);
+  assert.deepEqual(g.at(-1)?.eintraege, [{ schluessel: "busy_gen", wert: "g1.2" }]);
+});
+
+test("metaGruppen: Schluessel mit token, secret, key, pass oder auth fallen weg, samt ihren Werten", () => {
+  const g = metaGruppen({ project: "/p/alpha", api_token: "t0ken-geheim", GH_SECRET: "s3cr3t-geheim", ssh_key_path: "/keys/geheim", db_password: "pw-geheim", auth_header: "Basic-geheim", tasktmp: "ok" });
+  const text = JSON.stringify(g);
+  for (const wert of ["t0ken-geheim", "s3cr3t-geheim", "/keys/geheim", "pw-geheim", "Basic-geheim"]) assert.equal(text.includes(wert), false, wert);
+  assert.deepEqual(g.at(-1)?.eintraege, [{ schluessel: "tasktmp", wert: "ok" }]);
+});
+
+test("firstmateSicht und --json: Geheimes aus der Meta fehlt in der Sicht und in der Ausgabe", () => {
+  const home = neuesHome();
+  try {
+    writeFileSync(path.join(home, "state", "t-1.meta"), "project=/p/alpha\napi_token=t0ken-geheim\nkind=scout\n");
+    const s = firstmateSicht(home);
+    assert.deepEqual(s.worker[0].meta, { project: "/p/alpha", kind: "scout" });
+    assert.doesNotMatch(JSON.stringify(s), /t0ken-geheim/);
+    const r = spawnSync(process.execPath, [path.join(import.meta.dirname, "firstmate.ts"), "--json", home], { encoding: "utf8", env: process.env, timeout: 10000 });
+    assert.equal(r.status, 0, r.stderr);
+    assert.doesNotMatch(r.stdout, /t0ken-geheim/);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("kartenZustand: ein lebendes Fenster ohne Statuszeile arbeitet, hat aber noch nichts gemeldet", () => {
+  const ohne = { status: { letzte: null, zeilen: 0, offen: [] } } as Pick<Worker, "status">;
+  assert.equal(kartenZustand(zustandAus(ohne.status, true), { ...ohne, fenster: { lebt: true } } as Pick<Worker, "fenster" | "status">), "ohne-meldung");
+  // ohne tmux-Befund ist das Fenster nicht sicher da: unbekannt bleibt unbekannt
+  assert.equal(kartenZustand(zustandAus(ohne.status, null), { ...ohne, fenster: { lebt: null } } as Pick<Worker, "fenster" | "status">), "unknown");
+  // ein fehlendes Fenster ist tot, auch ohne Statuszeile
+  assert.equal(kartenZustand(zustandAus(ohne.status, false), { ...ohne, fenster: { lebt: false } } as Pick<Worker, "fenster" | "status">), "dead");
+  // mit Statuszeile bleibt der Zustand, wie er ist
+  const mit = { letzte: { verb: "working", at: 1, key: null, text: "los", roh: "" }, zeilen: 1, offen: [] };
+  assert.equal(kartenZustand(zustandAus(mit, true), { status: mit, fenster: { lebt: true } } as Pick<Worker, "fenster" | "status">), "working");
+});
+
+test("keine Pane-Zeilen in der Sicht und in der JSON fuer den Server",{ skip: spawnSync("tmux", ["-V"]).status !== 0 && "tmux fehlt" }, () => {
   const home = neuesHome();
   const alt = { TMUX_TMPDIR: process.env.TMUX_TMPDIR, TMUX: process.env.TMUX };
   process.env.TMUX_TMPDIR = home;
