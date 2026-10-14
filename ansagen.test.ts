@@ -151,18 +151,30 @@ test("schreibeAnsage: haengt an, haelt die Datei bei hoechstens n plus Puffer, l
   }
 });
 
-test("schreibeAnsage: lange Ansagen halten die Datei bei hoechstens LESEN_HOECHSTENS, auch unter n plus Puffer Zeilen", () => {
+test("schreibeAnsage: lange Ansagen kuerzen erst ueber LESEN_HOECHSTENS plus 256 KiB, dann auf drei Viertel, nicht bei jedem Anhang", () => {
   const tmp = mkdtempSync(path.join(os.tmpdir(), "live-plan-ansagen-"));
   try {
     const datei = ansagenDatei(tmp);
-    // Gut 7 700 Zeichen je Ansage: 150 davon sind ueber 1 MiB, aber weniger Zeilen als n plus Puffer.
+    // Gut 7 700 Zeichen je Ansage: 220 davon sind ueber 1,6 MiB, aber weniger Zeilen als n plus Puffer.
     const text = "Ein langer Satz einer langen Ansage. ".repeat(210).trim();
-    for (let i = 1; i <= 150; i++) schreibeAnsage(datei, A(i, { text }));
-    assert.ok(statSync(datei).size <= LESEN_HOECHSTENS, String(statSync(datei).size));
+    let ersetzt = 0, inode = -1;
+    for (let i = 1; i <= 220; i++) {
+      schreibeAnsage(datei, A(i, { text }));
+      const st = statSync(datei);
+      // Ein Kuerzen ersetzt die Datei (neue Datei, dann rename): eine neue Inode.
+      if (inode !== -1 && st.ino !== inode) {
+        ersetzt++;
+        assert.ok(st.size <= LESEN_HOECHSTENS * 0.75, `nach dem Kuerzen ${st.size}`);
+      }
+      inode = st.ino;
+      assert.ok(st.size <= LESEN_HOECHSTENS + 256 * 1024, `nach Ansage ${i}: ${st.size}`);
+    }
+    // Ohne Abstand zwischen Schwelle und Ziel schriebe ab 1 MiB jeder Anhang die ganze Datei neu (gut 80 Mal).
+    assert.equal(ersetzt, 1);
     // Gekuerzt wird nur vorne: die gelesenen enden mit der letzten und sind lueckenlos.
     const zeiten = leseAnsagen(datei).map((a) => a.zeit);
     assert.ok(zeiten.length >= 100, String(zeiten.length));
-    assert.deepEqual(zeiten, Array.from({ length: zeiten.length }, (_, i) => 151 - zeiten.length + i));
+    assert.deepEqual(zeiten, Array.from({ length: zeiten.length }, (_, i) => 221 - zeiten.length + i));
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }
@@ -191,24 +203,43 @@ test("schonAngesagt: nur eine eigene Ansage derselben Sitzung seit dem Start des
   assert.equal(schonAngesagt(liste, "s-3", 0), false);
 });
 
-test("schreibeAnsage: wartet auf eine besetzte Sperre, haengt danach ohne Kuerzen an und gibt sie frei", () => {
+test("schreibeAnsage: ohne Sperre kein Anhang, sondern ein Fehler nach der Wartezeit; eine verwaiste Sperre wird genommen und freigegeben", () => {
   const tmp = mkdtempSync(path.join(os.tmpdir(), "live-plan-ansagen-"));
   try {
     const datei = ansagenDatei(tmp);
     for (let i = 1; i <= 75; i++) schreibeAnsage(datei, A(i), 20);
-    const vorher = readFileSync(datei, "utf8").trim().split("\n").length;
+    const vorher = readFileSync(datei, "utf8");
     writeFileSync(`${datei}.sperre`, "");
     const start = Date.now();
-    schreibeAnsage(datei, A(76), 20);
-    assert.ok(Date.now() - start >= 1500, "wartet auf die Sperre");
-    // Angehaengt, aber nicht gekuerzt; die fremde Sperre bleibt.
-    assert.equal(readFileSync(datei, "utf8").trim().split("\n").length, vorher + 1);
-    assert.ok(existsSync(`${datei}.sperre`));
-    // Eine verwaiste Sperre (aelter als 10 s) wird genommen und wieder freigegeben; nichts ging verloren.
+    // Ein Anhang ohne Sperre ginge verloren, sobald ein gleichzeitiger Kuerzer die Datei per rename ersetzt.
+    assert.throws(() => schreibeAnsage(datei, A(76), 20, 300), /Sperre/);
+    assert.ok(Date.now() - start >= 250, "wartet auf die Sperre");
+    assert.equal(readFileSync(datei, "utf8"), vorher);
+    assert.ok(existsSync(`${datei}.sperre`), "die fremde Sperre bleibt");
+    // Eine verwaiste Sperre (aelter als 10 s) wird genommen und wieder freigegeben.
     utimesSync(`${datei}.sperre`, new Date(Date.now() - 60_000), new Date(Date.now() - 60_000));
     schreibeAnsage(datei, A(77), 20);
     assert.ok(!existsSync(`${datei}.sperre`));
-    assert.deepEqual(leseAnsagen(datei, 100).map((a) => a.zeit), Array.from({ length: 26 }, (_, i) => 52 + i));
+    assert.deepEqual(leseAnsagen(datei, 100).map((a) => a.zeit), [...Array.from({ length: 24 }, (_, i) => 52 + i), 77]);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("schreibeAnsage: wartet auf eine besetzte Sperre, bis ihr Halter sie freigibt, und haengt dann unter der Sperre an", () => {
+  const tmp = mkdtempSync(path.join(os.tmpdir(), "live-plan-ansagen-"));
+  try {
+    const datei = ansagenDatei(tmp);
+    schreibeAnsage(datei, A(1));
+    writeFileSync(`${datei}.sperre`, "");
+    // Ein anderer Prozess haelt die Sperre noch gut 300 ms; der Schreiber blockiert so lange (Atomics.wait).
+    const halter = spawn(process.execPath, ["-e", `setTimeout(() => require("node:fs").rmSync(${JSON.stringify(`${datei}.sperre`)}), 300)`], { stdio: "ignore" });
+    const start = Date.now();
+    schreibeAnsage(datei, A(2));
+    assert.ok(Date.now() - start >= 250, "wartet auf die Sperre");
+    assert.ok(!existsSync(`${datei}.sperre`));
+    assert.deepEqual(leseAnsagen(datei).map((a) => a.zeit), [1, 2]);
+    halter.kill();
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }

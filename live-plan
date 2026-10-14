@@ -432,18 +432,26 @@ async function sage(rest: string[]): Promise<void> {
   if (id !== null && !NAME.test(id)) abbruch(`ungueltige Sitzung ${JSON.stringify(id)}, erlaubt a-z A-Z 0-9 . _ -`);
   const repo = wert("--repo")?.trim() || repoName();
   const datei = ansagenDatei(CACHE);
+  // Ohne Sperre speichert schreibeAnsage nichts; die Meldung geht nach stderr, der Exit-Code ist 1.
+  const speichere = (a: Parameters<typeof schreibeAnsage>[1]) => {
+    try {
+      schreibeAnsage(datei, a);
+    } catch (e) {
+      abbruch((e as Error).message);
+    }
+  };
   if (auto) {
     const seit = Number.parseInt(wert("--seit") ?? "", 10);
     if (!id || !Number.isFinite(seit)) abbruch("sage --auto braucht --id und --seit");
     const text = ansageText(await Bun.stdin.text(), "auto");
     if (!text || schonAngesagt(leseAnsagen(datei), id, seit)) return;
-    schreibeAnsage(datei, { v: 1, zeit: Date.now(), id, repo, text, quelle: "auto" });
+    speichere({ v: 1, zeit: Date.now(), id, repo, text, quelle: "auto" });
     return;
   }
   const worte = rest.filter((a, i) => !SAGE_WERTE.includes(a) && !SAGE_WERTE.includes(rest[i - 1] ?? ""));
   const text = ansageText(worte.join(" "), "sage");
   if (!text) abbruch('sage braucht einen Text: live-plan sage "<2-3 Saetze>"');
-  schreibeAnsage(datei, { v: 1, zeit: Date.now(), id, repo, text, quelle: "sage" });
+  speichere({ v: 1, zeit: Date.now(), id, repo, text, quelle: "sage" });
   console.log(`angesagt: ${repo}: ${text}`);
 }
 

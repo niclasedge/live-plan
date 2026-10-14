@@ -270,7 +270,7 @@ Die Uebersicht `http://localhost:4410/` liest am Ende eines Zugs dessen Antwort 
 Sitzungen, vorneweg das Repo ("live-plan: ..."). Ohne Ihr Zutun macht das die Mod `live-plan-sitzung`: sie gibt
 die letzte Antwort der Hauptsitzung an `live-plan sage --auto`, das Markdown, Links, URLs und Codebloecke
 entfernt und den ganzen uebrigen Text nimmt (hoechstens 8000 Zeichen, ein laengerer endet am letzten ganzen Satz
-davor); eine Antwort unter vier Woertern ("Captain, shipshape.") faellt weg. Wollen Sie selbst formulieren, sagen
+davor, ein riesiger Satz an einer Wortgrenze mit "…"); eine Antwort unter vier Woertern ("Captain, shipshape.") faellt weg. Wollen Sie selbst formulieren, sagen
 Sie im selben Zug an:
 
 ```bash
@@ -303,6 +303,8 @@ ab; laeuft sie, zeigt sie ⏸ (Klick haelt an), pausiert zeigt sie ▶ (Klick se
 solange etwas spricht, pausiert ist oder wartet, und bricht ab und leert die Warteschlange. Die Steuerung gilt nur im
 Tab, der gerade spricht: nur dort stehen ⏸ und ⏹. Die anderen Tabs zeigen nur ▶; ein Klick dort startet in jenem Tab
 eine eigene Ausgabe. In der Leiste fuehrt der Repo-Name zur Sitzung, die eigene ist mit aria-current markiert.
+Eine lange Ansage geht in Teilen von hoechstens 200 Zeichen in die Warteschlange (Chrome bricht eine einzelne
+Aeusserung nach etwa 15 s ab); ⏸, ▶ und ⏹ gelten fuer die ganze Ansage.
 
 ## Grenzen
 

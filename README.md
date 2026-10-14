@@ -95,19 +95,23 @@ das Repo: „live-plan: Der Umbau ist fertig …“.
 - **Automatisch:** Die Mod gibt am Ende jedes beantworteten Zugs der Hauptsitzung (nicht der Subagenten) die
   letzte Antwort an `live-plan sage --auto`. Das Skript entfernt Codeblöcke, Tabellen, Überschriften, Bilder,
   URLs, HTML, Emoji und Markdown-Zeichen (ein Link wird zu seinem Text) und nimmt den ganzen übrigen Text, höchstens
-  8000 Zeichen (bei 14 Zeichen je Sekunde gut neun Minuten); ein längerer endet am letzten ganzen Satz davor. Eine
+  8000 Zeichen (bei 14 Zeichen je Sekunde gut neun Minuten); ein längerer endet am letzten ganzen Satz davor, und
+  besteht er fast nur aus einem riesigen Satz, an einer Wortgrenze mit „…“. Eine
   Antwort unter vier Wörtern („Captain, shipshape.“) wird nicht angesagt.
 - **Selbst formuliert:** `live-plan sage "<2-3 Sätze>"` sagt einen eigenen Text an (gesäubert, bis sechs Sätze und
   600 Zeichen; Sitzung aus `CLAUDE_SESSION_ID`, Repo aus der Git-Wurzel). Er ersetzt die automatische Ansage
   desselben Zugs: `--auto` übergeht eine Sitzung, die seit dem Beginn des Zugs selbst angesagt hat.
 
 Die Ansagen stehen als eine JSON-Zeile je Ansage (`zeit`, `id`, `repo`, `text`, `quelle` `auto` oder `sage`) in
-`LIVE_PLAN_CACHE/ansagen.jsonl`. Angehängt wird mit `O_APPEND`; bei mehr als 250 Zeilen oder mehr als 1 MiB schreibt der
-nächste Schreiber die letzten 200 neu, bei langen Ansagen nur so viele, wie in 1 MiB passen. Anhängen und Kürzen
-laufen unter der Sperre `ansagen.jsonl.sperre` (O_EXCL, höchstens 2 s Warten,
-eine Sperre älter als 10 s gilt als verwaist), damit kein Kürzen eine gleichzeitig angehängte Ansage verliert; ohne
-Sperre wird trotzdem angehängt, nur nicht gekürzt. Eine kaputte Zeile oder eine fehlende Datei kostet nur diese
-Ansagen; ein Text über 8000 Zeichen wird beim Lesen an einer Satzgrenze gekappt, nicht verworfen. Der Server liest
+`LIVE_PLAN_CACHE/ansagen.jsonl`. Angehängt wird mit `O_APPEND`; bei mehr als 250 Zeilen oder mehr als 1,25 MiB
+(1 MiB plus 256 KiB Abstand) schreibt der nächste Schreiber die letzten 200 neu, höchstens aber 768 KiB davon: bei
+langen Ansagen fallen vorne weitere weg. Der Abstand verhindert, dass ab 1 MiB jeder Anhang die ganze Datei neu
+schreibt. Anhängen und Kürzen laufen unter der Sperre `ansagen.jsonl.sperre` (O_EXCL, eine Sperre älter als 10 s gilt
+als verwaist), denn ein Anhang neben einem Kürzen ginge mit dem Ersetzen der Datei verloren. Ein Schreiber wartet bis
+zu 12 s auf die Sperre, nimmt also eine verwaiste sicher noch; bekommt er sie nicht, hängt er nichts an, und
+`live-plan sage` meldet `Ansage nicht gespeichert: …` mit Exit-Code 1. Eine kaputte Zeile oder eine fehlende Datei
+kostet nur diese Ansagen; ein Text über 8000 Zeichen wird auch beim Lesen gekappt wie beim Schreiben, nicht verworfen.
+Der Server liest
 die Datei nur: `GET /api/ansagen` liefert die letzten 200, neueste zuerst,
 `GET /api/ereignisse` meldet als Ereignisstrom jede Änderung an Ansagen und Einstellungen. Ansagen schreiben gibt es
 über HTTP nicht.
@@ -148,6 +152,10 @@ Klick hält an; pausiert zeigt sie ▶, und ein Klick setzt fort. ⏹ Stopp ersc
 pausiert ist oder in der Warteschlange wartet; er bricht die Ansage ab und leert die Warteschlange. Die Steuerung gilt
 nur im Tab, der gerade spricht: nur dort stehen ⏸ und ⏹, die anderen Tabs zeigen nur ▶; ein Klick dort startet in jenem
 Tab eine eigene Ausgabe. In der Leiste führt der Repo-Name zur Sitzung; die eigene ist mit `aria-current` markiert.
+Eine lange Ansage spricht der Browser in Teilen von höchstens 200 Zeichen (ganze Sätze, ein längerer Satz endet am
+Komma oder an einer Wortgrenze), denn Chrome bricht mit Netzstimmen eine einzelne Äußerung nach etwa 15 s ab. Alle
+Teile stehen gleich in der Warteschlange; ⏸, ▶ und ⏹ gelten für die ganze Ansage, und als beendet gilt sie erst mit
+dem letzten Teil.
 
 ![Leiste mit laufender Ansage (⏸) und Stopp neben ⚙](docs/ansagen-steuerung.png)
 

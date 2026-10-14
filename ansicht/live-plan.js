@@ -2226,6 +2226,34 @@
     var repo = a && a.repo ? String(a.repo) : "", text = a && a.text ? String(a.text) : "";
     return repo ? repo + ": " + text : text;
   }
+  /** Hoechstens so viele Zeichen spricht eine Aeusserung; Chrome bricht eine einzelne mit Netzstimmen nach etwa 15 s ab. */
+  var TEIL_ZEICHEN = 200;
+  /** Ein Satzende mit zwei Buchstaben davor ("z. B." und "13. Oktober" trennen nicht); ersatzweise Komma, Semikolon, Doppelpunkt. */
+  var TEIL_SATZ = /[A-Za-zÀ-ÖØ-öø-ÿ]{2}[.!?…]+["“”'»«)]*(?=\s)/g, TEIL_KOMMA = /[,;:](?=\s)/g;
+  /**
+   * Ein Sprechtext in Teile von hoechstens `zeichen` Zeichen (Vorgabe TEIL_ZEICHEN): ganze Saetze, solange sie passen; ein
+   * laengerer Satz endet am letzten Komma, sonst an einer Wortgrenze, ein Wort ueber der Grenze hart. Mit Leerzeichen
+   * verbunden ergeben die Teile wieder den Text.
+   */
+  function sprechTeile(text, zeichen) {
+    var max = zeichen || TEIL_ZEICHEN, rest = String(text || "").trim(), teile = [];
+    while (Array.from(rest).length > max) {
+      var fenster = Array.from(rest).slice(0, max + 1).join("");
+      var schnitt = letztesEnde(TEIL_SATZ, fenster) || letztesEnde(TEIL_KOMMA, fenster) || fenster.lastIndexOf(" ");
+      if (schnitt <= 0) schnitt = Array.from(rest).slice(0, max).join("").length;
+      teile.push(rest.slice(0, schnitt).trim());
+      rest = rest.slice(schnitt).trim();
+    }
+    if (rest || !teile.length) teile.push(rest);
+    return teile;
+  }
+  /** Das Ende des letzten Treffers von `re` (mit g) in `s`, 0 ohne Treffer. */
+  function letztesEnde(re, s) {
+    var ende = 0, m;
+    re.lastIndex = 0;
+    while ((m = re.exec(s))) ende = m.index + m[0].length;
+    return ende;
+  }
   /** Zeichen je Sekunde fuer die geschaetzte Dauer, bevor der Browser gemessen ist; Messwerte ausserhalb der Grenzen zaehlen nicht. */
   var ZPS_VORGABE = 14, ZPS_GRENZEN = [4, 40];
   /** Die geschaetzte Dauer einer Ansage in ganzen Sekunden: Zeichen (Codepunkte) je zps, aufgerundet, mindestens 1. */
@@ -2383,6 +2411,7 @@
 
   G.LivePlanAnsicht = {
     ansageSprechtext: ansageSprechtext,
+    sprechTeile: sprechTeile,
     ansageDauer: ansageDauer,
     dauerText: dauerText,
     ansageZelle: ansageZelle,
@@ -3054,31 +3083,41 @@
    * Spricht eine Ansage. `sofort` (der Klick) bricht ab, was gerade laeuft, und zeigt diese Ansage sofort als laufend; sonst
    * reiht der Browser sie hinten an, und sie gilt erst mit ihrem Beginn (onstart) als laufend. Jede Ansage zaehlt von hier
    * bis zu ihrem Ende in `wartend` (s. endeLauf); eine abgebrochene meldet ihr Ende nach und zaehlt dann nicht mehr.
+   * Eine lange Ansage geht in Teilen (sprechTeile) in die Warteschlange des Browsers; pause, resume und cancel wirken dort
+   * auf alle Teile. Sie beginnt mit dem ersten Teil, der beginnt, und endet mit dem letzten Teil, der endet (`offen`).
    */
   function sprich(a, sofort) {
     if (!SPRACHE || !a) return;
-    var text = ansageSprechtext(a);
+    var text = ansageSprechtext(a), teile = sprechTeile(text);
     if (sofort) abbrechen();
-    var lauf = { zeit: a.zeit, pausiert: false, gepausiert: false, zeichen: Array.from(text).length, start: null, nr: abbruchNr, gezaehlt: false };
+    var lauf = { zeit: a.zeit, pausiert: false, gepausiert: false, zeichen: Array.from(text).length, start: null, nr: abbruchNr, gezaehlt: false, offen: teile.length, fehler: false };
     wartend++;
     if (sofort) {
       LAUFT = lauf;
       zeichneAnsagen();
     } else zeichneStopp();
-    var u = new G.SpeechSynthesisUtterance(text);
     var stimme = stimmeWahl(SPRACHE.getVoices(), EINST.stimme);
-    if (stimme) { u.voice = stimme; u.lang = stimme.lang; } else u.lang = "de-DE";
-    u.onstart = function () {
-      // Der Beginn einer abgebrochenen Ansage kann nach dem Abbruch eintreffen; ihre Nummer ist dann nicht mehr die aktuelle.
-      if (lauf.nr !== abbruchNr) return;
-      lauf.start = jetztMs(); LAUFT = lauf; zeichneAnsagen();
-    };
-    u.onend = function () {
-      if (LAUFT === lauf && !lauf.gepausiert) kalibriere(lauf);
-      endeLauf(lauf);
-    };
-    u.onerror = function () { endeLauf(lauf); };
-    SPRACHE.speak(u);
+    teile.forEach(function (teil) {
+      var u = new G.SpeechSynthesisUtterance(teil), fertig = false;
+      if (stimme) { u.voice = stimme; u.lang = stimme.lang; } else u.lang = "de-DE";
+      u.onstart = function () {
+        // Der Beginn einer abgebrochenen Ansage kann nach dem Abbruch eintreffen; ihre Nummer ist dann nicht mehr die aktuelle.
+        if (lauf.nr !== abbruchNr || lauf.start !== null) return;
+        lauf.start = jetztMs(); LAUFT = lauf; zeichneAnsagen();
+      };
+      // Jeder Teil endet hoechstens einmal; ein Fehler in einem Teil verhindert nur die Messung.
+      var ende = function (regulaer) {
+        if (fertig) return;
+        fertig = true;
+        if (!regulaer) lauf.fehler = true;
+        if (--lauf.offen > 0) return;
+        if (!lauf.fehler && LAUFT === lauf && !lauf.gepausiert) kalibriere(lauf);
+        endeLauf(lauf);
+      };
+      u.onend = function () { ende(true); };
+      u.onerror = function () { ende(false); };
+      SPRACHE.speak(u);
+    });
   }
   /**
    * Das Ende einer Ansage (onend oder onerror). Sie zaehlt aus `wartend`, hoechstens einmal und nur in der Warteschlange ihrer
