@@ -251,14 +251,25 @@ body { margin: 0; background: var(--s1); font-family: var(--font); }
 .an-leiste { display: grid; gap: 8px; margin: 0 0 12px; padding: 10px 12px; border: 1px solid var(--line-1); border-radius: var(--r-s); background: var(--s2); }
 .an-leiste-kopf { display: flex; gap: 10px; align-items: center; min-width: 0; }
 .an-leiste-kopf h2 { margin: 0; font-family: var(--font-kopf); font-size: 13px; font-weight: 700; color: var(--ink-1); }
-.an-leiste ol { display: grid; grid-template-columns: 30px auto auto minmax(0, 1fr); gap: 2px 8px; margin: 0; padding: 0; list-style: none; }
+.an-leiste ol { display: grid; grid-template-columns: 30px minmax(0, 7em) minmax(0, 14em) minmax(0, 1fr); gap: 2px 8px; margin: 0; padding: 0; list-style: none; }
+/* Schmal: die Repo-Spalte gibt Breite an die Textspalte ab, Repo-Namen werden dort mit Ellipse gekuerzt (volle Namen im title). */
+@media (max-width: 620px) { .an-leiste ol { grid-template-columns: 30px minmax(0, 7em) minmax(0, 7em) minmax(0, 1fr); } }
 .an-zeile { display: grid; grid-column: 1 / -1; grid-template-columns: subgrid; align-items: center; min-width: 0; padding: 2px 6px; border-radius: 6px; }
 .an-zeile.an-eigen { background: color-mix(in srgb, var(--l1) 16%, transparent); }
 .an-zeile .an-spiel { width: 24px; height: 22px; padding: 0; border: 1px solid var(--line-2); border-radius: 6px; background: var(--s1); font-size: 11px; }
 .an-zeile .an-uhr { font-size: 12px; color: var(--ink-2); white-space: nowrap; }
-.an-zeile .an-repo { font-weight: 600; color: var(--ink-2); white-space: nowrap; }
+.an-zeile .an-repo { display: block; overflow: hidden; text-overflow: ellipsis; font-weight: 600; color: var(--ink-2); white-space: nowrap; }
 .an-zeile .an-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink-3); }
 .an-leer { margin: 0; color: var(--ink-3); }
+/* Dauer hinter der Uhrzeit (geschaetzt), der Verweis auf die Sitzung im Repo-Namen, Zustand des Knopfs, Stopp neben ⚙. */
+.an-dauer { font-size: 11px; color: var(--ink-3); white-space: nowrap; }
+a.an-repo { text-decoration: none; }
+a.an-repo:hover { text-decoration: underline; }
+a.an-repo[aria-current="page"] { color: var(--ink-1); }
+.an-spiel.an-laeuft { border-color: var(--l1); }
+.an-spiel.an-pausiert { border-color: var(--warn); }
+.lp-einst .an-stopp { padding: 3px 9px; border: 1px solid var(--line-2); border-radius: 8px; background: var(--s2); color: var(--ink-1); font-size: 12px; }
+.lp-einst .an-stopp:hover { border-color: var(--rot); }
 .hw-prozesse td.befehl { width: 40%; font-family: var(--mono); color: var(--ink-2); }
 .vb-trenn { color: var(--line-2); }
 .vb-sitzung { display: flex; gap: 6px; align-items: center; min-width: 0; white-space: nowrap; overflow: hidden; }
@@ -703,6 +714,8 @@ body { margin: 0; background: var(--s1); font-family: var(--font); }
   .lv-verbrauch { padding: 2px 6px; font-size: 8px; }
   .lp-host { display: none; }
   .lp-einst, .lp-liste .an-spiel { display: none !important; }
+  /* In der Leiste bleibt der Knopf als Kaestchen, damit die Spalten der Zeilen fluchten; nur das Zeichen geht. */
+  .an-leiste .an-spiel { visibility: hidden; }
   .vb-fbar { height: 10px; }
   .vb-fbar .lab { line-height: 10px; font-size: 7px; }
   .lp-dateien { display: none !important; }

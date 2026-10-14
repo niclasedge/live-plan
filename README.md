@@ -132,6 +132,19 @@ Kontext) lauscht jeder Tab selbst; gesprochen wird dann nur im zuletzt geklickte
 zum nächsten Klick oder Tabwechsel. Dort hält jeder Sitzungstab zwei Dauerverbindungen; ab etwa drei Sitzungstabs stockt
 der Browser (HTTP/1.1, 6 Verbindungen je Host). Über `localhost` (`live-plan open`) zeigte sich das in unseren Läufen
 nicht. Siehe #20.
+
+Die Steuerung der Ansagen (Übersicht und Leiste der Sitzungsseite): hinter der Uhrzeit steht die geschätzte Dauer in
+Klammern, etwa `(≈ 5 s)`. Sie ergibt sich aus der Länge des gesprochenen Textes geteilt durch die Zeichen je Sekunde
+dieses Browsers; die Vorgabe sind 14. Jede regulär zu Ende gesprochene Ansage mischt ihr gemessenes Tempo gleitend hinein
+(0,7 alt, 0,3 neu; Messwerte außerhalb von 4 bis 40 zählen nicht). Der Wert liegt im `localStorage` dieses Browsers
+(`live-plan.zeichen-je-sekunde`), nicht in einer Datei. ▶ spielt eine Zeile sofort ab; läuft sie, zeigt sie ⏸, und ein
+Klick hält an; pausiert zeigt sie ▶, und ein Klick setzt fort. ⏹ Stopp erscheint neben ⚙, solange etwas spricht,
+pausiert ist oder in der Warteschlange wartet; er bricht die Ansage ab und leert die Warteschlange. Die Steuerung gilt
+nur im Tab, der gerade spricht: nur dort stehen ⏸ und ⏹, die anderen Tabs zeigen nur ▶; ein Klick dort startet in jenem
+Tab eine eigene Ausgabe. In der Leiste führt der Repo-Name zur Sitzung; die eigene ist mit `aria-current` markiert.
+
+![Leiste mit laufender Ansage (⏸) und Stopp neben ⚙](docs/ansagen-steuerung.png)
+
 Tests: `node --test ansagen.test.ts liste.test.ts server.test.ts` (brauchen bun), Mod: `claude plugin test mod`.
 
 ## Firstmate-Cockpit
