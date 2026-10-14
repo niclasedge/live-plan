@@ -41,7 +41,10 @@ Der Mod verbindet jede Claude-Code-Sitzung mit dem live-plan. Er legt beim Sitzu
 `~/.cache/live-plan/sitzungen/<id>.json` (Kontext, Kosten, Subagenten, Fortschritt), das die
 Ansicht als Live-Block zeigt. Dazu kommen die Werkzeuge `progress` und `step`, Antworten auf
 `AskUserQuestion` direkt im Browser, der Stand im System-Prompt, die Ansagen (siehe unten) und der
-Sprengradius, der riskante Bash-Befehle bis zur Freigabe anhält. In einer Terminal-Sitzung:
+Sprengradius, der riskante Bash-Befehle bis zur Freigabe anhält. Schließt die Sitzung eine Frage
+ohne Entscheidung (Esc im Dialog, Abbruch, keine Antwort, Sitzungsende), zieht der Mod sie im
+live-plan zurück (`zurueckgezogen: GRUND` in der Frage); sie wartet dann nirgends mehr und steht
+ausgegraut mit ihrem Grund in der Ansicht. In einer Terminal-Sitzung:
 
 ```
 /plugin install live-plan-sitzung --marketplace niclasedge/live-plan
@@ -65,6 +68,7 @@ Die Anleitung für den Agenten steht in [`SKILL.md`](SKILL.md). Kurz:
 LP=~/.claude/skills/live-plan/live-plan
 $LP neu SLUG      # Sitzung aus vorlage.yaml anlegen
 $LP open SLUG     # Server starten, Ansicht im Browser öffnen
+$LP frage-zurueck F2 [GRUND] [--sitzung SLUG]   # Frage ohne Entscheidung schließen
 $LP stop          # Server beenden
 ```
 

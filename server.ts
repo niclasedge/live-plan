@@ -1,9 +1,9 @@
 // live-plan (#257): der Server des Skills, nur Bun und node:-Module, ohne Paket und ohne Build.
 //
 // Liest WURZEL/REPO/.live-plan/SLUG.yaml, fuehrt daneben Verlauf (SLUG.verlauf.jsonl) und den
-// zuletzt gesehenen Stand (SLUG.stand.json), schreibt nur fragen[].entscheidung und liefert die
-// Ansicht aus ansicht/. Dazu liest er das Register der Claude-Sitzungen (LIVE_PLAN_CACHE/sitzungen,
-// S5) und reicht es als `live` mit. Die Regeln stehen rein in logik.ts. Ohne Anfrage und ohne offene
+// zuletzt gesehenen Stand (SLUG.stand.json), schreibt nur fragen[].entscheidung und (#27)
+// fragen[].zurueckgezogen und liefert die Ansicht aus ansicht/. Dazu liest er das Register der
+// Claude-Sitzungen (LIVE_PLAN_CACHE/sitzungen, S5) und reicht es als `live` mit. Die Regeln stehen rein in logik.ts. Ohne Anfrage und ohne offene
 // Verbindung beendet er sich nach LIVE_PLAN_LEERLAUF_MS (Vorgabe 60 Minuten).
 
 import { execFile } from "node:child_process";
@@ -57,6 +57,8 @@ import {
   wurzeln,
   zeilenZahl,
   zeiten,
+  zieheFrageZurueckImText,
+  zurueckGrund,
   WORKSPACE,
   type Baum,
   type Fehler,
@@ -341,12 +343,17 @@ function listeSitzungen() {
     if (!ort || !r) continue;
     const um = Number.isFinite(r.aktualisiert) ? new Date(r.aktualisiert).toISOString() : "";
     const da = eintraege.find((e) => e.repo === ort.repo && e.slug === id);
+    // Eine beendete Sitzung (#27) wartet auf niemanden mehr: ihre offenen Fragen zaehlen in der Liste
+    // nicht. Ohne Register bleibt die Zahl, eine mit `live-plan neu` angelegte Sitzung hat keines.
+    const beendet = r.beendet !== undefined;
     if (da) {
-      Object.assign(da, { pfad: ort.repoPfad, live: true, beendet: r.beendet !== undefined, geaendert: um > da.geaendert ? um : da.geaendert });
+      Object.assign(da, { pfad: ort.repoPfad, live: true, beendet, geaendert: um > da.geaendert ? um : da.geaendert });
+      if (beendet && da.offeneFragen) da.offeneFragen = 0;
       continue;
     }
     const kopf = ort.yaml ? kopfVon(ort.yaml, id) : { titel: typeof r.fortschritt?.titel === "string" && r.fortschritt.titel ? r.fortschritt.titel : id, offeneFragen: null };
-    eintraege.push({ repo: ort.repo, slug: id, ...kopf, geaendert: um, pfad: ort.repoPfad, live: true, beendet: r.beendet !== undefined });
+    if (beendet && kopf.offeneFragen) kopf.offeneFragen = 0;
+    eintraege.push({ repo: ort.repo, slug: id, ...kopf, geaendert: um, pfad: ort.repoPfad, live: true, beendet });
   }
   return eintraege.sort((a, b) => (a.geaendert < b.geaendert ? 1 : a.geaendert > b.geaendert ? -1 : 0));
 }
@@ -890,6 +897,55 @@ function setzeEntscheidung(pfad: string, frage: string, roh: string, eigen: bool
   });
 }
 
+// --- Zurueckziehen (#27) ----------------------------------------------------------------------
+
+type Zurueckziehergebnis =
+  | { art: "ok" }
+  | { art: "unbekannt" }
+  | { art: "entschieden"; entscheidung: string }
+  | { art: "nicht-aenderbar"; grund: string }
+  | { art: "fehler"; grund: string };
+
+/**
+ * Setzt `zurueckgezogen: GRUND` der Frage als eine Zeile, liest das Ergebnis gegen und schreibt
+ * atomar. Eine entschiedene Frage bleibt, wie sie ist; eine schon zurueckgezogene behaelt ihren
+ * ersten Grund. Der Grund ist begrenzt wie eine eigene Antwort (zurueckGrund: eine Zeile, hoechstens
+ * 200 Zeichen, ohne Steuer- und Bidi-Zeichen).
+ */
+function zieheZurueck(pfad: string, frage: string, roh: unknown): Promise<Zurueckziehergebnis> {
+  return inReihe(pfad, (): Zurueckziehergebnis => {
+    const text = liesSicher(pfad);
+    if (text === null) return { art: "unbekannt" };
+    let jetzt: unknown;
+    try {
+      jetzt = Bun.YAML.parse(text);
+    } catch (e) {
+      return { art: "nicht-aenderbar", grund: `YAML nicht lesbar: ${(e as Error).message.split("\n")[0]}` };
+    }
+    const f = pruefePlan(jetzt).plan.fragen.find((x) => x.id === frage);
+    if (!f) return { art: "unbekannt" };
+    if (f.entscheidung) return { art: "entschieden", entscheidung: f.entscheidung };
+    if (f.zurueckgezogen) return { art: "ok" };
+    const grund = zurueckGrund(roh);
+    const ergebnis = zieheFrageZurueckImText(text, frage, grund);
+    if (ergebnis.art === "unbekannt") return { art: "nicht-aenderbar", grund: `${frage} steht nicht als Block in der Datei` };
+    if (ergebnis.art === "fehler") return { art: "nicht-aenderbar", grund: ergebnis.grund };
+    if (ergebnis.art === "entschieden") return ergebnis;
+    let gelesen: unknown;
+    try {
+      gelesen = Bun.YAML.parse(ergebnis.text);
+    } catch (e) {
+      return { art: "fehler", grund: `Ergebnis nicht lesbar: ${(e as Error).message.split("\n")[0]}` };
+    }
+    const neu = pruefePlan(gelesen).plan.fragen.find((x) => x.id === frage);
+    if (neu?.zurueckgezogen !== grund || neu.entscheidung) {
+      return { art: "fehler", grund: `zurueckgezogen von ${frage} liesse sich nicht unveraendert zuruecklesen` };
+    }
+    schreibeAtomar(pfad, ergebnis.text);
+    return { art: "ok" };
+  });
+}
+
 // --- Einstellungen der Sprachausgabe ------------------------------------------------------------
 
 /** Die Einstellungen aus EINSTELLUNGEN; eine fehlende, kaputte oder unsichere Datei ergibt die Vorgabe. */
@@ -1318,6 +1374,27 @@ async function antworte(req: Request, server: Bun.Server): Promise<Response> {
       const ergebnis = await setzeEntscheidung(pfad, koerper.frage, koerper.wahl, koerper.eigen === true);
       if (ergebnis.art === "unbekannt") return json({ fehler: `Frage ${koerper.frage} unbekannt` }, 404);
       if (ergebnis.art === "ungueltig") return json({ fehler: ergebnis.grund }, 422);
+      if (ergebnis.art === "nicht-aenderbar") return json({ fehler: ergebnis.grund }, 409);
+      if (ergebnis.art === "fehler") return json({ fehler: ergebnis.grund }, 500);
+      await liesSitzung(pfad);
+      return json({ ok: true });
+    }
+    // Die Mod zieht eine Frage zurueck, die die Sitzung ohne Entscheidung geschlossen hat (#27).
+    if (req.method === "POST" && d === "zurueckziehen" && teile.length === 4) {
+      const art = (req.headers.get("content-type") ?? "").split(";")[0]!.trim().toLowerCase();
+      if (art !== "application/json") return json({ fehler: "Inhaltstyp application/json erwartet" }, 415);
+      const roh = await liesKoerper(req, KOERPER_HOECHSTENS);
+      if (roh === null) return json({ fehler: `Koerper groesser als ${KOERPER_HOECHSTENS} Bytes` }, 413);
+      let koerper: { frage?: unknown; grund?: unknown };
+      try {
+        koerper = JSON.parse(roh) as { frage?: unknown; grund?: unknown };
+      } catch {
+        return json({ fehler: "JSON mit frage und grund erwartet" }, 400);
+      }
+      if (typeof koerper?.frage !== "string") return json({ fehler: "frage muss Text sein" }, 400);
+      const ergebnis = await zieheZurueck(pfad, koerper.frage, koerper.grund);
+      if (ergebnis.art === "unbekannt") return json({ fehler: `Frage ${koerper.frage} unbekannt` }, 404);
+      if (ergebnis.art === "entschieden") return json({ fehler: `${koerper.frage} ist schon entschieden (${ergebnis.entscheidung})` }, 409);
       if (ergebnis.art === "nicht-aenderbar") return json({ fehler: ergebnis.grund }, 409);
       if (ergebnis.art === "fehler") return json({ fehler: ergebnis.grund }, 500);
       await liesSitzung(pfad);

@@ -2,7 +2,7 @@
 //
 // Eine Sitzung ist WURZEL/REPO/.live-plan/SLUG.yaml (Schema `v: 1`), ihre Belege liegen in
 // WURZEL/REPO/.live-plan/SLUG/. Der Agent schreibt die Datei, der Browser nur
-// `fragen[].entscheidung`. Zeitstempel schreibt niemand von Hand: der Server vergleicht jeden
+// `fragen[].entscheidung`, die Mod dazu `fragen[].zurueckgezogen`. Zeitstempel schreibt niemand von Hand: der Server vergleicht jeden
 // gelesenen Stand mit dem zuletzt gesehenen (`vergleiche`) und fuehrt daraus den Verlauf, aus
 // dem `zeiten` die Uhrzeiten je Eintrag ableitet. Platte, Netz und Prozesse bleiben in
 // server.ts; hier stehen nur `node:`-Importe.
@@ -47,6 +47,11 @@ export interface Frage {
   /** Leer, solange nicht entschieden. */
   entscheidung: string;
   grund?: string;
+  /**
+   * Warum die Frage ohne Entscheidung geschlossen ist (#27): in der Sitzung abgebrochen, Sitzung
+   * beendet. Keine Entscheidung, nur: auf diese Frage wartet niemand mehr.
+   */
+  zurueckgezogen?: string;
 }
 
 /** Ein Beleg traegt genau eine Art; Pfade liegen im Belegordner der Sitzung. */
@@ -381,6 +386,8 @@ export function pruefePlan(roh: unknown): { plan: Plan; fehler: Fehler[] } {
     };
     const grund = text(eintrag.grund, `${pfad}.grund`, false);
     if (grund) frage.grund = grund;
+    const zurueck = text(eintrag.zurueckgezogen, `${pfad}.zurueckgezogen`, false);
+    if (zurueck?.trim()) frage.zurueckgezogen = zurueck;
     plan.fragen.push(frage);
   });
 
@@ -763,7 +770,7 @@ export interface Verlaufseintrag {
 export type Eintragsart = "anforderung" | "entscheidung" | "doku";
 
 const SCHRITT_FELDER = ["status", "titel", "bahn", "welle", "art", "agent", "plan", "fertig_wenn", "haengt", "umsetzung"] as const;
-const FRAGE_FELDER = ["frage", "optionen", "blockiert", "entscheidung", "grund"] as const;
+const FRAGE_FELDER = ["frage", "optionen", "blockiert", "entscheidung", "grund", "zurueckgezogen"] as const;
 const ANFORDERUNG_FELDER = ["text", "quelle", "erfuellt_mit", "beweis"] as const;
 const ENTSCHEIDUNG_FELDER = ["titel", "grund", "quelle", "schritte"] as const;
 
@@ -1485,9 +1492,17 @@ function juengsteZuerst<T extends { id: string }>(liste: T[], z: Zeiten): T[] {
     .map((x) => x.e);
 }
 
-/** Offen ist eine Frage ohne entscheidung, auch eine aus AskUserQuestion oder Sprengradius (die Mod schreibt sie in die YAML). */
+/**
+ * Offen ist eine Frage ohne entscheidung, die nicht zurueckgezogen ist, auch eine aus AskUserQuestion
+ * oder Sprengradius (die Mod schreibt sie in die YAML). Die Ansicht und das Band der Mod rechnen gleich.
+ */
+export const frageOffen = (f: Frage): boolean => !f.entscheidung && !f.zurueckgezogen;
+
+/** Der Zustand einer Frage im Spurbild und im Ablauf: zurueckgezogen ist verworfen. */
+const frageStatus = (f: Frage): "offen" | "entschieden" | "verworfen" => (f.entscheidung ? "entschieden" : f.zurueckgezogen ? "verworfen" : "offen");
+
 export function offeneFragen(plan: Plan): string[] {
-  return plan.fragen.filter((f) => !f.entscheidung).map((f) => f.id);
+  return plan.fragen.filter(frageOffen).map((f) => f.id);
 }
 
 /** Zahl der offenen Fragen fuer die Liste; null, wenn die Datei kein YAML-Objekt ist (kaputt, halb geschrieben, leer). */
@@ -1611,7 +1626,7 @@ export function spurbild(plan: Plan, z: Zeiten): Spurbild {
   type Roh = Omit<SpurPunkt, "x" | "y">;
   const roh: Roh[] = [];
   for (const f of plan.fragen) {
-    const p: Roh = { id: f.id, art: "frage", status: f.entscheidung ? "entschieden" : "offen", titel: f.frage, welle: welleDerFrage(f), zeile: "fragen", label: f.id };
+    const p: Roh = { id: f.id, art: "frage", status: frageStatus(f), titel: f.frage, welle: welleDerFrage(f), zeile: "fragen", label: f.id };
     if (zuletzt === f.id) Object.assign(p, { zuletzt: true, um: z.zuletzt!.um, uhr: uhrzeit(z.zuletzt!.um) });
     roh.push(p);
   }
@@ -1654,7 +1669,7 @@ export function spurbild(plan: Plan, z: Zeiten): Spurbild {
   punkte.sort((a, b) => reihenfolge.get(a.id)! - reihenfolge.get(b.id)!);
 
   const zeilen: SpurZeile[] = zeilenIds.map((zid, i) => {
-    if (zid === "fragen") return { id: zid, name: "Fragen", y: zeileY(i), fertig: plan.fragen.filter((f) => f.entscheidung).length, gesamt: plan.fragen.length };
+    if (zid === "fragen") return { id: zid, name: "Fragen", y: zeileY(i), fertig: plan.fragen.filter((f) => !frageOffen(f)).length, gesamt: plan.fragen.length };
     const alle = plan.schritte.filter((s) => s.bahn === zid);
     return { id: zid, name: plan.bahnen[i - 1]!.name, y: zeileY(i), fertig: alle.filter((s) => s.status === "fertig").length, gesamt: alle.length };
   });
@@ -1867,7 +1882,7 @@ export function prozessLayout(plan: Plan): Prozess {
     let fy = ziele.length ? Math.min(...ziele) : (zeileY[0] ?? P.kopf);
     while (belegt.has(fy)) fy += P.knotenH + 10;
     belegt.add(fy);
-    const k: ProzessKnoten = { id: f.id, art: "frage", status: f.entscheidung ? "entschieden" : "offen", spalte: -1, zeile: -1, x: P.rand, y: fy, w: P.fragenB - 14, h: P.knotenH };
+    const k: ProzessKnoten = { id: f.id, art: "frage", status: frageStatus(f), spalte: -1, zeile: -1, x: P.rand, y: fy, w: P.fragenB - 14, h: P.knotenH };
     knoten.push(k);
     pos.set(f.id, k);
   }
@@ -2290,12 +2305,19 @@ function schluesselIn(zeilen: string[], von: number, bis: number, spalte: number
   return gefunden;
 }
 
-/**
- * Setzt `entscheidung` der Frage `frage` als Aenderung genau einer Zeile: Kommentare, Reihenfolge
- * und jedes andere Byte bleiben. Fehlt der Schluessel, kommt eine Zeile ans Ende des Frageblocks.
- * Was sich nicht sicher als Blockliste lesen laesst, ist ein Fehler, keine Vermutung.
- */
-export function setzeEntscheidungImText(text: string, frage: string, wahl: string): Textergebnis {
+/** Eine Frage im Text: ihre Zeilen, wo ihr Block liegt, die Einrueckung ihrer Schluessel und die Schluessel selbst. */
+interface Frageblock {
+  frage: string;
+  zeilen: string[];
+  anfang: number;
+  /** Erste Zeile hinter dem Block. */
+  ende: number;
+  spalte: number;
+  schluessel: Map<string, Schluessel>;
+}
+
+/** Sucht die Frage `frage` als Block in der Liste `fragen:`. Was sich nicht sicher als Blockliste lesen laesst, ist ein Fehler. */
+function frageBlock(text: string, frage: string): { art: "ok"; block: Frageblock } | { art: "unbekannt" } | { art: "fehler"; grund: string } {
   if (text.includes("\r")) return { art: "fehler", grund: "Zeilenende CRLF: die Datei wird nicht zeilenweise geaendert, bitte LF verwenden" };
   const zeilen = text.split("\n");
   const kopf = zeilen.findIndex((z) => /^fragen:\s*(#.*)?$/.test(z));
@@ -2317,7 +2339,7 @@ export function setzeEntscheidungImText(text: string, frage: string, wahl: strin
 
   let flow = false;
   for (const [n, anfang] of anfaenge.entries()) {
-    let blockEnde = n + 1 < anfaenge.length ? anfaenge[n + 1]! : ende;
+    const blockEnde = n + 1 < anfaenge.length ? anfaenge[n + 1]! : ende;
     const strich = zeilen[anfang]!.slice(listenSpalte + 1);
     const nachStrich = strich.length - strich.trimStart().length;
     if (/^[{[]/.test(strich.trimStart())) {
@@ -2338,29 +2360,99 @@ export function setzeEntscheidungImText(text: string, frage: string, wahl: strin
     const schluessel = schluesselIn(zeilen, anfang, blockEnde, spalte, erste);
     const id = schluessel.get("id");
     if (!id || skalarText(zeilen[id.zeile]!, id.wertAb) !== frage) continue;
-
-    const wert = yamlWert(wahl);
-    const alt = schluessel.get("entscheidung");
-    if (alt) {
-      const zeile = zeilen[alt.zeile]!;
-      const b = wertBereich(zeile, alt.wertAb);
-      const folgt = zeilen[alt.zeile + 1];
-      if (!b || (folgt !== undefined && alt.zeile + 1 < blockEnde && !leerOderKommentar(folgt) && einzug(folgt) > spalte)) {
-        return { art: "fehler", grund: `entscheidung von ${frage} ist kein einzeiliger Wert` };
-      }
-      const trenner = b.von === alt.wertAb ? " " : "";
-      const rest = zeile.slice(b.bis);
-      // Stand vor dem Kommentar kein Wert, fehlt sonst das Leerzeichen: `Bei Bedarf# offen` laese YAML als einen Wert.
-      const abstand = rest.startsWith("#") ? " " : "";
-      zeilen[alt.zeile] = zeile.slice(0, b.von) + trenner + wert + abstand + rest;
-      return { art: "ok", text: zeilen.join("\n") };
-    }
-    while (blockEnde > anfang + 1 && leerOderKommentar(zeilen[blockEnde - 1]!)) blockEnde--;
-    zeilen.splice(blockEnde, 0, `${" ".repeat(spalte)}entscheidung: ${wert}`);
-    return { art: "ok", text: zeilen.join("\n") };
+    return { art: "ok", block: { frage, zeilen, anfang, ende: blockEnde, spalte, schluessel } };
   }
   if (flow) return { art: "fehler", grund: "eine Frage steht in Flow-Form ({...}); nur Blockform ist zeilenweise aenderbar" };
   return { art: "unbekannt" };
+}
+
+/** Der einzeilige Wert von `feld` als Text; null, wenn er sich nicht so lesen laesst. Ohne Wert, `null` und `~` sind leer, wie YAML sie liest. */
+function feldText(block: Frageblock, feld: string): string | null {
+  const s = block.schluessel.get(feld);
+  if (!s) return "";
+  const zeile = block.zeilen[s.zeile]!;
+  const b = wertBereich(zeile, s.wertAb);
+  const folgt = block.zeilen[s.zeile + 1];
+  if (!b || (folgt !== undefined && s.zeile + 1 < block.ende && !leerOderKommentar(folgt) && einzug(folgt) > block.spalte)) return null;
+  if (/^(?:null|Null|NULL|~)?$/.test(zeile.slice(b.von, b.bis))) return "";
+  return skalarText(zeile, s.wertAb);
+}
+
+/**
+ * Setzt `feld` als Aenderung genau einer Zeile: Kommentare, Reihenfolge und jedes andere Byte
+ * bleiben. Fehlt der Schluessel, kommt eine Zeile ans Ende des Frageblocks.
+ */
+function setzeFeld(block: Frageblock, feld: string, wert: string): Textergebnis {
+  const { zeilen, spalte } = block;
+  const alt = block.schluessel.get(feld);
+  if (alt) {
+    const zeile = zeilen[alt.zeile]!;
+    const b = wertBereich(zeile, alt.wertAb);
+    const folgt = zeilen[alt.zeile + 1];
+    if (!b || (folgt !== undefined && alt.zeile + 1 < block.ende && !leerOderKommentar(folgt) && einzug(folgt) > spalte)) {
+      return { art: "fehler", grund: `${feld} von ${block.frage} ist kein einzeiliger Wert` };
+    }
+    const trenner = b.von === alt.wertAb ? " " : "";
+    const rest = zeile.slice(b.bis);
+    // Stand vor dem Kommentar kein Wert, fehlt sonst das Leerzeichen: `Bei Bedarf# offen` laese YAML als einen Wert.
+    const abstand = rest.startsWith("#") ? " " : "";
+    zeilen[alt.zeile] = zeile.slice(0, b.von) + trenner + wert + abstand + rest;
+    return { art: "ok", text: zeilen.join("\n") };
+  }
+  let blockEnde = block.ende;
+  while (blockEnde > block.anfang + 1 && leerOderKommentar(zeilen[blockEnde - 1]!)) blockEnde--;
+  zeilen.splice(blockEnde, 0, `${" ".repeat(spalte)}${feld}: ${wert}`);
+  return { art: "ok", text: zeilen.join("\n") };
+}
+
+/**
+ * Setzt `entscheidung` der Frage `frage` als Aenderung genau einer Zeile: Kommentare, Reihenfolge
+ * und jedes andere Byte bleiben. Fehlt der Schluessel, kommt eine Zeile ans Ende des Frageblocks.
+ * Was sich nicht sicher als Blockliste lesen laesst, ist ein Fehler, keine Vermutung.
+ */
+export function setzeEntscheidungImText(text: string, frage: string, wahl: string): Textergebnis {
+  const gefunden = frageBlock(text, frage);
+  if (gefunden.art !== "ok") return gefunden;
+  return setzeFeld(gefunden.block, "entscheidung", yamlWert(wahl));
+}
+
+/** Hoechstens so viele Zeichen (Codepoints) hat der Grund einer zurueckgezogenen Frage. */
+export const GRUND_HOECHSTENS = 200;
+
+/**
+ * Der Grund, wie er in die Datei kommt: eine Zeile, Steuer- und Bidi-Zeichen und einzelne
+ * Surrogate entfernt, Leerraum zusammengezogen, hoechstens 200 Zeichen. Ohne Text: `ohne Angabe`.
+ */
+export function zurueckGrund(roh: unknown): string {
+  if (typeof roh !== "string") return "ohne Angabe";
+  const zeile = roh
+    .replace(/[\p{Cc}\u0085\u2028\u2029]/gu, " ")
+    .replace(/[\u202A-\u202E\u2066-\u2069]|\p{Cs}/gu, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  const kurz = [...zeile].slice(0, GRUND_HOECHSTENS).join("").trim();
+  return kurz || "ohne Angabe";
+}
+
+/** Was das Zurueckziehen ergibt: wie beim Entscheiden, dazu eine schon entschiedene Frage, die bleibt, wie sie ist. */
+export type Zurueckergebnis = Textergebnis | { art: "entschieden"; entscheidung: string };
+
+/**
+ * Zieht die Frage `frage` zurueck (#27): `zurueckgezogen: GRUND` als eine Zeile, jedes andere Byte
+ * bleibt. Eine entschiedene Frage wird nicht zurueckgezogen; eine schon zurueckgezogene behaelt
+ * ihren ersten Grund (der Text kommt unveraendert zurueck).
+ */
+export function zieheFrageZurueckImText(text: string, frage: string, grund: string): Zurueckergebnis {
+  const gefunden = frageBlock(text, frage);
+  if (gefunden.art !== "ok") return gefunden;
+  const { block } = gefunden;
+  const entscheidung = feldText(block, "entscheidung");
+  if (entscheidung === null) return { art: "fehler", grund: `entscheidung von ${frage} ist kein einzeiliger Wert` };
+  if (entscheidung !== "") return { art: "entschieden", entscheidung };
+  const schon = feldText(block, "zurueckgezogen");
+  if (schon === null) return { art: "fehler", grund: `zurueckgezogen von ${frage} ist kein einzeiliger Wert` };
+  if (schon.trim() !== "") return { art: "ok", text };
+  return setzeFeld(block, "zurueckgezogen", yamlWert(zurueckGrund(grund)));
 }
 
 // --- Fragen-Kanal: Fragen anhaengen (Vertrag v3, A1) ------------------------------------------
@@ -2520,7 +2612,7 @@ export function kurzStand(plan: Plan): string {
   const offen = plan.stand?.offen ?? [];
   const blattJetzt = offen.find((b) => b.gate === "jetzt");
   if (blattJetzt) z.push(`Jetzt: ${kuerze(einzeilig(blattJetzt.text), 200)}${blattJetzt.befehl ? ` (${kuerze(einzeilig(blattJetzt.befehl), 120)})` : ""}`);
-  const fragen = plan.fragen.filter((f) => !f.entscheidung);
+  const fragen = plan.fragen.filter(frageOffen);
   if (fragen.length > 0) {
     z.push("Offene Fragen:");
     for (const f of fragen) {

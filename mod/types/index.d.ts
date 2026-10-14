@@ -8,7 +8,7 @@ export type LivePlanSitzungBand = {
   repo: string
   slug: string
   titel: string
-  // Open questions of the plan (no `entscheidung` yet), in plan order.
+  // Open questions of the plan (no `entscheidung` yet, not `zurueckgezogen`), in plan order.
   fragen: LivePlanSitzungFrage[]
   // Steps of the plan, or the flow reported through `progress` when the plan has none.
   schritte: { fertig: number; gesamt: number }
