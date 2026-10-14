@@ -120,6 +120,11 @@ Eine kaputte oder fehlende YAML gilt als Vorgabe (aus, deutsche Stimme). Die Sti
 sie nicht, spricht er mit seiner ersten deutschen Stimme. Browser sprechen erst nach einem Klick auf die Seite; bis
 dahin steht bei Vorlesen an ein Hinweis neben ⚙ und neue Ansagen werden nur gelistet. Weil die Seite ohne Anmeldung
 im LAN erreichbar ist, liest dort jeder die Ansagen mit und kann Vorlesen und Stimme umstellen.
+Auf jeder Sitzungsseite gilt dasselbe: Vorlesen und Stimme wirken dort genauso, und neue Ansagen aller Sitzungen werden
+vorgelesen. Oben unter dem Kopf steht die Leiste **Ansagen** mit den letzten fünf Ansagen aus allen Sitzungen, neueste
+zuerst. ▶ liest eine davon sofort vor; die Zeilen der geöffneten Sitzung sind hervorgehoben. Das Menü ⚙ in der Leiste
+ist das der Übersicht. Eine neue Ansage zeichnet nur die Leiste neu, nicht den Plan. Das Handout (`?handout=1`) bleibt
+ohne Leiste und ohne Ansagen.
 Tests: `node --test ansagen.test.ts liste.test.ts server.test.ts` (brauchen bun), Mod: `claude plugin test mod`.
 
 ## Firstmate-Cockpit

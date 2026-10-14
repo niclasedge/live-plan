@@ -35,6 +35,7 @@ interface Ansicht {
   ansageZelle: (a: unknown) => string;
   letzteAnsagen: (liste: unknown) => Record<string, { zeit: number }>;
   einstellungenMenue: (z: unknown) => string;
+  ansageLeiste: (z: unknown) => string;
   stimmenListe: (stimmen: unknown) => { name: string; lang: string }[];
   stimmeWahl: (stimmen: unknown, name: unknown) => { name: string } | null;
   tonFreischalten: (sprache: unknown, aeusserung: unknown) => void;
@@ -166,4 +167,68 @@ test("Stimmen: deutsche zuerst ohne Doppel; gespeicherter Name, sonst die erste 
   const fehlt = a.einstellungenMenue({ ...MENUE, stimmen: STIMMEN, stimme: "Hal" });
   assert.match(fehlt, /<option value="" selected>Standard/);
   assert.match(fehlt, /„Hal“ fehlt in diesem Browser, es gilt die deutsche Vorgabe\./);
+});
+
+const LEISTE = (ansagen: unknown[], extra: Record<string, unknown> = {}) => ({ ansagen, eigenesRepo: null, eigeneId: null, menue: MENUE, ...extra });
+
+test("ansageLeiste: hoechstens fuenf Zeilen bei sieben Ansagen, die neueste zuerst", () => {
+  const a = ansicht();
+  a.setzeJetzt(JETZT);
+  const sieben = [1, 2, 3, 4, 5, 6, 7].map((min) => ANSAGE(min, { id: `s-${min}` }));
+  const html = a.ansageLeiste(LEISTE(sieben));
+  assert.equal((html.match(/<li class="an-zeile/g) ?? []).length, 5);
+  const zeiten = [...html.matchAll(/data-ansage="(\d+)"/g)].map((m) => Number(m[1]));
+  assert.deepEqual(zeiten, [1, 2, 3, 4, 5].map((min) => JETZT - min * 60_000));
+});
+
+test("ansageLeiste: je Zeile ▶ mit der Zeit, Uhrzeit, Repo und Text; Text und Repo escaped", () => {
+  const a = ansicht();
+  a.setzeJetzt(JETZT);
+  const html = a.ansageLeiste(LEISTE([ANSAGE(5, { repo: "firstmate", text: 'Fertig, "PR" <offen>.' })]));
+  assert.match(html, new RegExp(`<button type="button" class="an-spiel" data-ansage="${JETZT - 300_000}" aria-label="Ansage vorlesen: firstmate 15:25">▶</button>`));
+  assert.match(html, /<span class="an-uhr mono">15:25<\/span>/);
+  assert.match(html, /<b class="an-repo">firstmate<\/b>/);
+  assert.match(html, /<span class="an-text" title="Fertig, &quot;PR&quot; &lt;offen&gt;\.">Fertig, &quot;PR&quot; &lt;offen&gt;\.<\/span>/);
+});
+
+test("ansageLeiste: eigene Sitzung hervorgehoben, fremde nicht (Repo und Id zusammen)", () => {
+  const a = ansicht();
+  a.setzeJetzt(JETZT);
+  const ansagen = [ANSAGE(1, { id: "s-x", repo: "ops-lab" }), ANSAGE(2, { id: "s-1", repo: "live-plan" }), ANSAGE(3, { id: "s-1", repo: "anderes" })];
+  const html = a.ansageLeiste(LEISTE(ansagen, { eigenesRepo: "live-plan", eigeneId: "s-1" }));
+  const zeilen = html.split('<li class="an-zeile').slice(1);
+  assert.deepEqual(zeilen.map((z) => z.startsWith(" an-eigen")), [false, true, false]);
+});
+
+test("ansageLeiste: langer Text gekuerzt mit Ellipse, der volle Text im title", () => {
+  const a = ansicht();
+  a.setzeJetzt(JETZT);
+  const lang = "Wort ".repeat(60).trim();
+  const html = a.ansageLeiste(LEISTE([ANSAGE(1, { text: lang })]));
+  const kurz = /<span class="an-text" title="[^"]*">([^<]*)<\/span>/.exec(html)![1]!;
+  assert.equal(Array.from(kurz).length, 90);
+  assert.ok(kurz.endsWith("…"));
+  assert.match(html, new RegExp(`title="${lang}"`));
+  assert.match(a.ansageLeiste(LEISTE([ANSAGE(1, { text: "Kurz." })])), /<span class="an-text" title="Kurz\.">Kurz\.<\/span>/);
+});
+
+test("ansageLeiste: <script> im Text und im Repo wird escaped", () => {
+  const a = ansicht();
+  a.setzeJetzt(JETZT);
+  const html = a.ansageLeiste(LEISTE([ANSAGE(1, { repo: "<img src=x>", text: "<script>alert(1)</script>" })]));
+  assert.doesNotMatch(html, /<script/);
+  assert.doesNotMatch(html, /<img/);
+  assert.match(html, /&lt;script&gt;alert\(1\)&lt;\/script&gt;/);
+  assert.match(html, /&lt;img src=x&gt;/);
+});
+
+test("ansageLeiste: ohne Ansage der Leerzustand; Kopf mit ⚙-Menue und Hinweis vor dem ersten Klick", () => {
+  const a = ansicht();
+  const html = a.ansageLeiste(LEISTE([], { menue: { ...MENUE, auf: false, frei: false } }));
+  assert.match(html, /^<section class="an-leiste" data-testid="ansagen-leiste">/);
+  assert.match(html, /<h2>Ansagen<\/h2>/);
+  assert.match(html, /<p class="an-leer">Noch keine Ansage\.<\/p>/);
+  assert.doesNotMatch(html, /<li/);
+  assert.match(html, /data-einst-auf aria-expanded="false"/);
+  assert.match(html, /an-hinweis">Ein Klick auf die Seite schaltet den Ton frei\./);
 });

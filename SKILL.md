@@ -283,6 +283,9 @@ Saetze und 600 Zeichen. Alle Ansagen stehen in `${LIVE_PLAN_CACHE:-~/.cache/live
 `GET /api/ereignisse` meldet jede neue. In der Tabelle der Uebersicht steht je Sitzung ▶ mit der Uhrzeit ihrer
 neuesten Ansage; Vorlesen an/aus und die Stimme stehen im Menue ⚙ und zentral in
 `${LIVE_PLAN_CACHE:-~/.cache/live-plan}/einstellungen.yaml` (`GET`/`POST /api/einstellungen`).
+Auf jeder Sitzungsseite gilt dasselbe: neue Ansagen aller Sitzungen werden dort ebenfalls vorgelesen, und oben
+unter dem Kopf steht die Leiste Ansagen mit den letzten fuenf, neueste zuerst; die Zeilen der eigenen Sitzung
+sind hervorgehoben.
 
 ## Grenzen
 
