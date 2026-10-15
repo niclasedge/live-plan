@@ -14,8 +14,9 @@
 // from tool.call on Read/Edit/Write/NotebookEdit/Grep/Glob.
 //
 // Ansagen: at the end of each answered turn of the main session the final answer goes to
-// `live-plan sage --auto` on stdin; the script cleans and shortens it, skips a trivial one and one
-// the session already announced itself this turn, and appends it to LIVE_PLAN_CACHE/ansagen.jsonl.
+// `live-plan sage --auto` on stdin; the script cleans it (code blocks fall away), keeps the whole text
+// up to 8000 characters, skips a trivial one and one the session already announced itself this turn,
+// and appends it to LIVE_PLAN_CACHE/ansagen.jsonl.
 
 import type { EngineInterface, PluginOptions, Register, SessionRateLimit, SessionUsage } from 'claude-code'
 import { fragenRegistrieren, sprengradiusRegistrieren } from './fragen'
@@ -118,7 +119,7 @@ const DATEI_WERKZEUGE = new Map<string, Art>([
   ['NotebookEdit', 'geschrieben'],
 ])
 const TAKT_MS = 1000
-// What of a turn's answer goes to `sage --auto`; the script keeps the first sentences only.
+// What of a turn's answer goes to `sage --auto`; the script keeps its whole spoken text, up to 8000 characters.
 const ANTWORT_HOECHSTENS = 20_000
 
 // ---------------------------------------------------------------------------
@@ -438,14 +439,19 @@ async function neuAuto($: EngineInterface, s: Sitzung): Promise<void> {
 
 // `bun <skript> sage --auto` with the turn's answer on stdin; `--seit` is the turn's start, so an
 // announcement the session made itself during the turn (`live-plan sage`) replaces this one.
+// `run` resolves for any exit code: a failed save (the lock stayed taken) shows as a toast, with the
+// script's own `live-plan: …` line from stderr, else its exit code.
 async function ansageAuto($: EngineInterface, s: Sitzung, antwort: string, dauerMs: number): Promise<void> {
   const skript = await skriptDa($)
   if (!skript) return
   const seit = (await $.clock.now()) - Math.max(0, dauerMs) - 1000
-  await $.process.run(
+  const r = await $.process.run(
     ['bun', skript, 'sage', '--auto', '--id', s.id, '--seit', String(Math.round(seit)), ...(s.repo ? ['--repo', s.repo] : [])],
     { cwd: s.wurzel ?? s.cwd, stdin: antwort.slice(0, ANTWORT_HOECHSTENS), timeoutMs: 30_000 },
   )
+  if (r.exitCode === 0) return
+  const meldung = r.stderr.split('\n').map(z => z.trim()).find(z => z.startsWith('live-plan:'))
+  $.ui.toast(meldung ?? `live-plan: sage --auto endete mit Exit ${r.exitCode}, die Ansage fehlt`)
 }
 
 async function werkzeugeAnmelden($: EngineInterface): Promise<void> {

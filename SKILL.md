@@ -294,11 +294,12 @@ schreibt dafuer nichts.
 
 ## Ansagen
 
-Die Uebersicht `http://localhost:4410/` liest am Ende eines Zugs eine kurze Zusammenfassung vor, aus allen
+Die Uebersicht `http://localhost:4410/` liest am Ende eines Zugs dessen Antwort vor, aus allen
 Sitzungen, vorneweg das Repo ("live-plan: ..."). Ohne Ihr Zutun macht das die Mod `live-plan-sitzung`: sie gibt
 die letzte Antwort der Hauptsitzung an `live-plan sage --auto`, das Markdown, Links, URLs und Codebloecke
-entfernt und die ersten drei Saetze (hoechstens 300 Zeichen) nimmt; eine Antwort unter vier Woertern
-("Captain, shipshape.") faellt weg. Wollen Sie selbst formulieren, sagen Sie im selben Zug an:
+entfernt und den ganzen uebrigen Text nimmt (hoechstens 8000 Zeichen, ein laengerer endet am letzten ganzen Satz
+davor, ein riesiger Satz an einer Wortgrenze mit "…"); eine Antwort unter vier Woertern ("Captain, shipshape.") faellt weg. Wollen Sie selbst formulieren, sagen
+Sie im selben Zug an:
 
 ```bash
 $LP sage "Der Umbau ist fertig, alle Tests gruen. Der PR wartet auf Ihr Review."
@@ -313,7 +314,8 @@ neuesten Ansage; Vorlesen an/aus und die Stimme stehen im Menue ⚙ und zentral 
 `${LIVE_PLAN_CACHE:-~/.cache/live-plan}/einstellungen.yaml` (`GET`/`POST /api/einstellungen`).
 Auf jeder Sitzungsseite gilt dasselbe: neue Ansagen aller Sitzungen werden dort ebenfalls vorgelesen, und oben
 unter dem Kopf steht die Leiste Ansagen mit den letzten fuenf, neueste zuerst; die Zeilen der eigenen Sitzung
-sind hervorgehoben. Mehrere Tabs teilen sich die Verbindung: einer haelt `GET /api/ereignisse`, die anderen bekommen
+sind hervorgehoben. Der Text einer Zeile steht ganz darin, eingeklappt auf zwei Zeilen; Klick oder Enter klappt ihn
+auf. Mehrere Tabs teilen sich die Verbindung: einer haelt `GET /api/ereignisse`, die anderen bekommen
 Aenderungen ueber einen BroadcastChannel. Vorgelesen wird nur im Sprecher-Tab (der zuletzt bediente, ohne Sprecher der Leiter-Tab), jede Ansage genau einmal.
 Ohne Web Locks (z. B. LAN-IP, Tailscale, `.local` oder ohne sicheren Kontext) lauscht jeder Tab selbst; gesprochen wird
 dann nur im zuletzt geklickten Tab, und schliesst der, schweigt es bis zum naechsten Klick oder Tabwechsel. Dort hat
@@ -321,13 +323,16 @@ jeder Sitzungstab zwei Dauerverbindungen; ab etwa drei Sitzungstabs stockt der B
 `localhost` (`live-plan open`) zeigte sich das in unseren Laeufen nicht. Siehe #20.
 
 Die Steuerung der Ansagen (Uebersicht und Leiste): hinter der Uhrzeit steht die geschaetzte Dauer in Klammern, etwa
-`(≈ 5 s)`. Sie rechnet aus der Textlaenge geteilt durch die Zeichen je Sekunde dieses Browsers (Vorgabe 14); jede
+`(≈ 5 s)`. Sie rechnet aus der Laenge des gesprochenen Textes (Repo und ganzer Text) geteilt durch die Zeichen je
+Sekunde dieses Browsers (Vorgabe 14); jede
 regulaer zu Ende gesprochene Ansage verschiebt den Wert gleitend auf das gemessene Tempo (0,7 alt, 0,3 neu). Der Wert
 liegt im localStorage des Browsers (`live-plan.zeichen-je-sekunde`), nicht in einer Datei. ▶ spielt eine Zeile sofort
 ab; laeuft sie, zeigt sie ⏸ (Klick haelt an), pausiert zeigt sie ▶ (Klick setzt fort). ⏹ Stopp erscheint neben ⚙,
 solange etwas spricht, pausiert ist oder wartet, und bricht ab und leert die Warteschlange. Die Steuerung gilt nur im
 Tab, der gerade spricht: nur dort stehen ⏸ und ⏹. Die anderen Tabs zeigen nur ▶; ein Klick dort startet in jenem Tab
 eine eigene Ausgabe. In der Leiste fuehrt der Repo-Name zur Sitzung, die eigene ist mit aria-current markiert.
+Eine lange Ansage geht in Teilen von etwa 10 s beim gemessenen Tempo (80 bis 250 Zeichen) in die Warteschlange
+(Chrome bricht eine einzelne Aeusserung nach etwa 15 s ab); ⏸, ▶ und ⏹ gelten fuer die ganze Ansage.
 
 ## Grenzen
 

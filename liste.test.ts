@@ -32,6 +32,8 @@ test("offeneFragenZahl: kein YAML-Objekt gibt keine Zahl", () => {
 interface Ansicht {
   fragenZelle: (zahl: unknown, href: string) => string;
   ansageSprechtext: (a: unknown) => string;
+  sprechTeile: (text: unknown, zeichen?: number) => string[];
+  teilZeichen: (zps?: number) => number;
   ansageDauer: (a: unknown, zps?: number) => number;
   dauerText: (s: number) => string;
   ansageZelle: (a: unknown, laeuft?: unknown, zps?: number) => string;
@@ -105,6 +107,53 @@ test("ansageSprechtext: erst das Repo, dann der Text", () => {
   const { ansageSprechtext } = ansicht();
   assert.equal(ansageSprechtext({ repo: "firstmate", text: "Der PR ist offen." }), "firstmate: Der PR ist offen.");
   assert.equal(ansageSprechtext({ repo: "", text: "Der PR ist offen." }), "Der PR ist offen.");
+});
+
+// Chrome bricht eine einzelne Aeusserung mit Netzstimmen nach etwa 15 s ab; eine lange Ansage spricht darum in Teilen.
+// Die Felder kommen aus dem vm-Kontext; `[...x]` macht daraus Felder dieses Kontexts, sonst scheitert deepEqual am Prototyp.
+test("sprechTeile: kurz bleibt ein Teil; lang in ganze Saetze bis 200 Zeichen, ohne Text zu verlieren", () => {
+  const { sprechTeile } = ansicht();
+  assert.deepEqual([...sprechTeile("r: Kurz.")], ["r: Kurz."]);
+  assert.deepEqual([...sprechTeile("")], [""]);
+  const satz = "Dieser Satz ist einer von vielen in einer langen Ansage am Ende des Zugs.";
+  const lang = Array.from({ length: 40 }, () => satz).join(" ");
+  const teile = sprechTeile(lang, 200);
+  assert.ok(teile.length >= 15, String(teile.length));
+  for (const t of teile) {
+    assert.ok(Array.from(t).length <= 200, t);
+    assert.ok(t.endsWith(satz), t);
+  }
+  assert.equal(teile.join(" "), lang);
+});
+
+test("sprechTeile: ein zu langer Satz am Komma oder an einer Wortgrenze, ein Wort ueber der Grenze hart; z. B. trennt nicht", () => {
+  const { sprechTeile } = ansicht();
+  const komma = "eins zwei drei vier, ".repeat(20).trim();
+  const k = sprechTeile(komma, 200);
+  assert.ok(k.length >= 3, String(k.length));
+  for (const t of k) assert.ok(t.length <= 200 && t.endsWith(","), t);
+  assert.equal(k.join(" "), komma);
+  const woerter = `Das gilt z. B. für ${"wort ".repeat(80)}ende.`;
+  const w = sprechTeile(woerter, 200);
+  for (const t of w) {
+    assert.ok(t.length <= 200, t);
+    assert.doesNotMatch(t, /(^|\s)[zB]\.$/, t);
+  }
+  assert.equal(w.join(" "), woerter);
+  assert.deepEqual([...sprechTeile("x".repeat(450), 200)].map((t) => t.length), [200, 200, 50]);
+  assert.deepEqual([...sprechTeile("abc def ghi", 5)], ["abc", "def", "ghi"]);
+});
+
+test("teilZeichen: etwa 10 s Sprechzeit je Teil beim gemessenen Tempo, mindestens 80 und hoechstens 250 Zeichen", () => {
+  const { teilZeichen, sprechTeile } = ansicht();
+  assert.equal(teilZeichen(14), 140);
+  assert.equal(teilZeichen(), 140, "ohne Messung die Vorgabe 14 Zeichen je Sekunde");
+  assert.equal(teilZeichen(10), 100, "eine langsame Stimme bekommt kuerzere Teile");
+  assert.equal(teilZeichen(22.4), 224);
+  assert.equal(teilZeichen(4), 80, "nie kuerzer als 80");
+  assert.equal(teilZeichen(40), 250, "nie laenger als 250");
+  // Ohne Grenze teilt sprechTeile nach der Vorgabe: 140 Zeichen.
+  assert.deepEqual([...sprechTeile("x".repeat(300))].map((t) => t.length), [140, 140, 20]);
 });
 
 test("letzteAnsagen: je Sitzung (Repo und Id) die neueste, ohne Id keine", () => {
@@ -191,7 +240,7 @@ test("ansageLeiste: je Zeile ▶ mit der Zeit, Uhrzeit, Repo und Text; Text und 
   assert.match(html, new RegExp(`<button type="button" class="an-spiel" data-ansage="${JETZT - 300_000}" aria-label="Ansage vorlesen: firstmate 15:25">▶</button>`));
   assert.match(html, /<span class="an-uhr mono">15:25<\/span>/);
   assert.match(html, /<a class="an-repo" href="\/firstmate\/s-1" title="firstmate">firstmate<\/a>/);
-  assert.match(html, /<span class="an-text" title="Fertig, &quot;PR&quot; &lt;offen&gt;\.">Fertig, &quot;PR&quot; &lt;offen&gt;\.<\/span>/);
+  assert.match(html, new RegExp(`<button type="button" class="an-text" data-ansage-text="${JETZT - 300_000}" aria-expanded="false"><span>Fertig, &quot;PR&quot; &lt;offen&gt;\\.</span></button>`));
 });
 
 test("ansageLeiste: eigene Sitzung hervorgehoben ueber die Id; der Repo-Name darf aus einem Worktree abweichen", () => {
@@ -203,16 +252,20 @@ test("ansageLeiste: eigene Sitzung hervorgehoben ueber die Id; der Repo-Name dar
   assert.deepEqual(zeilen.map((z) => z.startsWith(" an-eigen")), [false, true, true]);
 });
 
-test("ansageLeiste: langer Text gekuerzt mit Ellipse, der volle Text im title", () => {
+test("ansageLeiste: der ganze Text steht in der Zeile, eingeklappt; aufgeklappt aus z.aufgeklappt; die Dauer rechnet mit dem ganzen Text (#26)", () => {
   const a = ansicht();
   a.setzeJetzt(JETZT);
-  const lang = "Wort ".repeat(60).trim();
-  const html = a.ansageLeiste(LEISTE([ANSAGE(1, { text: lang })]));
-  const kurz = /<span class="an-text" title="[^"]*">([^<]*)<\/span>/.exec(html)![1]!;
-  assert.equal(Array.from(kurz).length, 90);
-  assert.ok(kurz.endsWith("…"));
-  assert.match(html, new RegExp(`title="${lang}"`));
-  assert.match(a.ansageLeiste(LEISTE([ANSAGE(1, { text: "Kurz." })])), /<span class="an-text" title="Kurz\.">Kurz\.<\/span>/);
+  const lang = "Wort ".repeat(300).trim();
+  const x = ANSAGE(1, { text: lang });
+  const html = a.ansageLeiste(LEISTE([x]));
+  const text = /<button type="button" class="an-text" data-ansage-text="(\d+)" aria-expanded="false"><span>([^<]*)<\/span><\/button>/.exec(html)!;
+  assert.equal(Number(text[1]), x.zeit);
+  assert.equal(text[2], lang, "nicht mehr nach 90 Zeichen gekuerzt");
+  assert.doesNotMatch(html, /…/);
+  // Gesprochen wird "live-plan: " und der ganze Text, 1510 Zeichen; bei 14 je Sekunde 108 s.
+  assert.match(html, /<span class="an-dauer">\(≈ 1:48 min\)<\/span>/);
+  const auf = a.ansageLeiste(LEISTE([x, ANSAGE(2)], { aufgeklappt: { [x.zeit]: true } }));
+  assert.deepEqual([...auf.matchAll(/data-ansage-text="(\d+)" aria-expanded="(true|false)"/g)].map((m) => [Number(m[1]), m[2]]), [[x.zeit, "true"], [JETZT - 120_000, "false"]]);
 });
 
 test("ansageLeiste: <script> im Text und im Repo wird escaped", () => {
@@ -290,7 +343,7 @@ test("ansageLeiste: vier Zellen je Zeile (Knopf, Zeit mit Dauer, Repo, Text), da
   const a = ansicht();
   a.setzeJetzt(JETZT);
   const html = a.ansageLeiste(LEISTE([ANSAGE(5, { repo: "Muster-Werkstatt-Archiv1", text: "Kurz." })]));
-  assert.match(html, /<li class="an-zeile"><button [^>]*>▶<\/button><span class="an-zeit"><span class="an-uhr mono">15:25<\/span> <span class="an-dauer">\(≈ \d+ s\)<\/span><\/span><a class="an-repo" href="\/Muster-Werkstatt-Archiv1\/s-1" title="Muster-Werkstatt-Archiv1">Muster-Werkstatt-Archiv1<\/a><span class="an-text" title="Kurz\.">Kurz\.<\/span><\/li>/);
+  assert.match(html, /<li class="an-zeile"><button [^>]*>▶<\/button><span class="an-zeit"><span class="an-uhr mono">15:25<\/span> <span class="an-dauer">\(≈ \d+ s\)<\/span><\/span><a class="an-repo" href="\/Muster-Werkstatt-Archiv1\/s-1" title="Muster-Werkstatt-Archiv1">Muster-Werkstatt-Archiv1<\/a><button type="button" class="an-text" data-ansage-text="\d+" aria-expanded="false"><span>Kurz\.<\/span><\/button><\/li>/);
 });
 
 test("ansageLeiste: der Repo-Name verweist auf die Sitzung, die eigene mit aria-current; ohne Id oder Repo bleibt er Text", () => {
@@ -379,9 +432,9 @@ test("sollSprechen: ohne localStorage (sprecher und gesprochenBis null) entschei
 /** Eine Aeusserung der Attrappe: der Text und die Ereignisse, die der Browser ihr gibt (der Code setzt sie). */
 interface Aeusserung { text: string; onstart?: () => void; onend?: () => void; onerror?: () => void }
 
-/** Ein Klick-Ereignis wie vom Browser: ein Ziel, das `closest` fuer die Ansage-Auswahl kennt, mit den Attributen `attrs`. */
+/** Ein Klick-Ereignis wie vom Browser: ein Ziel, das `closest` fuer die Ansage-Auswahl kennt, mit den Attributen `attrs` (setAttribute schreibt hinein). */
 const ereignis = (attrs: Record<string, string>) => ({
-  target: { closest: (sel: string) => (sel.includes("data-ansage") ? { hasAttribute: (n: string) => n in attrs, getAttribute: (n: string) => attrs[n] ?? null } : null) },
+  target: { closest: (sel: string) => (sel.includes("data-ansage") ? { hasAttribute: (n: string) => n in attrs, getAttribute: (n: string) => attrs[n] ?? null, setAttribute: (n: string, v: unknown) => { attrs[n] = String(v); } } : null) },
 });
 
 /**
@@ -399,6 +452,8 @@ async function ansagenLauf(sperre: "fehlt" | "abgelehnt", startAnsagen: unknown[
   const speicher = new Map<string, string>(Object.entries(vorher));
   let ansagen: unknown[] = startAnsagen;
   let pausiert = false;
+  // Was cancel synchron ausloest, wie Chrome die Enden der abgebrochenen Aeusserungen meldet (s. beimAbbruch).
+  let beimCancel: (() => void) | null = null;
   // Ein Stueck DOM fuer die zwei Knoten, die der Stopp-Zustand einfuegt und entfernt: das Menue (⚙) und der Stopp daneben.
   // innerHTML setzt, was im Markup steht; einfuegen und entfernen wirken auf denselben Zustand.
   let wurzelHtml = "", menueDa = false, stoppDa = false;
@@ -433,7 +488,7 @@ async function ansagenLauf(sperre: "fehlt" | "abgelehnt", startAnsagen: unknown[
         aeusserungen.push(u);
       },
       get paused() { return pausiert; },
-      cancel: () => { protokoll.push("cancel"); },
+      cancel: () => { protokoll.push("cancel"); beimCancel?.(); },
       pause: () => { protokoll.push("pause"); pausiert = true; },
       resume: () => { protokoll.push("resume"); pausiert = false; },
       getVoices: () => [],
@@ -481,13 +536,19 @@ async function ansagenLauf(sperre: "fehlt" | "abgelehnt", startAnsagen: unknown[
     klickeAuto: () => { wurzelKlicks.forEach((f) => f(ereignis({ "data-ansage-auto": "" }))); },
     /** Ein Klick auf den Stopp-Knopf. */
     klickeStopp: () => { wurzelKlicks.forEach((f) => f(ereignis({ "data-ansage-stopp": "" }))); },
+    /** Ein Klick auf den Text einer Zeile der Leiste; `attrs` sind die Attribute des Knopfs, der Klick schreibt hinein. */
+    klickeText: (attrs: Record<string, string>) => { wurzelKlicks.forEach((f) => f(ereignis(attrs))); },
     /** Ob der Stopp-Knopf im Markup steht. */
     stoppSichtbar: () => stoppDa,
     /** Die zuletzt gesprochene Aeusserung; ihre Ereignisse loest der Test selbst aus, wie der Browser es tut. */
     letzte: (): Aeusserung => aeusserungen[aeusserungen.length - 1]!,
+    /** Alle gesprochenen Aeusserungen in der Reihenfolge der Warteschlange (ohne die Freischaltung). */
+    aeusserungen: (): Aeusserung[] => [...aeusserungen],
     /** Die Uhr der Ansicht festsetzen (ms), damit eine Messung der Dauer deterministisch ist. */
     jetzt: (ms: number) => (g.LivePlanAnsicht as Ansicht).setzeJetzt(ms),
     speicher: () => speicher,
+    /** Was cancel ab jetzt synchron ausloest, etwa das Ende der laufenden Aeusserung. */
+    beimAbbruch: (f: (() => void) | null) => { beimCancel = f; },
   };
 }
 
@@ -511,12 +572,126 @@ test("Klick: ▶ spielt sofort, ⏸ haelt an, ▶ setzt fort, eine andere Zeile 
   ]);
 });
 
+/**
+ * Eine Ansage ueber 140 Zeichen (ein Teil bei der Vorgabe 14 Zeichen je Sekunde): "r: " und drei Saetze sind 185 Zeichen,
+ * also zwei Teile (zwei Saetze, dann einer).
+ */
+const LANG_SATZ = "Ein Satz einer langen Ansage, die in Teilen gesprochen wird.";
+const ANSAGE_LANG = { v: 1, zeit: 3000, id: "c", repo: "r", text: Array.from({ length: 3 }, () => LANG_SATZ).join(" "), quelle: "test" };
+
+test("Lange Ansage: alle Teile in die Warteschlange; Pause, Fortsetzen und Stopp gelten der ganzen Ansage, der Stopp bleibt bis zum letzten Teil", async () => {
+  const lauf = await ansagenLauf("fehlt", [ANSAGE_LANG]);
+  lauf.klickeAnsage(3000);
+  const teile = lauf.aeusserungen();
+  assert.equal(teile.length, 2);
+  assert.equal(teile.map((u) => u.text).join(" "), `r: ${ANSAGE_LANG.text}`);
+  const [eins, zwei] = teile as [Aeusserung, Aeusserung];
+  eins.onstart?.();
+  lauf.klickeAnsage(3000); // anhalten
+  lauf.klickeAnsage(3000); // fortsetzen
+  eins.onend?.(); // der erste Teil ist fertig, der zweite spricht weiter
+  assert.equal(lauf.stoppSichtbar(), true, "die Ansage laeuft noch");
+  zwei.onstart?.();
+  lauf.klickeAnsage(3000); // haelt die Ansage an, spricht sie nicht neu
+  assert.deepEqual(lauf.protokoll().filter((x) => !x.startsWith("speak:")), ["cancel", "pause", "resume", "pause"]);
+  lauf.klickeStopp();
+  assert.deepEqual(lauf.protokoll().slice(-2), ["resume", "cancel"]);
+  assert.equal(lauf.stoppSichtbar(), false);
+});
+
+test("Lange Ansage: erst das Ende des letzten Teils beendet sie; die Kalibrierung misst alle Teile vom ersten Beginn an", async () => {
+  const lauf = await ansagenLauf("fehlt", [ANSAGE_LANG]);
+  lauf.klickeAnsage(3000);
+  const [eins, zwei] = lauf.aeusserungen() as [Aeusserung, Aeusserung];
+  lauf.jetzt(10_000);
+  eins.onstart?.();
+  lauf.jetzt(20_000);
+  eins.onend?.();
+  assert.equal(lauf.speicher().has(SCHLUESSEL_ZPS), false, "nach dem ersten Teil misst noch nichts");
+  zwei.onstart?.();
+  lauf.jetzt(30_000);
+  zwei.onend?.();
+  assert.equal(lauf.stoppSichtbar(), false);
+  // 185 Zeichen in 20 s: 9,25 je Sekunde, gleitend 0,7 * 14 + 0,3 * 9,25.
+  assert.ok(Math.abs(Number(lauf.speicher().get(SCHLUESSEL_ZPS)) - (0.7 * 14 + 0.3 * (185 / 20))) < 1e-9);
+});
+
+test("Lange Ansage: ein Fehler in einem Teil beendet sie nicht vor dem letzten Teil, gemessen wird dann nicht", async () => {
+  const lauf = await ansagenLauf("fehlt", [ANSAGE_LANG]);
+  lauf.klickeAnsage(3000);
+  const [eins, zwei] = lauf.aeusserungen() as [Aeusserung, Aeusserung];
+  lauf.jetzt(10_000);
+  eins.onstart?.();
+  eins.onerror?.();
+  assert.equal(lauf.stoppSichtbar(), true, "der zweite Teil steht noch aus");
+  zwei.onstart?.();
+  lauf.jetzt(30_000);
+  zwei.onend?.();
+  assert.equal(lauf.stoppSichtbar(), false);
+  assert.equal(lauf.speicher().has(SCHLUESSEL_ZPS), false);
+});
+
+/** Zwoelf Saetze zu 60 Zeichen: lang genug, dass jedes Tempo mehrere Teile ergibt. */
+const ANSAGE_SEHR_LANG = { v: 1, zeit: 4000, id: "d", repo: "r", text: Array.from({ length: 12 }, () => LANG_SATZ).join(" "), quelle: "test" };
+
+test("Lange Ansage: die Teile richten sich nach dem gemessenen Tempo, langsam kuerzer, schnell laenger, je hoechstens etwa 10 s", async () => {
+  const laengen = async (zps: string) => {
+    const lauf = await ansagenLauf("fehlt", [ANSAGE_SEHR_LANG], { [SCHLUESSEL_ZPS]: zps });
+    lauf.klickeAnsage(4000);
+    const teile = lauf.aeusserungen().map((u) => u.text);
+    assert.equal(teile.join(" "), `r: ${ANSAGE_SEHR_LANG.text}`);
+    return teile.map((t) => Array.from(t).length);
+  };
+  const langsam = await laengen("8");
+  assert.ok(langsam.every((n) => n <= 80), String(langsam));
+  assert.ok(langsam.every((n) => n / 8 <= 10), "bei 8 Zeichen je Sekunde hoechstens 10 s je Teil");
+  const schnell = await laengen("30");
+  assert.ok(schnell.every((n) => n <= 250), String(schnell));
+  assert.ok(Math.max(...schnell) > 200, `eine schnelle Stimme bekommt laengere Teile: ${schnell}`);
+  assert.ok(schnell.length < langsam.length, `${schnell.length} Teile schnell, ${langsam.length} langsam`);
+});
+
+test("Abbruch: meldet cancel die Enden der abgebrochenen Ansage synchron, misst sie nicht (Stopp und andere Zeile)", async () => {
+  const lauf = await ansagenLauf("fehlt", [ANSAGE_ZWEI, ANSAGE_EINS]);
+  lauf.klickeAnsage(1000);
+  const eins = lauf.letzte();
+  lauf.jetzt(10_000);
+  eins.onstart?.();
+  lauf.jetzt(10_500);
+  // Chrome meldet beim cancel das Ende der laufenden Aeusserung noch waehrend des Aufrufs.
+  lauf.beimAbbruch(() => { eins.onend?.(); });
+  lauf.klickeStopp();
+  assert.equal(lauf.speicher().has(SCHLUESSEL_ZPS), false, "ein Stopp ist keine Messung");
+  assert.equal(lauf.stoppSichtbar(), false);
+  lauf.beimAbbruch(null);
+  lauf.klickeAnsage(1000);
+  const nochmal = lauf.letzte();
+  lauf.jetzt(20_000);
+  nochmal.onstart?.();
+  lauf.jetzt(20_500);
+  lauf.beimAbbruch(() => { nochmal.onend?.(); });
+  lauf.klickeAnsage(2000); // eine andere Zeile bricht ab und spricht sie
+  assert.equal(lauf.speicher().has(SCHLUESSEL_ZPS), false, "ein Wechsel der Zeile ist keine Messung");
+  assert.equal(lauf.letzte().text, "r: Zwei.");
+  assert.equal(lauf.stoppSichtbar(), true, "die neue Ansage laeuft");
+});
+
 test("Klick: der Stopp bei pausierter Ansage hebt die Pause vor dem Abbruch auf (Chrome haengt sonst)", async () => {
   const lauf = await ansagenLauf("fehlt", [ANSAGE_EINS]);
   lauf.klickeAnsage(1000);
   lauf.klickeAnsage(1000);
   lauf.klickeStopp();
   assert.deepEqual(lauf.protokoll(), ["cancel", "speak:r: Eins.", "pause", "resume", "cancel"]);
+});
+
+test("Klick auf den Text einer Zeile klappt ihn auf und wieder zu, ohne vorzulesen (#26)", async () => {
+  const lauf = await ansagenLauf("fehlt", [ANSAGE_EINS]);
+  const text = { "data-ansage-text": "1000", "aria-expanded": "false" };
+  lauf.klickeText(text);
+  assert.equal(text["aria-expanded"], "true");
+  lauf.klickeText(text);
+  assert.equal(text["aria-expanded"], "false");
+  assert.deepEqual(lauf.protokoll(), [], "der Text spielt nicht ab");
 });
 
 test("Klick: nach dem Stopp spielt dieselbe Zeile wieder sofort, ohne Pause davor", async () => {
