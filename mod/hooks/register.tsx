@@ -16,7 +16,7 @@
 // Ansagen: at the end of each answered turn of the main session the final answer goes to
 // `live-plan sage --auto` on stdin; the script cleans it (code blocks fall away), keeps the whole text
 // up to 8000 characters, skips a trivial one and one the session already announced itself this turn,
-// and appends it to LIVE_PLAN_CACHE/ansagen.jsonl.
+// and appends it to LIVE_PLAN_CACHE/ansagen.jsonl. A firstmate worker, which sets FM_TASK_INBOX, announces nothing.
 
 import type { EngineInterface, PluginOptions, Register, SessionRateLimit, SessionUsage } from 'claude-code'
 import { fragenRegistrieren, sprengradiusRegistrieren } from './fragen'
@@ -437,6 +437,12 @@ async function neuAuto($: EngineInterface, s: Sitzung): Promise<void> {
   await $.process.run(['bun', skript, 'neu', '--auto', s.id], { cwd: s.wurzel, timeoutMs: 30_000 })
 }
 
+// A firstmate worker (ship, scout, secondmate) is a Claude process of its own; firstmate's bin/fm-spawn.sh
+// exports FM_TASK_INBOX into each of them. Its turns are not announced, the firstmate main agent's are.
+async function istFlottenWorker($: EngineInterface): Promise<boolean> {
+  return Boolean((await $.env.get('FM_TASK_INBOX'))?.trim())
+}
+
 // `bun <skript> sage --auto` with the turn's answer on stdin; `--seit` is the turn's start, so an
 // announcement the session made itself during the turn (`live-plan sage`) replaces this one.
 // `run` resolves for any exit code: a failed save (the lock stayed taken) shows as a toast, with the
@@ -644,7 +650,8 @@ export const register: Register = (on, options: PluginOptions) => {
         if (e.usage?.model) s.modell = e.usage.model
         await merken($)
         // Not awaited: the end of the turn never waits for the script.
-        if (e.reason === 'answer' && e.answer.trim()) void ansageAuto($, s, e.answer, e.durationMs).catch(() => undefined)
+        if (e.reason === 'answer' && e.answer.trim() && !(await istFlottenWorker($)))
+          void ansageAuto($, s, e.answer, e.durationMs).catch(() => undefined)
       }
     } catch {
       // Never disturb the session.

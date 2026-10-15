@@ -1,6 +1,6 @@
 {
   "name": "live-plan-sitzung",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "author": { "name": "niclasedge" },
   "description": "Schreibt je Sitzung ein Register nach ~/.cache/live-plan/sitzungen/<id>.json (Kontext, Kosten, Subagenten, Fortschritt) fuer den live-plan-Webserver; Werkzeuge progress und step; AskUserQuestion auch im live-plan-Browser beantwortbar, mit Option oder eigener Antwort, Entscheidungen dort wecken die Sitzung; Sprengradius haelt riskante Bash-Befehle (rm -rf, git reset --hard, Force-Push, Migrationen, but land/discard) mit gemessener Wirkung an: Claude stellt die Freigabe als Frage im Chat (zugleich im live-plan), erst nach Ausfuehren laeuft der Befehl; am Ende jedes Zugs der Hauptsitzung geht die letzte Antwort als Ansage an 'live-plan sage --auto' (in der Uebersicht vorgelesen).",
   "types": "./types/index.d.ts",

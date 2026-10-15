@@ -6,9 +6,12 @@ const PFAD = '/home/t/.cache/live-plan/sitzungen/sitzung-1.json'
 const START = { cwd: '/repo/sub', surface: null, isInteractive: false } as const
 
 // The world beneath the plugin: files in memory, a repo at /repo, a mocked clock.
-function welt(on: On, opts: { skriptDa?: boolean; sageEnde?: { exitCode: number; stderr: string } } = {}) {
+function welt(
+  on: On,
+  opts: { skriptDa?: boolean; sageEnde?: { exitCode: number; stderr: string }; env?: Record<string, string> } = {},
+) {
   const clock = mock.clock(on, { now: 10_000 })
-  mock.env(on, { HOME: '/home/t' })
+  mock.env(on, { HOME: '/home/t', ...opts.env })
   const dateien = new Map<string, string>()
   const prozesse: string[][] = []
   const laeufe: { argv: string[]; cwd?: string; stdin?: string }[] = []
@@ -334,4 +337,23 @@ test('Ansage: ohne Skript laeuft nichts und der Zug zaehlt trotzdem', async ($, 
   await w.clock.advance(1_000)
   expect(w.prozesse).toEqual([])
   expect(w.lesen().haupt.zuege).toBe(1)
+})
+
+test('Ansage: ein firstmate-Worker (FM_TASK_INBOX gesetzt) geht ohne sage aus, das Register zaehlt den Zug trotzdem', SKRIPT, async ($, on) => {
+  const w = welt(on, { skriptDa: true, env: { FM_TASK_INBOX: '/tmp/fm-inbox-test' } })
+  await $.session.start(START)
+  await $.turn.complete({ answer: 'Der Worker ist fertig, der PR ist offen.', durationMs: 4_000, isAborted: false, turnId: 't-1', reason: 'answer' })
+  await w.clock.settle()
+  expect(sage(w)).toEqual([])
+  // The register is written on the takt: advance the clock before reading it.
+  await w.clock.advance(1_000)
+  expect(w.lesen().haupt.zuege).toBe(1)
+})
+
+test('Ansage: ein leerer FM_TASK_INBOX zaehlt als nicht gesetzt, sage laeuft wie bisher', SKRIPT, async ($, on) => {
+  const w = welt(on, { skriptDa: true, env: { FM_TASK_INBOX: '' } })
+  await $.session.start(START)
+  await $.turn.complete({ answer: 'Der Build ist gruen, der PR ist offen.', durationMs: 4_000, isAborted: false, turnId: 't-1', reason: 'answer' })
+  await w.clock.settle()
+  expect(sage(w)).toHaveLength(1)
 })
