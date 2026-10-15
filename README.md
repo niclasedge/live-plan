@@ -162,7 +162,11 @@ Stimme (deutsche zuerst, Vorgabe Deutsch) und **▶ Letzte Ansage nochmal**. Bei
 jeden Browser: `GET /api/einstellungen` liest sie, `POST /api/einstellungen` (JSON `{ vorlesen?, stimme? }`, bis
 2 KB) schreibt sie, unter denselben Regeln wie eine Entscheidung (nur von der eigenen Seite, kein fremder `Origin`).
 Eine kaputte oder fehlende YAML gilt als Vorgabe (aus, deutsche Stimme). Die Stimme steht als Name; hat ein Browser
-sie nicht, spricht er mit seiner ersten deutschen Stimme. Browser sprechen erst nach einem Klick auf die Seite; bis
+sie nicht, spricht er mit seiner ersten deutschen Stimme. Die Sprache erkennt die Seite am Text ohne den Repo-Namen davor,
+aus seinen ersten zehn Wörtern: mehr englische als deutsche Stoppwörter heißt Englisch, sonst Deutsch. Englische Texte
+bekommen eine englische Stimme, die gewählte, wenn sie Englisch spricht, sonst en-US, sonst eine andere en-*-Stimme; hat der
+Browser keine englische, bleibt es bei der gewählten. Deutsche Texte nehmen die gewählte Stimme wie bisher, auch eine englische.
+Browser sprechen erst nach einem Klick auf die Seite; bis
 dahin steht bei Vorlesen an ein Hinweis neben ⚙ und neue Ansagen werden nur gelistet. Weil die Seite ohne Anmeldung
 im LAN erreichbar ist, liest dort jeder die Ansagen mit und kann Vorlesen und Stimme umstellen.
 Auf jeder Sitzungsseite gilt dasselbe: Vorlesen und Stimme wirken dort genauso, und neue Ansagen aller Sitzungen werden

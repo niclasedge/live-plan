@@ -2246,6 +2246,25 @@
     return repo ? repo + ": " + text : text;
   }
   /**
+   * Stoppwoerter der Sprache einer Ansage. Mehrdeutige Woerter (an, in, so, was, am, will) stehen in keiner Liste: „an“ machte
+   * eine deutsche SPOC-Zeile („Schnittstelle an Slice 3“) englisch.
+   */
+  var SPRACHE_EN = "the a and or is are were be been to of on for with this that it its i you we they he she not no yes have has had do does did would can could should from by at as but if then all any some new now done here there what which who how why when where my our your their just only also more less than into out up down over after before about i've we've i'll it's don't isn't can't".split(" ");
+  var SPRACHE_DE = "der die das den dem des ein eine einen einem einer und oder ist sind war waren sein zu von im auf für mit dies diese dieser es ich sie wir er nicht kein keine ja hat haben hatte wird werden kann können soll sollte aus bei als aber wenn dann alle neu jetzt fertig hier dort wer wie warum wo mein unser ihr nur auch mehr weniger nach vor über noch schon gibt beim zum zur".split(" ");
+  /**
+   * Die Sprache eines Ansagetexts, "en" oder "de", aus seinen ersten zehn Woertern: ein Stoppwort zaehlt fuer seine Liste, ein
+   * Wort mit ä, ö, ü oder ß zaehlt Deutsch (je Wort eine Stimme). Englisch nur bei mehr Treffern, sonst Deutsch.
+   */
+  function spracheVon(text) {
+    var woerter = String(text || "").toLowerCase().replace(/’/g, "'").replace(/[^\p{L}\s'-]+/gu, " ").split(/\s+/).filter(Boolean).slice(0, 10);
+    var en = 0, de = 0;
+    woerter.forEach(function (w) {
+      if (SPRACHE_EN.indexOf(w) >= 0) en++;
+      else if (SPRACHE_DE.indexOf(w) >= 0 || /[äöüß]/.test(w)) de++;
+    });
+    return en > de ? "en" : "de";
+  }
+  /**
    * Chrome bricht eine einzelne Aeusserung mit Netzstimmen nach etwa 15 s ab. Ein Teil dauert deshalb beim gemessenen Tempo
    * etwa TEIL_SEKUNDEN und hat mindestens und hoechstens TEIL_GRENZEN Zeichen.
    */
@@ -2359,6 +2378,17 @@
   function stimmeWahl(stimmen, name) {
     var S = Array.isArray(stimmen) ? stimmen.filter(Boolean) : [];
     return (name && S.find(function (s) { return s.name === name; })) || S.find(function (s) { return /^de\b/i.test(String(s.lang || "")); }) || null;
+  }
+  /**
+   * Die Stimme fuer einen Text der Sprache `sprache` ("en" oder "de"): deutsch bleibt die Wahl (stimmeWahl). Englisch bleibt
+   * die Wahl, wenn sie Englisch spricht; sonst die erste en-US, dann die erste en-*; ohne englische Stimme die Wahl.
+   */
+  function stimmeFuer(stimmen, name, sprache) {
+    var basis = stimmeWahl(stimmen, name);
+    if (sprache !== "en" || (basis && /^en\b/i.test(String(basis.lang || "")))) return basis;
+    var S = Array.isArray(stimmen) ? stimmen.filter(Boolean) : [];
+    return S.find(function (s) { return /^en[-_]us\b/i.test(String(s.lang || "")); }) ||
+      S.find(function (s) { return /^en\b/i.test(String(s.lang || "")); }) || basis;
   }
   /** Spricht stumm eine leere Aeusserung; im Klick selbst gibt das auch Safari die Sprachausgabe fuer spaeter frei. */
   function tonFreischalten(sprache, Aeusserung) {
@@ -2495,6 +2525,8 @@
     einstellungenMenue: einstellungenMenue,
     stimmenListe: stimmenListe,
     stimmeWahl: stimmeWahl,
+    stimmeFuer: stimmeFuer,
+    spracheVon: spracheVon,
     tonFreischalten: tonFreischalten,
     ablaufSvg: ablaufSvg,
     doku: doku,
@@ -3185,10 +3217,10 @@
       LAUFT = lauf;
       zeichneAnsagen();
     } else zeichneStopp();
-    var stimme = stimmeWahl(SPRACHE.getVoices(), EINST.stimme);
+    var sprache = spracheVon(a.text), stimme = stimmeFuer(SPRACHE.getVoices(), EINST.stimme, sprache);
     teile.forEach(function (teil) {
       var u = new G.SpeechSynthesisUtterance(teil), fertig = false;
-      if (stimme) { u.voice = stimme; u.lang = stimme.lang; } else u.lang = "de-DE";
+      if (stimme) { u.voice = stimme; u.lang = stimme.lang; } else u.lang = sprache === "en" ? "en-US" : "de-DE";
       u.onstart = function () {
         // Der Beginn einer abgebrochenen Ansage kann nach dem Abbruch eintreffen; ihre Nummer ist dann nicht mehr die aktuelle.
         if (lauf.nr !== abbruchNr || lauf.start !== null) return;
