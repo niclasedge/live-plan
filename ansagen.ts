@@ -463,9 +463,11 @@ export function raeumeGelesen(datei: string, ansagen: string, wartenMs = SPERRE_
 /**
  * Die Kennungen, die Aufraeumen als gelesen markiert (#43): je Repo alle Ansagen ausser den `behalten` neuesten nach
  * zeit, gelesene eingeschlossen. Ein Repo mit hoechstens `behalten` Ansagen fehlt ganz. Bei gleicher Zeit entscheidet
- * die Kennung, damit die Reihenfolge der Datei keine Rolle spielt.
+ * die Kennung, damit die Reihenfolge der Datei keine Rolle spielt. Wirft einen RangeError, wenn `behalten` keine ganze Zahl
+ * ab 1 ist: bei 0 oder NaN ergibt slice(behalten) alle Ansagen, und die wuerden gelesen.
  */
 export function alteKennungen(ansagen: readonly Ansage[], behalten: number): string[] {
+  if (!Number.isInteger(behalten) || behalten < 1) throw new RangeError(`behalten muss eine ganze Zahl ab 1 sein, nicht ${behalten}`);
   const je = new Map<string, Ansage[]>();
   for (const a of ansagen) {
     const liste = je.get(a.repo);

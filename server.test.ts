@@ -418,6 +418,29 @@ test("ansagen aufraeumen: ohne Repo mit mehr als fuenf Ansagen 200 mit gelesen 0
   assert.equal(readFileSync(path.join(cacheOrdner, "gelesen.json"), "utf8"), vorher);
 });
 
+test("ansagen aufraeumen: 1 und 200 sind gueltige Werte, 200 ueber der Menge ergibt gelesen 0 (#43)", async () => {
+  writeFileSync(path.join(cacheOrdner, "ansagen.jsonl"), [...PROJ, ...ANDERE].map((a) => JSON.stringify(a)).join("\n") + "\n");
+  writeFileSync(path.join(cacheOrdner, "gelesen.json"), JSON.stringify({ v: 1, gelesen: [] }));
+  const eins = await aufraeumenPost({ behalten: 1 });
+  assert.equal(eins.status, 200, "behalten 1 ist die Untergrenze und gilt");
+  // proj: sechs von sieben, andere: zwei von dreien; alle acht sind bekannt.
+  assert.deepEqual(await eins.json(), { gelesen: 8 });
+  const zweihundert = await aufraeumenPost({ behalten: 200 });
+  assert.equal(zweihundert.status, 200, "behalten 200 ist die Obergrenze und gilt");
+  assert.deepEqual(await zweihundert.json(), { gelesen: 0 });
+});
+
+test("ansagen aufraeumen: die Repo-Namen __proto__ und constructor sind gewoehnliche Schluessel (#43)", async () => {
+  const PROTO = [1, 2, 3, 4, 5, 6].map((z) => ({ v: 1, zeit: z * 1000, id: "s-3", repo: "__proto__", text: `Proto ${z}.`, quelle: "auto", kennung: `pr-${z}` }));
+  const CTOR = [1, 2, 3, 4, 5, 6].map((z) => ({ v: 1, zeit: z * 1000, id: "s-4", repo: "constructor", text: `Ctor ${z}.`, quelle: "auto", kennung: `co-${z}` }));
+  writeFileSync(path.join(cacheOrdner, "ansagen.jsonl"), [...PROTO, ...CTOR].map((a) => JSON.stringify(a)).join("\n") + "\n");
+  writeFileSync(path.join(cacheOrdner, "gelesen.json"), JSON.stringify({ v: 1, gelesen: [] }));
+  const r = await aufraeumenPost({ behalten: 5 });
+  assert.equal(r.status, 200);
+  assert.deepEqual(await r.json(), { gelesen: 2 });
+  assert.deepEqual(JSON.parse(readFileSync(path.join(cacheOrdner, "gelesen.json"), "utf8")).gelesen.sort(), ["co-1", "pr-1"]);
+});
+
 // --- GET und POST /api/einstellungen: Vorlesen und Stimme in LIVE_PLAN_CACHE/einstellungen.yaml -------------
 
 const einstellungen = (body: unknown, kopf: Record<string, string> = {}) =>
