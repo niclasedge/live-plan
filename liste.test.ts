@@ -523,8 +523,22 @@ interface LaufOptionen { host?: unknown; zurueck?: string[] }
 async function ansagenLauf(sperre: "fehlt" | "abgelehnt", startAnsagen: unknown[] = [], vorher: Record<string, string> = {}, gelesenStatus = 200, optionen: LaufOptionen = {}) {
   const gesprochen: string[] = [];
   const tore = new Map((optionen.zurueck ?? []).map((url) => { let auf = () => {}; const p = new Promise<void>((r) => { auf = r; }); return [url, { p, auf }] as const; }));
-  // Welcher Knopf zuletzt den Fokus bekam (K3): "gelesen:KENNUNG", "inbox" oder "leiste".
+  // Welcher Knopf den Fokus hat (K3): "gelesen:KENNUNG", "inbox" oder "leiste"; `aktiv` ist sein Knoten (document.activeElement).
+  // Wie im Browser faellt der Fokus auf body (null), sobald innerHTML den Knoten ersetzt (S3: das SSE-Echo zeichnet neu).
   let fokus: string | null = null;
+  type Knoten = { hasAttribute: (n: string) => boolean; getAttribute: (n: string) => string | null; matches: (sel: string) => boolean; focus: () => void };
+  let aktiv: Knoten | null = null;
+  const knoten = (name: string, attr: Record<string, string>, sel: string[] = []): Knoten => {
+    const k: Knoten = {
+      hasAttribute: (n) => n in attr, getAttribute: (n) => attr[n] ?? null, matches: (x) => sel.includes(x),
+      focus: () => { fokus = name; aktiv = k; },
+    };
+    return k;
+  };
+  const gelesenKnopf = (kennung: string) => knoten(`gelesen:${kennung}`, { "data-ansage-gelesen": kennung });
+  const alleKnopf = (kennungen: string) => knoten(`alle:${kennungen}`, { "data-ansage-gelesen": kennungen }, [".an-alle"]);
+  // Was der Server als gelesen fuehrt: die Kennungen aus erfolgreichen POST /api/ansagen/gelesen.
+  const markiert = new Set<string>();
   const anfragen: { url: string; methode: string; body: unknown }[] = [];
   const protokoll: string[] = [];
   const aeusserungen: Aeusserung[] = [];
@@ -543,7 +557,7 @@ async function ansagenLauf(sperre: "fehlt" | "abgelehnt", startAnsagen: unknown[
   const menueKnoten = { focus: () => {}, insertAdjacentHTML: (_lage: string, html: string) => { if (html.includes("data-ansage-stopp")) stoppDa = true; } };
   const wurzel = {
     get innerHTML() { return wurzelHtml; },
-    set innerHTML(html: string) { wurzelHtml = html; menueDa = html.includes("data-einst-auf"); stoppDa = html.includes("data-ansage-stopp"); },
+    set innerHTML(html: string) { wurzelHtml = html; fokus = null; aktiv = null; menueDa = html.includes("data-einst-auf"); stoppDa = html.includes("data-ansage-stopp"); },
     querySelector: (sel: string) => {
       if (sel === "[data-ansage-stopp]") return stoppDa ? stoppKnoten : null;
       if (sel === "[data-einst-auf]") return menueDa ? menueKnoten : null;
@@ -560,18 +574,25 @@ async function ansagenLauf(sperre: "fehlt" | "abgelehnt", startAnsagen: unknown[
         const a = wurzelHtml.indexOf('data-testid="ansagen-inbox"');
         return nach(a < 0 ? -1 : wurzelHtml.indexOf("</section>", a) + "</section>".length);
       }
-      if (sel === ".an-inbox h2") return wurzelHtml.includes("an-inbox") ? { focus: () => { fokus = "inbox"; } } : null;
-      if (sel === '[data-testid="ansagen-leiste"] h2') return wurzelHtml.includes("ansagen-leiste") ? { focus: () => { fokus = "leiste"; } } : null;
+      if (sel === ".an-inbox h2") return wurzelHtml.includes("an-inbox") ? knoten("inbox", {}, [sel]) : null;
+      if (sel === '[data-testid="ansagen-leiste"] h2') return wurzelHtml.includes("ansagen-leiste") ? knoten("leiste", {}, [sel]) : null;
+      // Wie querySelector: der erste Knopf in Dokumentreihenfolge; "alle als gelesen" einer Gruppe mit einer Ansage
+      // traegt dieselbe Kennung wie ihr Knopf gelesen und steht davor.
+      const g = /^(?:\.(an-alle|an-gelesen-knopf))?\[data-ansage-gelesen="([^"]*)"\]$/.exec(sel);
+      if (g) {
+        const treffer = [...wurzelHtml.matchAll(/class="(an-alle|an-gelesen-knopf)" data-ansage-gelesen="([^"]*)"/g)].find((m) => m[2] === g[2] && (!g[1] || m[1] === g[1]));
+        return treffer ? (treffer[1] === "an-alle" ? alleKnopf(treffer[2]!) : gelesenKnopf(treffer[2]!)) : null;
+      }
       return null;
     },
     querySelectorAll: (sel: string) => sel === ".an-gelesen-knopf"
-      ? [...wurzelHtml.matchAll(/class="an-gelesen-knopf" data-ansage-gelesen="([^"]*)"/g)].map((m) => ({ getAttribute: () => m[1], focus: () => { fokus = `gelesen:${m[1]}`; } }))
+      ? [...wurzelHtml.matchAll(/class="an-gelesen-knopf" data-ansage-gelesen="([^"]*)"/g)].map((m) => gelesenKnopf(m[1]!))
       : [],
-    contains: () => false,
+    contains: (x: unknown) => x != null && x === aktiv,
     addEventListener: (typ: string, f: (e: unknown) => void) => { if (typ === "click") wurzelKlicks.push(f); },
   };
   const doc = {
-    getElementById: () => wurzel, documentElement: { dataset: {} }, visibilityState: "visible", activeElement: null, title: "",
+    getElementById: () => wurzel, documentElement: { dataset: {} }, visibilityState: "visible", get activeElement() { return aktiv; }, title: "",
     addEventListener: (typ: string, f: (e: unknown) => void) => { if (typ === "click") klicks.push(f); },
     removeEventListener: () => {}, querySelector: () => null, querySelectorAll: () => [],
   };
@@ -611,8 +632,12 @@ async function ansagenLauf(sperre: "fehlt" | "abgelehnt", startAnsagen: unknown[
       await tore.get(url)?.p;
       if (url === "/api/host") return optionen.host ? antwort(optionen.host) : antwort(null, false);
       if (init?.method === "POST") anfragen.push({ url, methode: init.method, body: JSON.parse(init.body ?? "null") });
-      if (url === "/api/ansagen/gelesen") return gelesenStatus === 200 ? antwort({ gelesen: 1 }) : antwort({ fehler: "kaputt" }, false, gelesenStatus);
-      if (url === "/api/ansagen") return antwort({ ansagen });
+      if (url === "/api/ansagen/gelesen") {
+        if (gelesenStatus !== 200) return antwort({ fehler: "kaputt" }, false, gelesenStatus);
+        (JSON.parse(init?.body ?? "{}").kennungen as string[]).forEach((k) => markiert.add(k));
+        return antwort({ gelesen: 1 });
+      }
+      if (url === "/api/ansagen") return antwort({ ansagen: (ansagen as { kennung?: string; gelesen?: boolean }[]).map((a) => (a.kennung && markiert.has(a.kennung) ? { ...a, gelesen: true } : a)) });
       if (url === "/api/einstellungen") return antwort({ vorlesen: true, stimme: null });
       if (url === "/api/liste") return antwort({ wurzel: "/w", sitzungen: [] });
       return antwort(null, false);
@@ -652,8 +677,10 @@ async function ansagenLauf(sperre: "fehlt" | "abgelehnt", startAnsagen: unknown[
     anfragen: () => anfragen.map((x) => ({ ...x })),
     /** Gibt eine zurueckgehaltene Antwort frei (LaufOptionen.zurueck) und wartet, bis die Seite sie verarbeitet hat. */
     freigeben: async (url: string) => { tore.get(url)!.auf(); await warte(); },
-    /** Wer zuletzt den Fokus bekam (K3). */
+    /** Wer den Fokus hat (K3); null heisst body. */
     fokus: () => fokus,
+    /** Das Echo des Servers nach einem Markieren (S3): gelesen.json aendert sich, der Strom meldet geaendert, die Seite laedt und zeichnet neu. */
+    echo: async () => { quellen.forEach((h) => h.geaendert?.()); await warte(); },
     /** Das zuletzt gezeichnete Markup der Seite. */
     html: () => wurzelHtml,
     /** Ob der Stopp-Knopf im Markup steht. */
@@ -883,6 +910,41 @@ test("Fokus nach gelesen: auf den naechsten Knopf gelesen, nach dem letzten auf 
   const alle = await ansagenLauf("fehlt", drei);
   await alle.klickeGelesen("kb ka kc");
   assert.equal(alle.fokus(), "inbox");
+});
+
+test("Fokus nach gelesen: ein Knopf aus der Mitte gibt den Fokus an den Nachfolger an derselben Stelle (Review K5)", async () => {
+  const drei = [{ ...ANSAGE_ZWEI, kennung: "kb" }, { ...ANSAGE_EINS, kennung: "ka" }, { ...ANSAGE_EINS, zeit: 500, kennung: "kc" }];
+  const lauf = await ansagenLauf("fehlt", drei);
+  await lauf.klickeGelesen("ka");
+  assert.equal(lauf.fokus(), "gelesen:kc", "nicht der erste (kb), sondern der, der an Stelle 2 rueckt");
+});
+
+test("Fokus nach gelesen uebersteht das Echo des Servers: Neuzeichnen nach dem Markieren laesst ihn auf Knopf bzw. Kopf (Review S3)", async () => {
+  const drei = [{ ...ANSAGE_ZWEI, kennung: "kb" }, { ...ANSAGE_EINS, kennung: "ka" }, { ...ANSAGE_EINS, zeit: 500, kennung: "kc" }];
+  const lauf = await ansagenLauf("fehlt", drei);
+  await lauf.klickeGelesen("kb");
+  await lauf.echo();
+  assert.equal(lauf.fokus(), "gelesen:ka", "nach dem Echo noch auf dem naechsten Knopf, nicht auf body");
+  await lauf.klickeGelesen("ka"); // das zweite Enter
+  await lauf.echo();
+  assert.equal(lauf.fokus(), "gelesen:kc");
+  await lauf.klickeGelesen("kc");
+  await lauf.echo();
+  assert.equal(lauf.fokus(), "inbox", "nach dem letzten der Kopf der Inbox, auch nach dem Echo");
+  assert.doesNotMatch(lauf.html(), /an-gelesen-knopf/, "der Server fuehrt alle als gelesen");
+  const alle = await ansagenLauf("fehlt", drei);
+  await alle.klickeGelesen("kb ka kc");
+  await alle.echo();
+  assert.equal(alle.fokus(), "inbox", "alle als gelesen: der Kopf, auch nach dem Echo");
+});
+
+test("Fokus nach dem Echo bleibt auf dem Knopf gelesen, nicht auf 'alle als gelesen' seiner Gruppe mit derselben Kennung (Review S3)", async () => {
+  // Zwei Gruppen; die zweite hat eine Ansage, ihr 'alle als gelesen' traegt also dieselbe Kennung wie ihr Knopf gelesen.
+  const lauf = await ansagenLauf("fehlt", [{ ...ANSAGE_ZWEI, kennung: "kb" }, { ...ANSAGE_EINS, repo: "q", kennung: "kq" }]);
+  await lauf.klickeGelesen("kb");
+  assert.equal(lauf.fokus(), "gelesen:kq");
+  await lauf.echo();
+  assert.equal(lauf.fokus(), "gelesen:kq", "derselbe Knopf, nicht alle:kq davor");
 });
 
 test("Klick: nach dem Stopp spielt dieselbe Zeile wieder sofort, ohne Pause davor", async () => {

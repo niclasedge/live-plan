@@ -145,8 +145,10 @@ zuerst). Je Zeile stehen ▶, Uhrzeit, Wortzahl und Dauer, etwa `21:14 (183 Wör
 der Repo-Name als Verweis auf die Sitzung, der aufklappbare Text und der Knopf **gelesen**; danach verschwindet die
 Zeile. **alle als gelesen** steht im Kopf der Inbox und je Repo-Gruppe. Ein Markieren erreicht alle offenen Ansichten
 über den Ereignisstrom; scheitert das Speichern, zeigt die Seite wieder den Stand des Servers und eine Meldung.
-Nach **gelesen** steht der Fokus auf dem Knopf, der an die Stelle des geklickten rückt (nach dem letzten auf dem
-davor), ohne Knopf auf der Überschrift der Inbox bzw. der Leiste. Kopf, Inbox, Rechner und Tabelle stehen immer in
+Nach **gelesen** steht der Fokus auf dem Knopf **gelesen**, der an die Stelle des geklickten rückt (nach dem letzten
+auf dem davor), nach **alle als gelesen** auf dem ersten verbliebenen; ohne Knopf auf der Überschrift der Inbox bzw. der
+Leiste. Er bleibt dort, wenn die Seite danach neu zeichnet (das Echo des Servers über den Ereignisstrom), sodass ein
+zweites Enter die nächste Ansage markiert. Kopf, Inbox, Rechner und Tabelle stehen immer in
 dieser Reihenfolge, gleich ob die Liste oder der Rechner zuerst ankommt.
 
 ![Übersicht: Inbox mit sechs ungelesenen Ansagen in drei Repo-Gruppen, Wortzahl neben der Uhrzeit](docs/ansagen-inbox.png)

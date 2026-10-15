@@ -3061,12 +3061,21 @@
   function inboxZustand() {
     return { ansagen: ANSAGEN, laeuft: LAUFT, zps: zeichenJeSekunde(), aufgeklappt: TEXT_AUF, fehler: gelesenFehler };
   }
-  /** Der Knopf einer Ansage in `el` mit dem Fokus (▶ oder ihr Text) als Selektor, sonst null; vor dem Neuzeichnen zu merken. */
+  /** Der Kopf von Inbox und Leiste; dorthin geht der Fokus, wenn kein Knopf gelesen bleibt (gelesenMarkieren). */
+  var ANSAGE_KOEPFE = [".an-inbox h2", '[data-testid="ansagen-leiste"] h2'];
+  /**
+   * Der Knopf einer Ansage in `el` mit dem Fokus (▶, ihr Text, gelesen bzw. alle als gelesen) oder der Kopf von Inbox und
+   * Leiste als Selektor, sonst null; vor dem Neuzeichnen zu merken. Ohne gelesen und Kopf fiele der Fokus nach einem
+   * Markieren beim Echo des Servers (Strom, neu laden, neu zeichnen) auf body (S3).
+   */
   function ansageFokus(el) {
     var a = doc.activeElement;
     if (!el || !a || !el.contains(a)) return null;
-    var attr = ["data-ansage", "data-ansage-text"].find(function (x) { return a.hasAttribute(x); });
-    return attr ? "[" + attr + '="' + a.getAttribute(attr) + '"]' : null;
+    var attr = ["data-ansage", "data-ansage-text", "data-ansage-gelesen"].find(function (x) { return a.hasAttribute(x); });
+    // Mit Klasse: 'alle als gelesen' einer Gruppe mit einer Ansage traegt dieselben Kennungen wie ihr Knopf gelesen und steht davor.
+    var art = attr === "data-ansage-gelesen" ? (a.matches(".an-alle") ? ".an-alle" : ".an-gelesen-knopf") : "";
+    if (attr) return art + "[" + attr + '="' + a.getAttribute(attr) + '"]';
+    return ANSAGE_KOEPFE.find(function (sel) { return a.matches && a.matches(sel); }) || null;
   }
   /** Der Fokus geht nach dem Neuzeichnen auf denselben Knopf derselben Ansage zurueck, wenn es ihn noch gibt. */
   function ansageFokusHer(el, sel) {
@@ -3315,7 +3324,7 @@
     gelesenFehler = "";
     zeichneAnsagen();
     var rest = wurzel.querySelectorAll(".an-gelesen-knopf");
-    var ziel = rest.length ? rest[Math.min(stelle, rest.length - 1)] : wurzel.querySelector(".an-inbox h2") || wurzel.querySelector('[data-testid="ansagen-leiste"] h2');
+    var ziel = rest.length ? rest[Math.min(stelle, rest.length - 1)] : wurzel.querySelector(ANSAGE_KOEPFE[0]) || wurzel.querySelector(ANSAGE_KOEPFE[1]);
     if (ziel) ziel.focus();
     return fetch("/api/ansagen/gelesen", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ kennungen: kennungen }) }).then(function (r) {
       return r.json().catch(function () { return {}; }).then(function (b) {
