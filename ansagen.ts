@@ -8,8 +8,12 @@
 //
 // Daneben liegen die Einstellungen der Sprachausgabe (LIVE_PLAN_CACHE/einstellungen.yaml): Vorlesen an oder aus
 // und die Stimme. Die Uebersicht liest sie mit GET und schreibt sie mit POST /api/einstellungen.
+//
+// Und der Gelesen-Zustand (#28, LIVE_PLAN_CACHE/gelesen.json): die Kennungen der Ansagen, die jemand per Knopf als
+// gelesen markiert hat, fuer jeden Browser gleich. Eine eigene Datei, damit ansagen.jsonl nur angehaengt wird.
 
-import { closeSync, constants, fstatSync, mkdirSync, openSync, readSync, renameSync, rmSync, statSync, writeSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import { closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readSync, renameSync, rmSync, statSync, writeSync } from "node:fs";
 import path from "node:path";
 
 export type Quelle = "auto" | "sage";
@@ -26,7 +30,15 @@ export interface Ansage {
   text: string;
   /** `sage`: vom Agenten selbst formuliert; `auto`: der Sprechtext der letzten Antwort. */
   quelle: Quelle;
+  /**
+   * Stabile Kennung der Ansage (#28), Schluessel des Gelesen-Zustands. Vergeben beim Schreiben; eine Zeile von vor #28
+   * bekommt beim Lesen eine aus Zeit, Sitzung, Repo und Quelle abgeleitete (abgeleiteteKennung).
+   */
+  kennung: string;
 }
+
+/** Eine Ansage vor dem Schreiben: die Kennung vergibt schreibeAnsage. */
+export type NeueAnsage = Omit<Ansage, "kennung">;
 
 /** So viele Ansagen haelt die Datei; der Server liefert hoechstens so viele. */
 export const ANSAGEN_HOECHSTENS = 200;
@@ -47,6 +59,8 @@ const KUERZEN_BYTES_PUFFER = 256 * 1024;
 export const TEXT_HOECHSTENS = 8000;
 const REPO_HOECHSTENS = 200;
 const ID = /^[A-Za-z0-9._-]+$/;
+/** So sieht eine Kennung aus; eine andere in einer Zeile gilt als fehlend. */
+export const KENNUNG = /^[A-Za-z0-9_-]{1,64}$/;
 
 export const ansagenDatei = (cache: string) => path.join(cache, "ansagen.jsonl");
 
@@ -212,7 +226,16 @@ export function ansageAus(zeile: unknown): Ansage | null {
   if (typeof a.text !== "string") return null;
   const text = kappeText(sprechText(a.text), TEXT_HOECHSTENS);
   if (!text) return null;
-  return { v: 1, zeit: a.zeit, id: a.id, repo: a.repo.replace(/[\u0000-\u001f\u007f]/g, "").trim(), text, quelle: a.quelle };
+  const roh = { v: 1 as const, zeit: a.zeit, id: a.id, repo: a.repo.replace(/[\u0000-\u001f\u007f]/g, "").trim(), text, quelle: a.quelle };
+  return { ...roh, kennung: typeof a.kennung === "string" && KENNUNG.test(a.kennung) ? a.kennung : abgeleiteteKennung(roh) };
+}
+
+/**
+ * Die Kennung einer Zeile ohne eigene (vor #28 geschrieben): aus Zeit, Sitzung, Repo und Quelle, ohne den Text, damit
+ * eine geaenderte Saeuberung sie nicht verschiebt. Das Kuerzen schreibt sie mit, danach steht sie in der Zeile.
+ */
+export function abgeleiteteKennung(a: Pick<Ansage, "zeit" | "id" | "repo" | "quelle">): string {
+  return `a${createHash("sha256").update(JSON.stringify([a.zeit, a.id, a.repo, a.quelle])).digest("hex").slice(0, 20)}`;
 }
 
 /** Die Ansagen eines Dateiinhalts, aelteste zuerst, die letzten `n`; kaputte Zeilen fallen weg. */
@@ -298,15 +321,33 @@ function sperre(datei: string, wartenMs: number): (() => void) | null {
   }
 }
 
+/** Ersetzt `datei` durch `inhalt`: neue Nachbardatei (O_EXCL, ohne Symlink), dann rename; scheitert es, bleibt die alte. */
+function ersetze(datei: string, inhalt: string): void {
+  const neu = `${datei}.${process.pid}.neu`;
+  try {
+    const tmp = openSync(neu, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o644);
+    try {
+      writeSync(tmp, inhalt);
+    } finally {
+      closeSync(tmp);
+    }
+    renameSync(neu, datei);
+  } catch (e) {
+    rmSync(neu, { force: true });
+    throw e;
+  }
+}
+
 /**
- * Haengt eine Ansage an (O_APPEND, eine Zeile in einem write, ohne Symlink). Hat die Datei danach mehr als
+ * Haengt eine Ansage mit neuer Kennung an (O_APPEND, eine Zeile in einem write, ohne Symlink). Hat die Datei danach mehr als
  * `n + KUERZEN_PUFFER` Zeilen oder mehr als LESEN_HOECHSTENS + KUERZEN_BYTES_PUFFER Bytes, ersetzt sie eine Fassung
  * mit den letzten `n` aus ihrem lesbaren Ende, vorne weiter gekuerzt auf drei Viertel von LESEN_HOECHSTENS (neue
- * Datei, dann rename); lange Ansagen halten so weniger als `n`.
+ * Datei, dann rename); lange Ansagen halten so weniger als `n`. Nach dem Kuerzen raeumt sie die Gelesen-Marken der
+ * herausgefallenen Ansagen auf (raeumeGelesen).
  * Anhaengen und Kuerzen laufen unter der Sperre: ein Anhang neben einem Kuerzen ginge mit dem rename verloren.
  * Bekommt sie die Sperre nicht binnen `wartenMs`, haengt sie nichts an und wirft einen Fehler.
  */
-export function schreibeAnsage(datei: string, a: Ansage, n = ANSAGEN_HOECHSTENS, wartenMs = SPERRE_WARTEN_MS): void {
+export function schreibeAnsage(datei: string, a: NeueAnsage, n = ANSAGEN_HOECHSTENS, wartenMs = SPERRE_WARTEN_MS): void {
   mkdirSync(path.dirname(datei), { recursive: true });
   const frei = sperre(datei, wartenMs);
   if (!frei) throw new Error(`Ansage nicht gespeichert: die Sperre ${datei}.sperre ist seit ${wartenMs} ms besetzt`);
@@ -315,7 +356,7 @@ export function schreibeAnsage(datei: string, a: Ansage, n = ANSAGEN_HOECHSTENS,
     const fd = openSync(datei, constants.O_WRONLY | constants.O_APPEND | constants.O_CREAT | constants.O_NOFOLLOW, 0o644);
     try {
       if (!fstatSync(fd).isFile()) throw new Error(`${datei} ist keine regulaere Datei`);
-      writeSync(fd, `${JSON.stringify(a)}\n`);
+      writeSync(fd, `${JSON.stringify({ ...a, kennung: randomUUID() })}\n`);
       groesse = fstatSync(fd).size;
     } finally {
       closeSync(fd);
@@ -329,17 +370,15 @@ export function schreibeAnsage(datei: string, a: Ansage, n = ANSAGEN_HOECHSTENS,
     let bytes = zeilen.reduce((s, z) => s + Buffer.byteLength(z), 0);
     let ab = 0;
     while (bytes > (LESEN_HOECHSTENS * 3) / 4 && ab < zeilen.length - 1) bytes -= Buffer.byteLength(zeilen[ab++]);
-    const neu = `${datei}.${process.pid}.neu`;
     try {
-      const tmp = openSync(neu, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o644);
-      try {
-        writeSync(tmp, zeilen.slice(ab).join(""));
-      } finally {
-        closeSync(tmp);
-      }
-      renameSync(neu, datei);
+      ersetze(datei, zeilen.slice(ab).join(""));
     } catch {
-      rmSync(neu, { force: true });
+      return; // ungekuerzt; das naechste Anhaengen versucht es wieder
+    }
+    try {
+      raeumeGelesen(gelesenDatei(path.dirname(datei)), datei, wartenMs);
+    } catch {
+      /* die Marken bleiben bis zum naechsten Markieren oder Kuerzen; die Ansage ist gespeichert */
     }
   } finally {
     frei();
@@ -347,8 +386,74 @@ export function schreibeAnsage(datei: string, a: Ansage, n = ANSAGEN_HOECHSTENS,
 }
 
 /** Ob die Sitzung `id` seit `seit` (ms) selbst etwas angesagt hat; dann entfaellt die automatische Ansage dieses Zugs. */
-export function schonAngesagt(liste: readonly Ansage[], id: string, seit: number): boolean {
+export function schonAngesagt(liste: readonly NeueAnsage[], id: string, seit: number): boolean {
   return liste.some((a) => a.quelle === "sage" && a.id === id && a.zeit >= seit);
+}
+
+// --- Gelesen-Zustand (#28) ------------------------------------------------------------------------
+//
+// LIVE_PLAN_CACHE/gelesen.json: { "v": 1, "gelesen": [Kennung, ...] }. Nur Kennungen von Ansagen, die leseAnsagen
+// noch liefert; die anderen fallen bei jedem Schreiben weg. Geschrieben unter der Sperre gelesen.json.sperre, atomar
+// (neue Datei, dann rename) und nie durch einen Symlink; die Sperre von ansagen.jsonl nimmt nur, wer anhaengt, und
+// der haelt sie, waehrend er nach dem Kuerzen aufraeumt. Andersherum wartet niemand: kein Verklemmen.
+
+export const gelesenDatei = (cache: string) => path.join(cache, "gelesen.json");
+
+/** Die gelesenen Kennungen; eine fehlende, kaputte oder fremde Datei (Symlink) ergibt keine. */
+export function leseGelesen(datei: string): Set<string> {
+  try {
+    const roh = JSON.parse(liesEnde(datei) ?? "") as unknown;
+    const liste = roh && typeof roh === "object" && "gelesen" in roh ? roh.gelesen : null;
+    return new Set(Array.isArray(liste) ? liste.filter((k): k is string => typeof k === "string" && KENNUNG.test(k)) : []);
+  } catch {
+    return new Set();
+  }
+}
+
+/** Schreibt die Menge; vorher muss die Sperre gehalten werden. Ein Symlink oder etwas anderes als eine Datei wird nicht ersetzt. */
+function schreibeGelesen(datei: string, menge: ReadonlySet<string>): void {
+  try {
+    const st = lstatSync(datei);
+    if (st.isSymbolicLink()) throw new Error(`${datei} ist ein Symlink`);
+    if (!st.isFile()) throw new Error(`${datei} ist keine regulaere Datei`);
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
+  }
+  ersetze(datei, `${JSON.stringify({ v: 1, gelesen: [...menge] })}\n`);
+}
+
+/**
+ * Unter der Sperre: die alte Menge, `dazu` hinein, dann nur, was in `ansagen` noch steht. Schreibt nur bei einer
+ * Aenderung; gibt die Zahl der bekannten unter `dazu` zurueck.
+ */
+function aendereGelesen(datei: string, ansagen: string, dazu: readonly string[], wartenMs: number): number {
+  mkdirSync(path.dirname(datei), { recursive: true });
+  const frei = sperre(datei, wartenMs);
+  if (!frei) throw new Error(`Gelesen nicht gespeichert: die Sperre ${datei}.sperre ist seit ${wartenMs} ms besetzt`);
+  try {
+    const vorhanden = new Set(leseAnsagen(ansagen).map((a) => a.kennung));
+    const alt = leseGelesen(datei);
+    const bekannt = [...new Set(dazu)].filter((k) => vorhanden.has(k));
+    const neu = new Set([...alt, ...bekannt].filter((k) => vorhanden.has(k)));
+    if (neu.size !== alt.size || [...neu].some((k) => !alt.has(k))) schreibeGelesen(datei, neu);
+    return bekannt.length;
+  } finally {
+    frei();
+  }
+}
+
+/**
+ * Markiert die Ansagen mit diesen Kennungen als gelesen (Knopf gelesen, je Repo oder alle: der Browser schickt die
+ * Kennungen, die er zeigt). Unbekannte zaehlen nicht; die Rueckgabe ist die Zahl der bekannten, bei 0 aendert sich nichts.
+ * Ohne Sperre binnen `wartenMs` ein Fehler.
+ */
+export function markiereGelesen(datei: string, ansagen: string, kennungen: readonly string[], wartenMs = SPERRE_WARTEN_MS): number {
+  return aendereGelesen(datei, ansagen, kennungen, wartenMs);
+}
+
+/** Wirft die Marken der Ansagen hinaus, die `ansagen` nicht mehr liefert (nach dem Kuerzen). */
+export function raeumeGelesen(datei: string, ansagen: string, wartenMs = SPERRE_WARTEN_MS): void {
+  aendereGelesen(datei, ansagen, [], wartenMs);
 }
 
 // --- Einstellungen der Sprachausgabe ---------------------------------------------------------------

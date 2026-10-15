@@ -1,7 +1,8 @@
-// live-plan (#257): die Ansicht, ohne Bibliothek. "/" zeigt die Liste aus /api/liste, je Sitzung mit ihrer neuesten
-// Ansage (GET /api/ansagen, neue per SSE /api/ereignisse, vorgelesen mit speechSynthesis; Vorlesen und Stimme im
-// Menue, GET und POST /api/einstellungen), "/REPO/SLUG" eine Sitzung aus /api/REPO/SLUG mit oben der Leiste Ansagen
-// (die letzten fuenf aller Sitzungen), neu gelesen bei jeder
+// live-plan (#257): die Ansicht, ohne Bibliothek. "/" zeigt die Inbox der ungelesenen Ansagen je Repo (#28) und die
+// Liste aus /api/liste, je Sitzung mit ihrer neuesten Ansage (GET /api/ansagen, neue per SSE /api/ereignisse,
+// vorgelesen mit speechSynthesis; Vorlesen und Stimme im Menue, GET und POST /api/einstellungen; gelesen per Knopf,
+// POST /api/ansagen/gelesen), "/REPO/SLUG" eine Sitzung aus /api/REPO/SLUG mit oben der Leiste Ansagen
+// (die letzten fuenf dieses Repos), neu gelesen bei jeder
 // Dateiaenderung (SSE /ereignisse). Ein Klick auf eine Option schickt POST .../entscheidung, ebenso eine eigene
 // Antwort (Freitext, mit eigen: true); alles andere aendert nur der Agent.
 //
@@ -2313,6 +2314,11 @@
     return '<button type="button" class="an-spiel' + klasse + '" data-ansage="' + esc(a.zeit) + '"' + (zusatz || "") + ' aria-label="' +
       esc(aria + a.repo + " " + uhr) + '">' + (dieser && !laeuft.pausiert ? "⏸" : "▶") + "</button>";
   }
+  /** Die Wortzahl eines Texts in Klammern wie in ansagen.ts gezaehlt (ein Wort hat einen Buchstaben oder eine Ziffer): "(183 Wörter)", "(1 Wort)". */
+  function woerterText(text) {
+    var n = String(text || "").split(/\s+/).filter(function (w) { return /[\p{L}\p{N}]/u.test(w); }).length;
+    return "(" + n + (n === 1 ? " Wort)" : " Wörter)");
+  }
   /** Die geschaetzte Dauer hinter der Uhrzeit, in Klammern; `zps` ist der gemessene Wert des Browsers, sonst die Vorgabe. */
   function dauerSpanne(a, zps) {
     return '<span class="an-dauer">(' + dauerText(ansageDauer(a, zps)) + ")</span>";
@@ -2332,11 +2338,11 @@
     return '<a class="an-repo" href="' + esc("/" + encodeURIComponent(a.repo) + "/" + encodeURIComponent(a.id)) + '"' +
       (eigen ? ' aria-current="page"' : "") + titel + ">" + esc(a.repo) + "</a>";
   }
-  /** Die Zelle Ansage einer Sitzung: der Knopf (spielKnopf), daneben ihre Uhrzeit und die Dauer; ohne Ansage leer. */
+  /** Die Zelle Ansage einer Sitzung: der Knopf (spielKnopf), daneben ihre Uhrzeit, die Wortzahl (#28) und die Dauer; ohne Ansage leer. */
   function ansageZelle(a, laeuft, zps) {
     if (!a) return '<td class="lp-ansage"></td>';
     return '<td class="lp-ansage">' + spielKnopf(a, laeuft, "Letzte Ansage vorlesen: ", ' title="' + esc(a.text) + '"') + ' <span class="an-uhr mono" title="' +
-      esc(ortszeit(isoVon(a.zeit))) + '">' + esc(ansageUhr(a.zeit)) + "</span> " + dauerSpanne(a, zps) + "</td>";
+      esc(ortszeit(isoVon(a.zeit))) + '">' + esc(ansageUhr(a.zeit)) + '</span> <span class="an-woerter">' + esc(woerterText(a.text)) + "</span> " + dauerSpanne(a, zps) + "</td>";
   }
   /** Die Namen der Stimmen ohne Doppel, deutsche zuerst, je { name, lang }. */
   function stimmenListe(stimmen) {
@@ -2393,20 +2399,59 @@
     return '<button type="button" class="an-text" data-ansage-text="' + esc(a.zeit) + '" aria-expanded="' + (auf ? "true" : "false") + '"><span>' + esc(a.text) + "</span></button>";
   }
   /**
-   * Die Zeilen der Leiste: die neuesten LEISTE_N Ansagen aus allen Sitzungen (`z.ansagen`, neueste zuerst). Die Zeile der
-   * eigenen Sitzung (`z.eigeneId`, die Id der Sitzung; der Repo-Name darf in einem Worktree abweichen) bekommt die Klasse an-eigen.
-   * `z.laeuft` ist der Zustand des Sprechens (spielKnopf), `z.zps` der gemessene Wert des Browsers (dauerSpanne),
-   * `z.aufgeklappt` je Zeit der Ansage, ob ihr Text aufgeklappt ist (textKnopf).
+   * Eine Zeile der Leiste oder der Inbox: ▶, Uhrzeit mit Wortzahl und Dauer, Repo als Verweis, Text, und solange sie
+   * ungelesen ist der Knopf gelesen (#28) mit ihrer Kennung; eine gelesene bekommt die Klasse an-gelesen (ausgegraut).
+   * `z` wie bei ansageZeilen.
+   */
+  function ansageZeile(a, z, eigen) {
+    return '<li class="an-zeile' + (eigen ? " an-eigen" : "") + (a.gelesen ? " an-gelesen" : "") + '">' + spielKnopf(a, z.laeuft, "Ansage vorlesen: ") +
+      '<span class="an-zeit"><span class="an-uhr mono">' + esc(ansageUhr(a.zeit)) + '</span> <span class="an-woerter">' + esc(woerterText(a.text)) + "</span> " +
+      dauerSpanne(a, z.zps) + "</span>" + repoName(a, eigen) + textKnopf(a, !!(z.aufgeklappt && z.aufgeklappt[a.zeit])) +
+      (a.gelesen ? "" : '<button type="button" class="an-gelesen-knopf" data-ansage-gelesen="' + esc(a.kennung) + '" aria-label="' +
+        esc("Als gelesen markieren: " + a.repo + " " + ansageUhr(a.zeit)) + '">gelesen</button>') + "</li>";
+  }
+  /**
+   * Die Zeilen der Leiste: die neuesten LEISTE_N Ansagen dieses Repos (`z.repo`, ohne: aller Repos) und der eigenen
+   * Sitzung (`z.ansagen`, neueste zuerst), gelesene ausgegraut (#28). Die Zeile der eigenen Sitzung (`z.eigeneId`, die Id
+   * der Sitzung; der Repo-Name darf in einem Worktree abweichen) bekommt die Klasse an-eigen und zaehlt auch unter
+   * anderem Repo-Namen. `z.laeuft` ist der Zustand des Sprechens (spielKnopf), `z.zps` der gemessene Wert des Browsers
+   * (dauerSpanne), `z.aufgeklappt` je Zeit der Ansage, ob ihr Text aufgeklappt ist (textKnopf).
    */
   function ansageZeilen(z) {
-    var liste = (Array.isArray(z.ansagen) ? z.ansagen : []).slice(0, LEISTE_N);
-    if (!liste.length) return '<p class="an-leer">Noch keine Ansage.</p>';
-    return "<ol>" + liste.map(function (a) {
-      var eigen = !!z.eigeneId && a.id === z.eigeneId;
-      return '<li class="an-zeile' + (eigen ? " an-eigen" : "") + '">' + spielKnopf(a, z.laeuft, "Ansage vorlesen: ") +
-        '<span class="an-zeit"><span class="an-uhr mono">' + esc(ansageUhr(a.zeit)) + "</span> " + dauerSpanne(a, z.zps) + "</span>" + repoName(a, eigen) +
-        textKnopf(a, !!(z.aufgeklappt && z.aufgeklappt[a.zeit])) + "</li>";
-    }).join("") + "</ol>";
+    var liste = (Array.isArray(z.ansagen) ? z.ansagen : []).filter(function (a) {
+      return typeof z.repo !== "string" || a.repo === z.repo || (!!z.eigeneId && a.id === z.eigeneId);
+    }).slice(0, LEISTE_N);
+    var fehler = z.fehler ? '<p class="an-fehler">' + esc(z.fehler) + "</p>" : "";
+    if (!liste.length) return '<p class="an-leer">Noch keine Ansage.</p>' + fehler;
+    return "<ol>" + liste.map(function (a) { return ansageZeile(a, z, !!z.eigeneId && a.id === z.eigeneId); }).join("") + "</ol>" + fehler;
+  }
+  /** Der Knopf "alle als gelesen" fuer diese Ansagen: ihre Kennungen durch Leerzeichen getrennt (#28). */
+  function alleKnopf(liste, titel) {
+    return '<button type="button" class="an-alle" data-ansage-gelesen="' + esc(liste.map(function (a) { return a.kennung; }).join(" ")) + '"' +
+      (titel ? ' title="' + esc(titel) + '"' : "") + ">alle als gelesen</button>";
+  }
+  /**
+   * Die Inbox der Uebersicht (#28): alle ungelesenen Ansagen (`z.ansagen`, neueste zuerst), gruppiert je Repo, die Gruppe
+   * mit der neuesten Ansage zuerst. Je Zeile der Knopf gelesen, je Gruppe und im Kopf "alle als gelesen".
+   * `z`: { ansagen, laeuft, zps, aufgeklappt, fehler }; `fehler` steht im Kopf (ein Markieren, das nicht gespeichert wurde).
+   */
+  function ansageInbox(z) {
+    var offen = (Array.isArray(z.ansagen) ? z.ansagen : []).filter(function (a) { return a && !a.gelesen; });
+    var gruppen = [], je = {};
+    offen.forEach(function (a) {
+      var k = String(a.repo || "");
+      if (!je[k]) gruppen.push(je[k] = { repo: k, ansagen: [] });
+      je[k].ansagen.push(a);
+    });
+    var kopf = '<div class="an-leiste-kopf"><h2>Inbox</h2><span class="an-zahl">' + offen.length + " ungelesen</span>" +
+      (offen.length ? alleKnopf(offen, "Alle Ansagen der Inbox als gelesen markieren") : "") +
+      (z.fehler ? '<span class="an-fehler">' + esc(z.fehler) + "</span>" : "") + "</div>";
+    var inhalt = gruppen.length ? gruppen.map(function (g) {
+      return '<div class="an-gruppe" data-ansage-gruppe="' + esc(g.repo) + '"><div class="an-gruppe-kopf"><h3>' + esc(g.repo) + '</h3><span class="an-zahl">' +
+        g.ansagen.length + "</span>" + alleKnopf(g.ansagen, "Alle Ansagen aus " + g.repo + " als gelesen markieren") + "</div><ol>" +
+        g.ansagen.map(function (a) { return ansageZeile(a, z, false); }).join("") + "</ol></div>";
+    }).join("") : '<p class="an-leer">Keine ungelesene Ansage.</p>';
+    return '<section class="an-leiste an-inbox" data-testid="ansagen-inbox">' + kopf + inhalt + "</section>";
   }
   /**
    * Die Leiste Ansagen oben auf einer Sitzungsseite: Kopf mit dem ⚙-Menue (einstellungenMenue), darunter die Zeilen.
@@ -2439,6 +2484,8 @@
     dauerText: dauerText,
     ansageZelle: ansageZelle,
     ansageLeiste: ansageLeiste,
+    ansageInbox: ansageInbox,
+    woerterText: woerterText,
     sollSprechen: sollSprechen,
     letzteAnsagen: letzteAnsagen,
     einstellungenMenue: einstellungenMenue,
@@ -2977,6 +3024,8 @@
   var LAUFT = null, abbruchNr = 0, wartend = 0, SCHLUESSEL_ZPS = "live-plan.zeichen-je-sekunde";
   // Die aufgeklappten Texte der Leiste, je Zeit der Ansage; ein Neuzeichnen der Zeilen liest sie (leisteZustand).
   var TEXT_AUF = {};
+  // Ein Markieren als gelesen, das der Server nicht gespeichert hat (#28); steht in Inbox und Leiste bis zum naechsten Klick.
+  var gelesenFehler = "";
   function einstellungenZustand() {
     return { kann: !!SPRACHE, vorlesen: EINST.vorlesen, frei: ansageFrei, stimmen: SPRACHE ? SPRACHE.getVoices() : [], stimme: EINST.stimme, auf: einstAuf, letzte: ANSAGEN.length > 0, fehler: einstFehler, stopp: stoppOffen() };
   }
@@ -3000,9 +3049,13 @@
     var neu = wurzel.querySelector("[" + feld + "]") || wurzel.querySelector("[data-einst-auf]");
     if (neu && !neu.disabled) neu.focus({ preventScroll: true });
   }
-  /** Was die Leiste auf einer Sitzungsseite braucht: alle Ansagen, die Sitzung der Seite (SLUG), das Sprechen, die aufgeklappten Texte und das Menue. */
+  /** Was die Leiste auf einer Sitzungsseite braucht: alle Ansagen, Repo und Sitzung der Seite, das Sprechen, die aufgeklappten Texte, das Menue. */
   function leisteZustand() {
-    return { ansagen: ANSAGEN, eigeneId: SLUG, laeuft: LAUFT, zps: zeichenJeSekunde(), aufgeklappt: TEXT_AUF, menue: einstellungenZustand() };
+    return { ansagen: ANSAGEN, repo: REPO, eigeneId: SLUG, laeuft: LAUFT, zps: zeichenJeSekunde(), aufgeklappt: TEXT_AUF, menue: einstellungenZustand(), fehler: gelesenFehler };
+  }
+  /** Was die Inbox der Uebersicht braucht (ansageInbox). */
+  function inboxZustand() {
+    return { ansagen: ANSAGEN, laeuft: LAUFT, zps: zeichenJeSekunde(), aufgeklappt: TEXT_AUF, fehler: gelesenFehler };
   }
   /** Der Knopf einer Ansage in `el` mit dem Fokus (▶ oder ihr Text) als Selektor, sonst null; vor dem Neuzeichnen zu merken. */
   function ansageFokus(el) {
@@ -3237,6 +3290,27 @@
     if (m.art === "ansagen" && Array.isArray(m.ansagen)) verarbeiteAnsagen(filtern(m.ansagen));
     else if (m.art === "einstellungen") uebernehmeEinstellungen(m.einst);
   }
+  /**
+   * Markiert Ansagen als gelesen (#28): sofort hier, dann POST /api/ansagen/gelesen. Die anderen Ansichten erfahren es
+   * ueber den Strom (gelesen.json aendert sich). Scheitert das Speichern, gilt wieder der Stand des Servers, mit Meldung.
+   * Vorgelesen wird dabei nichts: eine gelesene Ansage ist keine neue (verarbeiteAnsagen vergleicht die Zeit).
+   */
+  function gelesenMarkieren(kennungen) {
+    if (!kennungen.length) return;
+    var menge = {};
+    kennungen.forEach(function (k) { menge[k] = true; });
+    ANSAGEN = ANSAGEN.map(function (a) { return menge[a.kennung] ? Object.assign({}, a, { gelesen: true }) : a; });
+    gelesenFehler = "";
+    zeichneAnsagen();
+    return fetch("/api/ansagen/gelesen", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ kennungen: kennungen }) }).then(function (r) {
+      return r.json().catch(function () { return {}; }).then(function (b) {
+        if (!r.ok) throw new Error((b && b.fehler) || "HTTP " + r.status);
+      });
+    }).catch(function (err) {
+      gelesenFehler = "Nicht als gelesen gespeichert: " + err.message;
+      return ladeAnsagen().then(zeichneAnsagen);
+    });
+  }
   /** Die Verbindung GET /api/ereignisse; nur der Leiter-Tab oeffnet sie (oder jeder Tab ohne Lock, s. startAnsagen). */
   function lauscheAnsagen() {
     if (!G.EventSource) return;
@@ -3247,9 +3321,9 @@
       setTimeout(function () { ladeAnsagen(); ladeEinstellungen(); lauscheAnsagen(); }, 3000);
     };
   }
-  /** Ein Klick auf Einstellungen, einen Abspielknopf oder den Text einer Zeile; true, wenn er ihnen galt. */
+  /** Ein Klick auf Einstellungen, einen Abspielknopf, den Text einer Zeile oder gelesen; true, wenn er ihnen galt. */
   function ansageKlick(e) {
-    var t = e.target.closest && e.target.closest("[data-einst-auf], [data-ansage-auto], [data-ansage-letzte], [data-ansage-stopp], [data-ansage-text], [data-ansage]");
+    var t = e.target.closest && e.target.closest("[data-einst-auf], [data-ansage-auto], [data-ansage-letzte], [data-ansage-stopp], [data-ansage-text], [data-ansage-gelesen], [data-ansage]");
     if (!t) return false;
     if (t.hasAttribute("data-einst-auf")) {
       einstAuf = !einstAuf;
@@ -3264,6 +3338,7 @@
     } else if (t.hasAttribute("data-ansage-letzte")) sprich(ANSAGEN[0], true);
     else if (t.hasAttribute("data-ansage-stopp")) stoppen();
     else if (t.hasAttribute("data-ansage-text")) textUmschalten(t);
+    else if (t.hasAttribute("data-ansage-gelesen")) gelesenMarkieren(String(t.getAttribute("data-ansage-gelesen") || "").split(/\s+/).filter(Boolean));
     else {
       // Die laufende Ansage haelt an oder setzt fort; jede andere Zeile spielt sofort.
       var zeit = Number(t.getAttribute("data-ansage"));
@@ -3348,7 +3423,8 @@
     var menue = wurzel.querySelector(".lp-einst");
     var fokus = menueFokus(menue), zeitFokus = ansageFokus(wurzel);
     wurzel.innerHTML = '<header class="lp-kopf"><div class="lp-oben"><h1>Sitzungen</h1>' + (menue ? "<div data-einst-platz></div>" : einstellungenMenue(einstellungenZustand())) + themaSchalter() + "</div>" +
-      '<p class="lp-ziel">Lebende Dokumente aus <span class="mono">REPO/.live-plan/SLUG.yaml</span> unter <span class="mono">' + esc(daten.wurzel) + "</span> und laufende Claude-Sitzungen aus dem Register</p></header>" + hostTeil(hostAuf) +
+      '<p class="lp-ziel">Lebende Dokumente aus <span class="mono">REPO/.live-plan/SLUG.yaml</span> unter <span class="mono">' + esc(daten.wurzel) + "</span> und laufende Claude-Sitzungen aus dem Register</p></header>" +
+      ansageInbox(inboxZustand()) + hostTeil(hostAuf) +
       '<table class="lp-liste" data-testid="tabelle-sitzungen"><thead><tr><th>repo</th><th>sitzung</th><th>titel</th><th>fragen</th><th>ansage</th><th>geaendert</th></tr></thead><tbody>' +
       (zeilen || '<tr><td colspan="6" class="leer">Keine Sitzung. <span class="mono">live-plan neu SLUG</span> legt eine an.</td></tr>') + "</tbody></table>";
     var platz = wurzel.querySelector("[data-einst-platz]");

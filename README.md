@@ -111,8 +111,10 @@ das Repo: „live-plan: Der Umbau ist fertig …“.
   600 Zeichen; Sitzung aus `CLAUDE_SESSION_ID`, Repo aus der Git-Wurzel). Er ersetzt die automatische Ansage
   desselben Zugs: `--auto` übergeht eine Sitzung, die seit dem Beginn des Zugs selbst angesagt hat.
 
-Die Ansagen stehen als eine JSON-Zeile je Ansage (`zeit`, `id`, `repo`, `text`, `quelle` `auto` oder `sage`) in
-`LIVE_PLAN_CACHE/ansagen.jsonl`. Angehängt wird mit `O_APPEND`; bei mehr als 250 Zeilen oder mehr als 1,25 MiB
+Die Ansagen stehen als eine JSON-Zeile je Ansage (`zeit`, `id`, `repo`, `text`, `quelle` `auto` oder `sage`,
+`kennung`) in `LIVE_PLAN_CACHE/ansagen.jsonl`. Die `kennung` vergibt der Schreiber (eine UUID); eine Zeile von vor
+#28 ohne Kennung bekommt beim Lesen eine aus Zeit, Sitzung, Repo und Quelle abgeleitete, die das nächste Kürzen in die
+Zeile schreibt. Angehängt wird mit `O_APPEND`; bei mehr als 250 Zeilen oder mehr als 1,25 MiB
 (1 MiB plus 256 KiB Abstand) schreibt der nächste Schreiber die letzten 200 neu, höchstens aber 768 KiB davon: bei
 langen Ansagen fallen vorne weitere weg. Der Abstand verhindert, dass ab 1 MiB jeder Anhang die ganze Datei neu
 schreibt. Anhängen und Kürzen laufen unter der Sperre `ansagen.jsonl.sperre` (O_EXCL, eine Sperre älter als 10 s gilt
@@ -122,11 +124,31 @@ zu 12 s auf die Sperre, nimmt also eine verwaiste sicher noch; bekommt er sie ni
 Ende eines Zugs, zeigt die Mod diese Meldung als Toast in der Sitzung (ohne Meldung den Exit-Code). Eine kaputte Zeile oder eine fehlende Datei
 kostet nur diese Ansagen; ein Text über 8000 Zeichen wird auch beim Lesen gekappt wie beim Schreiben, nicht verworfen.
 Der Server liest
-die Datei nur: `GET /api/ansagen` liefert die letzten 200, neueste zuerst,
-`GET /api/ereignisse` meldet als Ereignisstrom jede Änderung an Ansagen und Einstellungen. Ansagen schreiben gibt es
-über HTTP nicht.
+die Datei nur: `GET /api/ansagen` liefert die letzten 200, neueste zuerst, je mit `gelesen: true|false`,
+`GET /api/ereignisse` meldet als Ereignisstrom jede Änderung an Ansagen, Gelesen-Zustand und Einstellungen. Ansagen
+schreiben gibt es über HTTP nicht.
 
-In der Tabelle der Übersicht zeigt die Spalte **ansage** je Sitzung ▶ und die Uhrzeit ihrer neuesten Ansage (der
+**Gelesen (#28).** Welche Ansagen gelesen sind, steht auf dem Server, nicht im Browser, und gilt damit für jeden
+Browser, Tab und Rechner: `LIVE_PLAN_CACHE/gelesen.json` (`{ "v": 1, "gelesen": [Kennung, …] }`), eine eigene Datei,
+damit `ansagen.jsonl` nur angehängt wird. Gelesen wird eine Ansage nur per Knopf **gelesen**; Vorlesen ändert nichts.
+`POST /api/ansagen/gelesen` mit JSON `{ "kennungen": [ … ] }` (bis 16 KB) markiert sie; der Browser schickt die
+Kennungen, die er zeigt, auch für „alle als gelesen“, sodass eine Ansage, die erst danach kam, ungelesen bleibt.
+Antwort `{ "gelesen": n }` mit der Zahl der bekannten; 404, wenn keine bekannt ist, 400 ohne gültige Liste, 413 zu
+groß, 415 ohne JSON, 403 mit fremdem `Origin`. Geschrieben wird unter der Sperre `gelesen.json.sperre` (dieselben
+Regeln wie bei `ansagen.jsonl`), atomar über eine neue Datei und `rename`, nie durch einen Symlink. Die Datei hält nur
+Kennungen von Ansagen, die `GET /api/ansagen` noch liefert: jedes Markieren und jedes Kürzen von `ansagen.jsonl`
+wirft die übrigen hinaus. Der Server wartet höchstens 2 s auf die Sperre, sonst antwortet er mit 500.
+
+Die Übersicht beginnt mit der **Inbox**: alle ungelesenen Ansagen, gruppiert je Repo (die Gruppe mit der neuesten
+zuerst). Je Zeile stehen ▶, Uhrzeit, Wortzahl und Dauer, etwa `21:14 (183 Wörter) (≈ 1:20 min)` (Singular „1 Wort“),
+der Repo-Name als Verweis auf die Sitzung, der aufklappbare Text und der Knopf **gelesen**; danach verschwindet die
+Zeile. **alle als gelesen** steht im Kopf der Inbox und je Repo-Gruppe. Ein Markieren erreicht alle offenen Ansichten
+über den Ereignisstrom; scheitert das Speichern, zeigt die Seite wieder den Stand des Servers und eine Meldung.
+
+![Übersicht: Inbox mit sechs ungelesenen Ansagen in drei Repo-Gruppen, Wortzahl neben der Uhrzeit](docs/ansagen-inbox.png)
+
+
+In der Tabelle der Übersicht zeigt die Spalte **ansage** je Sitzung ▶, Uhrzeit und Wortzahl ihrer neuesten Ansage (der
 Text steht im Tooltip); ▶ liest sie vor. Sitzungen ohne Ansage bleiben dort leer. Das Menü **⚙** im Kopf enthält
 den Schalter **🔊 Vorlesen** (jede neue Ansage aus allen Sitzungen automatisch vorlesen, an oder aus), die Wahl der
 Stimme (deutsche zuerst, Vorgabe Deutsch) und **▶ Letzte Ansage nochmal**. Beides steht zentral in
@@ -138,8 +160,10 @@ sie nicht, spricht er mit seiner ersten deutschen Stimme. Browser sprechen erst 
 dahin steht bei Vorlesen an ein Hinweis neben ⚙ und neue Ansagen werden nur gelistet. Weil die Seite ohne Anmeldung
 im LAN erreichbar ist, liest dort jeder die Ansagen mit und kann Vorlesen und Stimme umstellen.
 Auf jeder Sitzungsseite gilt dasselbe: Vorlesen und Stimme wirken dort genauso, und neue Ansagen aller Sitzungen werden
-vorgelesen. Oben unter dem Kopf steht die Leiste **Ansagen** mit den letzten fünf Ansagen aus allen Sitzungen, neueste
-zuerst. ▶ liest eine davon sofort vor; die Zeilen der geöffneten Sitzung sind hervorgehoben. Der Text einer Zeile steht
+vorgelesen. Oben unter dem Kopf steht die Leiste **Ansagen** mit den letzten fünf Ansagen dieses Repos (dazu die der geöffneten
+Sitzung, auch wenn ihr Repo-Name aus einem Worktree abweicht), neueste zuerst. Gelesene bleiben stehen, aber
+ausgegraut; ungelesene tragen den Knopf **gelesen**. ▶ liest eine davon sofort vor; die Zeilen der geöffneten Sitzung
+sind hervorgehoben. Der Text einer Zeile steht
 ganz darin, eingeklappt auf zwei Zeilen; ein Klick oder Enter klappt ihn auf und wieder zu, und ein Neuzeichnen der
 Leiste behält das. Das Menü ⚙ in der Leiste
 ist das der Übersicht. Eine neue Ansage zeichnet nur die Leiste neu, nicht den Plan. Das Handout (`?handout=1`) bleibt
@@ -152,7 +176,7 @@ zum nächsten Klick oder Tabwechsel. Dort hält jeder Sitzungstab zwei Dauerverb
 der Browser (HTTP/1.1, 6 Verbindungen je Host). Über `localhost` (`live-plan open`) zeigte sich das in unseren Läufen
 nicht. Siehe #20.
 
-Die Steuerung der Ansagen (Übersicht und Leiste der Sitzungsseite): hinter der Uhrzeit steht die geschätzte Dauer in
+Die Steuerung der Ansagen (Übersicht und Leiste der Sitzungsseite): hinter Uhrzeit und Wortzahl steht die geschätzte Dauer in
 Klammern, etwa `(≈ 5 s)`. Sie ergibt sich aus der Länge des gesprochenen Textes (Repo und ganzer Text, nicht die
 eingeklappte Anzeige) geteilt durch die Zeichen je Sekunde
 dieses Browsers; die Vorgabe sind 14. Jede regulär zu Ende gesprochene Ansage mischt ihr gemessenes Tempo gleitend hinein
@@ -171,6 +195,8 @@ dem letzten Teil. Abgebrochene Ansagen (⏹ oder ▶ einer anderen Zeile) gehen 
 ![Leiste mit laufender Ansage (⏸) und Stopp neben ⚙](docs/ansagen-steuerung.png)
 
 ![Leiste mit aufgeklapptem ganzem Text einer langen Ansage (≈ 55 s), die übrigen eingeklappt](docs/ansagen-volltext.png)
+
+![Sitzungsseite: Leiste mit den fünf neuesten Ansagen des Repos, zwei gelesene ausgegraut, die übrigen mit Knopf gelesen](docs/ansagen-leiste-repo.png)
 
 Tests: `node --test ansagen.test.ts liste.test.ts server.test.ts` (brauchen bun), Mod: `claude plugin test mod`.
 

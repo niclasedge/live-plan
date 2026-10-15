@@ -40,6 +40,8 @@ interface Ansicht {
   letzteAnsagen: (liste: unknown) => Record<string, { zeit: number }>;
   einstellungenMenue: (z: unknown) => string;
   ansageLeiste: (z: unknown) => string;
+  ansageInbox: (z: unknown) => string;
+  woerterText: (text: unknown) => string;
   sollSprechen: (z: unknown) => boolean;
   stimmenListe: (stimmen: unknown) => { name: string; lang: string }[];
   stimmeWahl: (stimmen: unknown, name: unknown) => { name: string } | null;
@@ -99,7 +101,7 @@ test("GET /api/liste: offeneFragen je Sitzung, eine kaputte YAML kostet nur ihre
 });
 
 const JETZT = new Date(2026, 9, 13, 15, 30).getTime();
-const ANSAGE = (min: number, extra: Record<string, unknown> = {}) => ({ v: 1, zeit: JETZT - min * 60_000, id: "s-1", repo: "live-plan", text: `Ansage vor ${min} Minuten.`, quelle: "auto", ...extra });
+const ANSAGE = (min: number, extra: Record<string, unknown> = {}) => ({ v: 1, zeit: JETZT - min * 60_000, id: "s-1", repo: "live-plan", text: `Ansage vor ${min} Minuten.`, quelle: "auto", kennung: `k${min}`, gelesen: false, ...extra });
 const MENUE = { kann: true, vorlesen: true, frei: true, stimmen: [], stimme: null, auf: true, letzte: true, fehler: "" };
 const STIMMEN = [{ name: "Daniel", lang: "en-GB" }, { name: "Petra", lang: "de-DE" }, { name: "Anna", lang: "de-AT" }, { name: "Petra", lang: "de-DE" }];
 
@@ -163,13 +165,13 @@ test("letzteAnsagen: je Sitzung (Repo und Id) die neueste, ohne Id keine", () =>
   assert.equal(je["live-plan\u0000s-1"]!.zeit, JETZT - 60_000);
 });
 
-test("ansageZelle: ▶ mit der Ansage im title und ihre Uhrzeit, ohne Ansage leer", () => {
+test("ansageZelle: ▶ mit der Ansage im title, ihre Uhrzeit und Wortzahl (#28), ohne Ansage leer", () => {
   const a = ansicht();
   a.setzeJetzt(JETZT);
   assert.equal(a.ansageZelle(undefined), '<td class="lp-ansage"></td>');
   const html = a.ansageZelle(ANSAGE(5, { text: 'Fertig, "PR" <offen>.' }));
   assert.match(html, new RegExp(`<button type="button" class="an-spiel" data-ansage="${JETZT - 300_000}" title="Fertig, &quot;PR&quot; &lt;offen&gt;\\." aria-label="Letzte Ansage vorlesen: live-plan 15:25">▶</button>`));
-  assert.match(html, /<span class="an-uhr mono"[^>]*>15:25<\/span> <span class="an-dauer">\(≈ 3 s\)<\/span><\/td>$/);
+  assert.match(html, /<span class="an-uhr mono"[^>]*>15:25<\/span> <span class="an-woerter">\(3 Wörter\)<\/span> <span class="an-dauer">\(≈ 3 s\)<\/span><\/td>$/);
   assert.match(a.ansageZelle(ANSAGE(2 * 24 * 60)), />11\.10\. 15:30</);
 });
 
@@ -289,6 +291,76 @@ test("ansageLeiste: ohne Ansage der Leerzustand; Kopf mit ⚙-Menue und Hinweis 
   assert.match(html, /an-hinweis">Ein Klick auf die Seite schaltet den Ton frei\./);
 });
 
+// --- Inbox, Gelesen und Wortzahl (#28) ----------------------------------------------------------
+
+test("woerterText: Woerter mit Buchstabe oder Ziffer, in Klammern; Singular 1 Wort", () => {
+  const { woerterText } = ansicht();
+  assert.equal(woerterText("Der Build ist grün."), "(4 Wörter)");
+  assert.equal(woerterText("Fertig."), "(1 Wort)");
+  assert.equal(woerterText("Version 2.1 – fertig, 3 Tests."), "(5 Wörter)");
+  assert.equal(woerterText(""), "(0 Wörter)");
+  assert.equal(woerterText("wort ".repeat(183)), "(183 Wörter)");
+});
+
+const INBOX = (ansagen: unknown[], extra: Record<string, unknown> = {}) => ({ ansagen, ...extra });
+
+test("ansageInbox: nur ungelesene, je Repo gruppiert, die Gruppe mit der neuesten zuerst; je Nachricht gelesen, je Gruppe und fuer alle 'alle als gelesen' (#28)", () => {
+  const a = ansicht();
+  a.setzeJetzt(JETZT);
+  const ansagen = [
+    ANSAGE(1, { repo: "ops-lab", id: "s-2" }),
+    ANSAGE(2),
+    ANSAGE(3, { gelesen: true }),
+    ANSAGE(4, { repo: "ops-lab", id: "s-2", text: "Eins zwei drei vier fünf." }),
+    ANSAGE(5),
+  ];
+  const html = a.ansageInbox(INBOX(ansagen));
+  assert.match(html, /^<section class="an-leiste an-inbox" data-testid="ansagen-inbox">/);
+  assert.match(html, /<h2>Inbox<\/h2><span class="an-zahl">4 ungelesen<\/span><button type="button" class="an-alle" data-ansage-gelesen="k1 k2 k4 k5"[^>]*>alle als gelesen<\/button>/);
+  const gruppen = [...html.matchAll(/<div class="an-gruppe" data-ansage-gruppe="([^"]*)"><div class="an-gruppe-kopf"><h3>([^<]*)<\/h3><span class="an-zahl">(\d+)<\/span><button type="button" class="an-alle" data-ansage-gelesen="([^"]*)"[^>]*>alle als gelesen<\/button><\/div><ol>(.*?)<\/ol><\/div>/g)];
+  assert.deepEqual(gruppen.map((g) => [g[1], g[2], g[3], g[4]]), [["ops-lab", "ops-lab", "2", "k1 k4"], ["live-plan", "live-plan", "2", "k2 k5"]]);
+  // Je Zeile: der Knopf gelesen mit der Kennung, die Wortzahl neben der Uhrzeit, der Link zur Sitzung, der aufklappbare Text.
+  assert.deepEqual([...gruppen[0]![5]!.matchAll(/data-ansage-gelesen="([^"]*)"/g)].map((m) => m[1]), ["k1", "k4"]);
+  assert.match(gruppen[0]![5]!, /<span class="an-uhr mono">15:26<\/span> <span class="an-woerter">\(5 Wörter\)<\/span> <span class="an-dauer">/);
+  assert.match(gruppen[0]![5]!, /<a class="an-repo" href="\/ops-lab\/s-2"/);
+  assert.match(gruppen[0]![5]!, /data-ansage-text="\d+" aria-expanded="false"/);
+  assert.doesNotMatch(html, /k3/, "gelesene stehen nicht in der Inbox");
+  assert.doesNotMatch(html, /an-gelesen"/);
+  // Die Gruppe kennt <script> nicht.
+  assert.doesNotMatch(a.ansageInbox(INBOX([ANSAGE(1, { repo: "<script>x</script>" })])), /<script>/);
+});
+
+test("ansageInbox: ohne Ungelesenes der Leerzustand ohne 'alle als gelesen'; ein Fehler steht im Kopf (#28)", () => {
+  const a = ansicht();
+  const leer = a.ansageInbox(INBOX([ANSAGE(1, { gelesen: true })]));
+  assert.match(leer, /<p class="an-leer">Keine ungelesene Ansage\.<\/p>/);
+  assert.doesNotMatch(leer, /data-ansage-gelesen/);
+  assert.match(leer, /<span class="an-zahl">0 ungelesen<\/span>/);
+  assert.match(a.ansageInbox(INBOX([], { fehler: "Nicht gespeichert: HTTP 500" })), /an-fehler">Nicht gespeichert: HTTP 500</);
+});
+
+test("ansageLeiste: nur dieses Repo und die eigene Sitzung, die neuesten fuenf; gelesene ausgegraut ohne Knopf, ungelesene mit Knopf gelesen (#28)", () => {
+  const a = ansicht();
+  a.setzeJetzt(JETZT);
+  const ansagen = [
+    ANSAGE(1, { repo: "ops-lab", id: "s-x" }),
+    ANSAGE(2, { gelesen: true }),
+    ANSAGE(3, { repo: "live-plan.worktree" }),
+    ANSAGE(4),
+    ANSAGE(5, { repo: "ops-lab", id: "s-y" }),
+    ANSAGE(6, { gelesen: true }),
+    ANSAGE(7),
+    ANSAGE(8),
+  ];
+  const html = a.ansageLeiste(LEISTE(ansagen, { repo: "live-plan", eigeneId: "s-1" }));
+  const zeilen = html.split('<li class="an-zeile').slice(1);
+  assert.deepEqual(zeilen.map((z) => Number(/data-ansage="(\d+)"/.exec(z)![1])), [2, 3, 4, 6, 7].map((min) => JETZT - min * 60_000));
+  assert.deepEqual(zeilen.map((z) => z.startsWith(" an-eigen an-gelesen") || z.startsWith(" an-gelesen")), [true, false, false, true, false]);
+  assert.deepEqual(zeilen.map((z) => /data-ansage-gelesen="([^"]*)"/.exec(z)?.[1] ?? null), [null, "k3", "k4", null, "k7"]);
+  // Ohne Ansage dieses Repos der Leerzustand, auch wenn andere Repos etwas haben.
+  assert.match(a.ansageLeiste(LEISTE([ANSAGE(1, { repo: "ops-lab", id: "s-x" })], { repo: "live-plan", eigeneId: "s-1" })), /<p class="an-leer">Noch keine Ansage\.<\/p>/);
+});
+
 /** Was gerade spricht: { zeit, pausiert } (der Zustand der Seite, s. laeuft in live-plan.js). */
 const LAUF = (zeit: number, pausiert = false) => ({ zeit, pausiert });
 /** Eine Leiste, in der die Ansage `laeuft` spricht; das Menue traegt denselben Zustand. */
@@ -327,7 +399,7 @@ test("ansageZelle: die geschaetzte Dauer hinter der Uhrzeit, mit dem kalibrierte
   const a = ansicht();
   a.setzeJetzt(JETZT);
   const x = ANSAGE(5, { repo: "firstmate", text: 'Fertig, "PR" <offen>.' });
-  assert.match(a.ansageZelle(x), /<span class="an-uhr mono"[^>]*>15:25<\/span> <span class="an-dauer">\(≈ 3 s\)<\/span><\/td>$/);
+  assert.match(a.ansageZelle(x), /<span class="an-uhr mono"[^>]*>15:25<\/span> <span class="an-woerter">\(3 Wörter\)<\/span> <span class="an-dauer">\(≈ 3 s\)<\/span><\/td>$/);
   assert.match(a.ansageZelle(x, null, 7), /<span class="an-dauer">\(≈ 5 s\)<\/span><\/td>$/);
 });
 
@@ -335,15 +407,18 @@ test("ansageLeiste: hinter der Uhrzeit die geschaetzte Dauer in Klammern, mit de
   const a = ansicht();
   a.setzeJetzt(JETZT);
   const x = ANSAGE(5, { repo: "firstmate", text: 'Fertig, "PR" <offen>.' });
-  assert.match(a.ansageLeiste(LEISTE([x])), /<span class="an-zeit"><span class="an-uhr mono">15:25<\/span> <span class="an-dauer">\(≈ 3 s\)<\/span><\/span><a class="an-repo"/);
+  assert.match(a.ansageLeiste(LEISTE([x])), /<span class="an-zeit"><span class="an-uhr mono">15:25<\/span> <span class="an-woerter">\(3 Wörter\)<\/span> <span class="an-dauer">\(≈ 3 s\)<\/span><\/span><a class="an-repo"/);
   assert.match(a.ansageLeiste(LEISTE([x], { zps: 7 })), /<span class="an-dauer">\(≈ 5 s\)<\/span>/);
 });
 
-test("ansageLeiste: vier Zellen je Zeile (Knopf, Zeit mit Dauer, Repo, Text), damit das Raster auf 390 px passt", () => {
+test("ansageLeiste: fuenf Zellen je Zeile (Knopf, Zeit mit Wortzahl und Dauer, Repo, Text, gelesen), eine gelesene ohne den letzten Knopf (#28)", () => {
   const a = ansicht();
   a.setzeJetzt(JETZT);
   const html = a.ansageLeiste(LEISTE([ANSAGE(5, { repo: "Muster-Werkstatt-Archiv1", text: "Kurz." })]));
-  assert.match(html, /<li class="an-zeile"><button [^>]*>▶<\/button><span class="an-zeit"><span class="an-uhr mono">15:25<\/span> <span class="an-dauer">\(≈ \d+ s\)<\/span><\/span><a class="an-repo" href="\/Muster-Werkstatt-Archiv1\/s-1" title="Muster-Werkstatt-Archiv1">Muster-Werkstatt-Archiv1<\/a><button type="button" class="an-text" data-ansage-text="\d+" aria-expanded="false"><span>Kurz\.<\/span><\/button><\/li>/);
+  assert.match(html, /<li class="an-zeile"><button [^>]*>▶<\/button><span class="an-zeit"><span class="an-uhr mono">15:25<\/span> <span class="an-woerter">\(1 Wort\)<\/span> <span class="an-dauer">\(≈ \d+ s\)<\/span><\/span><a class="an-repo" href="\/Muster-Werkstatt-Archiv1\/s-1" title="Muster-Werkstatt-Archiv1">Muster-Werkstatt-Archiv1<\/a><button type="button" class="an-text" data-ansage-text="\d+" aria-expanded="false"><span>Kurz\.<\/span><\/button><button type="button" class="an-gelesen-knopf" data-ansage-gelesen="k5" aria-label="Als gelesen markieren: Muster-Werkstatt-Archiv1 15:25">gelesen<\/button><\/li>/);
+  const gelesen = a.ansageLeiste(LEISTE([ANSAGE(5, { text: "Kurz.", gelesen: true })]));
+  assert.match(gelesen, /<li class="an-zeile an-gelesen">.*<span>Kurz\.<\/span><\/button><\/li>/);
+  assert.doesNotMatch(gelesen, /data-ansage-gelesen/);
 });
 
 test("ansageLeiste: der Repo-Name verweist auf die Sitzung, die eigene mit aria-current; ohne Id oder Repo bleibt er Text", () => {
@@ -442,8 +517,9 @@ const ereignis = (attrs: Record<string, string>) => ({
  * (kein navigator.locks, der Fallback) oder "abgelehnt" (der Lock wird verweigert, der .catch-Zweig greift).
  * `startAnsagen` steht schon beim ersten Laden da (ohne Neuigkeit, also ohne Vorlesen); `vorher` ist der Speicher vor dem Start.
  */
-async function ansagenLauf(sperre: "fehlt" | "abgelehnt", startAnsagen: unknown[] = [], vorher: Record<string, string> = {}) {
+async function ansagenLauf(sperre: "fehlt" | "abgelehnt", startAnsagen: unknown[] = [], vorher: Record<string, string> = {}, gelesenStatus = 200) {
   const gesprochen: string[] = [];
+  const anfragen: { url: string; methode: string; body: unknown }[] = [];
   const protokoll: string[] = [];
   const aeusserungen: Aeusserung[] = [];
   const klicks: Array<(e: unknown) => void> = [];
@@ -471,7 +547,7 @@ async function ansagenLauf(sperre: "fehlt" | "abgelehnt", startAnsagen: unknown[
     addEventListener: (typ: string, f: (e: unknown) => void) => { if (typ === "click") klicks.push(f); },
     removeEventListener: () => {}, querySelector: () => null, querySelectorAll: () => [],
   };
-  const antwort = (b: unknown, ok = true) => ({ ok, status: ok ? 200 : 404, json: async () => b });
+  const antwort = (b: unknown, ok = true, status = ok ? 200 : 404) => ({ ok, status, json: async () => b });
   const g: Record<string, unknown> = {
     document: doc,
     location: { pathname: "/", search: "" },
@@ -503,7 +579,9 @@ async function ansagenLauf(sperre: "fehlt" | "abgelehnt", startAnsagen: unknown[
     BroadcastChannel: class { onmessage: unknown = null; postMessage() {} },
     setInterval: () => 1, clearInterval: () => {}, setTimeout: () => 1,
     addEventListener: () => {},
-    fetch: async (url: string) => {
+    fetch: async (url: string, init?: { method?: string; body?: string }) => {
+      if (init?.method === "POST") anfragen.push({ url, methode: init.method, body: JSON.parse(init.body ?? "null") });
+      if (url === "/api/ansagen/gelesen") return gelesenStatus === 200 ? antwort({ gelesen: 1 }) : antwort({ fehler: "kaputt" }, false, gelesenStatus);
       if (url === "/api/ansagen") return antwort({ ansagen });
       if (url === "/api/einstellungen") return antwort({ vorlesen: true, stimme: null });
       if (url === "/api/liste") return antwort({ wurzel: "/w", sitzungen: [] });
@@ -538,6 +616,12 @@ async function ansagenLauf(sperre: "fehlt" | "abgelehnt", startAnsagen: unknown[
     klickeStopp: () => { wurzelKlicks.forEach((f) => f(ereignis({ "data-ansage-stopp": "" }))); },
     /** Ein Klick auf den Text einer Zeile der Leiste; `attrs` sind die Attribute des Knopfs, der Klick schreibt hinein. */
     klickeText: (attrs: Record<string, string>) => { wurzelKlicks.forEach((f) => f(ereignis(attrs))); },
+    /** Ein Klick auf einen Knopf gelesen oder "alle als gelesen" mit diesen Kennungen (durch Leerzeichen getrennt). */
+    klickeGelesen: async (kennungen: string) => { wurzelKlicks.forEach((f) => f(ereignis({ "data-ansage-gelesen": kennungen }))); await warte(); },
+    /** Die POST-Anfragen der Seite in ihrer Reihenfolge, mit dem gelesenen JSON-Koerper. */
+    anfragen: () => anfragen.map((x) => ({ ...x })),
+    /** Das zuletzt gezeichnete Markup der Seite. */
+    html: () => wurzelHtml,
     /** Ob der Stopp-Knopf im Markup steht. */
     stoppSichtbar: () => stoppDa,
     /** Die zuletzt gesprochene Aeusserung; ihre Ereignisse loest der Test selbst aus, wie der Browser es tut. */
@@ -692,6 +776,27 @@ test("Klick auf den Text einer Zeile klappt ihn auf und wieder zu, ohne vorzules
   lauf.klickeText(text);
   assert.equal(text["aria-expanded"], "false");
   assert.deepEqual(lauf.protokoll(), [], "der Text spielt nicht ab");
+});
+
+test("Klick auf gelesen: POST mit der Kennung, kein Vorlesen; die Zeile verschwindet aus der Inbox, 'alle als gelesen' schickt alle (#28)", async () => {
+  const lauf = await ansagenLauf("fehlt", [{ ...ANSAGE_ZWEI, kennung: "kb" }, { ...ANSAGE_EINS, kennung: "ka" }, { ...ANSAGE_EINS, zeit: 500, kennung: "kc", repo: "q" }]);
+  assert.match(lauf.html(), /data-ansage-gelesen="ka"/);
+  await lauf.klickeGelesen("ka");
+  assert.deepEqual(lauf.anfragen(), [{ url: "/api/ansagen/gelesen", methode: "POST", body: { kennungen: ["ka"] } }]);
+  assert.deepEqual(lauf.protokoll(), [], "gelesen liest nicht vor und bricht nichts ab");
+  assert.doesNotMatch(lauf.html(), /data-ansage-gelesen="ka"/);
+  assert.match(lauf.html(), /data-ansage-gelesen="kb"/);
+  await lauf.klickeGelesen("kb kc");
+  assert.deepEqual(lauf.anfragen()[1], { url: "/api/ansagen/gelesen", methode: "POST", body: { kennungen: ["kb", "kc"] } });
+  assert.match(lauf.html(), /Keine ungelesene Ansage\./);
+  assert.deepEqual(lauf.protokoll(), []);
+});
+
+test("Klick auf gelesen: scheitert das Speichern, laedt die Seite den Stand des Servers neu und meldet den Fehler (#28)", async () => {
+  const lauf = await ansagenLauf("fehlt", [{ ...ANSAGE_EINS, kennung: "ka" }], {}, 500);
+  await lauf.klickeGelesen("ka");
+  assert.match(lauf.html(), /data-ansage-gelesen="ka"/, "der Server hat sie nicht als gelesen");
+  assert.match(lauf.html(), /an-fehler">Nicht als gelesen gespeichert: kaputt</);
 });
 
 test("Klick: nach dem Stopp spielt dieselbe Zeile wieder sofort, ohne Pause davor", async () => {

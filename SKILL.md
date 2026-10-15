@@ -309,12 +309,17 @@ Zwei bis drei gesprochene Saetze, ohne Pfade, Befehle oder URLs. Diese Ansage er
 dieses Zugs (Sitzung aus `CLAUDE_SESSION_ID`, REPO aus der Git-Wurzel); auch sie wird gesaeubert, bis sechs
 Saetze und 600 Zeichen. Alle Ansagen stehen in `${LIVE_PLAN_CACHE:-~/.cache/live-plan}/ansagen.jsonl`
 (die letzten 200, kaputte Zeilen ueberspringt der Server). `GET /api/ansagen` liefert sie neueste zuerst,
-`GET /api/ereignisse` meldet jede neue. In der Tabelle der Uebersicht steht je Sitzung ▶ mit der Uhrzeit ihrer
+`GET /api/ereignisse` meldet jede neue. Die Uebersicht beginnt mit der Inbox: alle ungelesenen Ansagen je Repo,
+je Zeile mit Uhrzeit und Wortzahl (`21:14 (183 Woerter)`) und dem Knopf gelesen, dazu "alle als gelesen" fuer die
+Inbox und je Repo. Gelesen steht auf dem Server in `${LIVE_PLAN_CACHE:-~/.cache/live-plan}/gelesen.json` (Kennungen,
+`POST /api/ansagen/gelesen` mit `{ "kennungen": [...] }`) und gilt fuer jeden Browser; nur der Knopf markiert,
+Vorlesen nicht. In der Tabelle der Uebersicht steht je Sitzung ▶ mit Uhrzeit und Wortzahl ihrer
 neuesten Ansage; Vorlesen an/aus und die Stimme stehen im Menue ⚙ und zentral in
 `${LIVE_PLAN_CACHE:-~/.cache/live-plan}/einstellungen.yaml` (`GET`/`POST /api/einstellungen`).
 Auf jeder Sitzungsseite gilt dasselbe: neue Ansagen aller Sitzungen werden dort ebenfalls vorgelesen, und oben
-unter dem Kopf steht die Leiste Ansagen mit den letzten fuenf, neueste zuerst; die Zeilen der eigenen Sitzung
-sind hervorgehoben. Der Text einer Zeile steht ganz darin, eingeklappt auf zwei Zeilen; Klick oder Enter klappt ihn
+unter dem Kopf steht die Leiste Ansagen mit den letzten fuenf dieses Repos (und der eigenen Sitzung), neueste zuerst;
+gelesene bleiben ausgegraut stehen, ungelesene tragen den Knopf gelesen, die Zeilen der eigenen Sitzung sind
+hervorgehoben. Der Text einer Zeile steht ganz darin, eingeklappt auf zwei Zeilen; Klick oder Enter klappt ihn
 auf. Mehrere Tabs teilen sich die Verbindung: einer haelt `GET /api/ereignisse`, die anderen bekommen
 Aenderungen ueber einen BroadcastChannel. Vorgelesen wird nur im Sprecher-Tab (der zuletzt bediente, ohne Sprecher der Leiter-Tab), jede Ansage genau einmal.
 Ohne Web Locks (z. B. LAN-IP, Tailscale, `.local` oder ohne sicheren Kontext) lauscht jeder Tab selbst; gesprochen wird
@@ -322,7 +327,7 @@ dann nur im zuletzt geklickten Tab, und schliesst der, schweigt es bis zum naech
 jeder Sitzungstab zwei Dauerverbindungen; ab etwa drei Sitzungstabs stockt der Browser (HTTP/1.1, 6 je Host). Ueber
 `localhost` (`live-plan open`) zeigte sich das in unseren Laeufen nicht. Siehe #20.
 
-Die Steuerung der Ansagen (Uebersicht und Leiste): hinter der Uhrzeit steht die geschaetzte Dauer in Klammern, etwa
+Die Steuerung der Ansagen (Uebersicht und Leiste): hinter Uhrzeit und Wortzahl steht die geschaetzte Dauer in Klammern, etwa
 `(≈ 5 s)`. Sie rechnet aus der Laenge des gesprochenen Textes (Repo und ganzer Text) geteilt durch die Zeichen je
 Sekunde dieses Browsers (Vorgabe 14); jede
 regulaer zu Ende gesprochene Ansage verschiebt den Wert gleitend auf das gemessene Tempo (0,7 alt, 0,3 neu). Der Wert
@@ -336,7 +341,7 @@ Eine lange Ansage geht in Teilen von etwa 10 s beim gemessenen Tempo (80 bis 250
 
 ## Grenzen
 
-- Der Browser schreibt nur `fragen[].entscheidung` und die Einstellungen der Sprachausgabe, die Mod dazu
+- Der Browser schreibt nur `fragen[].entscheidung`, die Einstellungen der Sprachausgabe und den Gelesen-Zustand der Ansagen, die Mod dazu
   `fragen[].zurueckgezogen`. Status, Schritte, Belege: nur Sie.
 - Keine Anmeldung; der Server lauscht auf `0.0.0.0` und ist im LAN erreichbar. Keine Secrets in die Datei.
   Er antwortet nur unter einem Host dieses Rechners (localhost, Rechnername, eigene Adresse,
@@ -355,6 +360,7 @@ Eine lange Ansage geht in Teilen von etwa 10 s beim gemessenen Tempo (80 bis 250
 - `SLUG.verlauf.jsonl`, `SLUG.stand.json` und `SLUG.seit` daneben gehoeren Server und Skript. Nicht anfassen.
 - Ansagen schreibt nur `live-plan sage` auf diesem Rechner, nie der Browser; wer die Seite erreicht, liest
   sie (`GET /api/ansagen`). Nichts Vertrauliches ansagen. Der Browser schreibt nur `einstellungen.yaml`
-  (`POST /api/einstellungen`, JSON bis 2 KB, ohne fremden `Origin`).
+  (`POST /api/einstellungen`, JSON bis 2 KB, ohne fremden `Origin`) und `gelesen.json`
+  (`POST /api/ansagen/gelesen`, JSON bis 16 KB, ohne fremden `Origin`).
 - `frage` schreibt nur neue Eintraege hinten an `fragen:`, nie durch einen Symlink und nie in eine
   Flow-Liste mit Inhalt.
