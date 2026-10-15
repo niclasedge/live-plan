@@ -140,18 +140,25 @@ Kennungen von Ansagen, die `GET /api/ansagen` noch liefert: jedes Markieren und 
 wirft die übrigen hinaus. Der Server wartet höchstens 2 s auf die Sperre, sonst antwortet er mit 500; das Kürzen
 wartet höchstens 1,5 s und lässt das Aufräumen sonst bis zum nächsten Mal aus, damit `live-plan sage` nicht hängt.
 
-Die Übersicht beginnt mit der **Inbox**: alle ungelesenen Ansagen, gruppiert je Repo (die Gruppe mit der neuesten
-zuerst). Je Zeile stehen ▶, Uhrzeit, Wortzahl und Dauer, etwa `21:14 (183 Wörter) (≈ 1:20 min)` (Singular „1 Wort“),
+**Aufräumen (#43).** `POST /api/ansagen/aufraeumen` mit JSON `{ "behalten": n }` (ganze Zahl von 1 bis 200; die Übersicht
+schickt 5) markiert je Repo alle Ansagen außer den `n` neuesten nach Zeit als gelesen; gelesene zählen dabei mit. Es nutzt
+dieselbe Sperre und Datei wie `gelesen`. Antwort `{ "gelesen": n }` mit der Zahl der erfassten bekannten Kennungen, `0`,
+wenn es nichts zu kürzen gab; 422 bei einer Zahl außerhalb von 1 bis 200, 413 zu groß, 415 ohne JSON, 400 ohne gültiges
+JSON, 403 mit fremdem `Origin`.
+
+Die Übersicht beginnt mit der **Inbox**: alle ungelesenen Ansagen aller Repos als eine Liste, nach Zeit absteigend (die
+neueste zuerst). Je Zeile stehen ▶, Uhrzeit, Wortzahl und Dauer, etwa `21:14 (183 Wörter) (≈ 1:20 min)` (Singular „1 Wort“),
 der Repo-Name als Verweis auf die Sitzung, der aufklappbare Text und der Knopf **gelesen**; danach verschwindet die
-Zeile. **alle als gelesen** steht im Kopf der Inbox und je Repo-Gruppe. Ein Markieren erreicht alle offenen Ansichten
+Zeile. Im Kopf der Inbox stehen **alle als gelesen** für alle Ansagen und **Aufräumen**; darunter steht je Repo sein Name
+mit **alle als gelesen** für dessen ungelesene Ansagen. Ein Markieren erreicht alle offenen Ansichten
 über den Ereignisstrom; scheitert das Speichern, zeigt die Seite wieder den Stand des Servers und eine Meldung.
 Nach **gelesen** steht der Fokus auf dem Knopf **gelesen**, der an die Stelle des geklickten rückt (nach dem letzten
-auf dem davor), nach **alle als gelesen** auf dem ersten verbliebenen; ohne Knopf auf der Überschrift der Inbox bzw. der
-Leiste. Er bleibt dort, wenn die Seite danach neu zeichnet (das Echo des Servers über den Ereignisstrom), sodass ein
+auf dem davor), nach **alle als gelesen** auf dem ersten verbliebenen, nach **Aufräumen** auf dem Knopf selbst; ohne
+Knopf auf der Überschrift der Inbox bzw. der Leiste. Er bleibt dort, wenn die Seite danach neu zeichnet (das Echo des Servers über den Ereignisstrom), sodass ein
 zweites Enter die nächste Ansage markiert. Kopf, Inbox, Rechner und Tabelle stehen immer in
 dieser Reihenfolge, gleich ob die Liste oder der Rechner zuerst ankommt.
 
-![Übersicht: Inbox mit sechs ungelesenen Ansagen in drei Repo-Gruppen, Wortzahl neben der Uhrzeit](docs/ansagen-inbox.png)
+![Übersicht: Inbox mit sechs ungelesenen Ansagen aus drei Repos, flach nach Zeit sortiert, Aufräumen im Kopf, Wortzahl neben der Uhrzeit](docs/ansagen-inbox.png)
 
 
 In der Tabelle der Übersicht zeigt die Spalte **ansage** je Sitzung ▶, Uhrzeit und Wortzahl ihrer neuesten Ansage (der

@@ -271,14 +271,15 @@ body { margin: 0; background: var(--s1); font-family: var(--font); }
 .an-zeile .an-text:hover, .an-zeile .an-text[aria-expanded="true"] { color: var(--ink-2); }
 .an-zeile .an-text:focus-visible { outline: 2px solid var(--l1); outline-offset: 1px; border-radius: 4px; }
 .an-leer { margin: 0; color: var(--ink-3); }
-/* Inbox der Uebersicht (#28): ungelesene Ansagen je Repo, gelesen per Knopf; gelesene Zeilen der Leiste ausgegraut. */
+/* Inbox der Uebersicht (#28, #43): ungelesene Ansagen als eine Liste nach Zeit, je Zeile das Repo; gelesen per Knopf. */
 .an-inbox { margin: 0 0 14px; }
-.an-gruppe { display: grid; gap: 4px; }
-.an-gruppe-kopf { display: flex; gap: 8px; align-items: center; min-width: 0; }
-.an-gruppe-kopf h3 { margin: 0; overflow: hidden; font-size: 12.5px; font-weight: 600; color: var(--ink-2); text-overflow: ellipsis; white-space: nowrap; }
 .an-zahl { font-size: 11px; color: var(--ink-3); white-space: nowrap; }
-.an-alle, .an-gelesen-knopf { padding: 1px 8px; border: 1px solid var(--line-2); border-radius: 6px; background: var(--s1); color: var(--ink-2); font-size: 11.5px; white-space: nowrap; }
-.an-alle:hover, .an-gelesen-knopf:hover { border-color: var(--l1); color: var(--ink-1); }
+/* Knopfleiste der Inbox (#43): je Repo sein Name und "alle als gelesen"; darueber im Kopf "alle" und "Aufraeumen". */
+.an-knopfleiste { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; }
+.an-repo-alle { display: inline-flex; gap: 6px; align-items: center; min-width: 0; }
+.an-repo-kopf { display: inline-block; max-width: 16ch; overflow: hidden; font-size: 12.5px; font-weight: 600; color: var(--ink-2); text-overflow: ellipsis; white-space: nowrap; vertical-align: middle; }
+.an-alle, .an-gelesen-knopf, .an-aufraeumen { padding: 1px 8px; border: 1px solid var(--line-2); border-radius: 6px; background: var(--s1); color: var(--ink-2); font-size: 11.5px; white-space: nowrap; }
+.an-alle:hover, .an-gelesen-knopf:hover, .an-aufraeumen:hover { border-color: var(--l1); color: var(--ink-1); }
 .an-zeile.an-gelesen { opacity: 0.5; }
 .an-woerter { font-size: 11px; color: var(--ink-3); white-space: nowrap; }
 /* Dauer hinter der Uhrzeit (geschaetzt), der Verweis auf die Sitzung im Repo-Namen, Zustand des Knopfs, Stopp neben ⚙. */

@@ -393,30 +393,41 @@ test("woerterText: Woerter mit Buchstabe oder Ziffer, in Klammern; Singular 1 Wo
 
 const INBOX = (ansagen: unknown[], extra: Record<string, unknown> = {}) => ({ ansagen, ...extra });
 
-test("ansageInbox: nur ungelesene, je Repo gruppiert, die Gruppe mit der neuesten zuerst; je Nachricht gelesen, je Gruppe und fuer alle 'alle als gelesen' (#28)", () => {
+test("ansageInbox: nur ungelesene, flach nach zeit absteigend ueber alle Repos, je Zeile das Repo; je Zeile gelesen, global und je Repo 'alle als gelesen' (#28, #43)", () => {
   const a = ansicht();
   a.setzeJetzt(JETZT);
+  // Gemischt eingereicht: die Reihenfolge der Liste kommt aus der Zeit, nicht aus der Eingabe.
   const ansagen = [
-    ANSAGE(1, { repo: "ops-lab", id: "s-2" }),
-    ANSAGE(2),
-    ANSAGE(3, { gelesen: true }),
-    ANSAGE(4, { repo: "ops-lab", id: "s-2", text: "Eins zwei drei vier fünf." }),
     ANSAGE(5),
+    ANSAGE(2),
+    ANSAGE(4, { repo: "ops-lab", id: "s-2", text: "Eins zwei drei vier fünf." }),
+    ANSAGE(1, { repo: "ops-lab", id: "s-2" }),
+    ANSAGE(3, { gelesen: true }),
   ];
   const html = a.ansageInbox(INBOX(ansagen));
   assert.match(html, /^<section class="an-leiste an-inbox" data-testid="ansagen-inbox">/);
   assert.match(html, /<h2 tabindex="-1">Inbox<\/h2><span class="an-zahl">4 ungelesen<\/span><button type="button" class="an-alle" data-ansage-gelesen="k1 k2 k4 k5"[^>]*>alle als gelesen<\/button>/);
-  const gruppen = [...html.matchAll(/<div class="an-gruppe" data-ansage-gruppe="([^"]*)"><div class="an-gruppe-kopf"><h3>([^<]*)<\/h3><span class="an-zahl">(\d+)<\/span><button type="button" class="an-alle" data-ansage-gelesen="([^"]*)"[^>]*>alle als gelesen<\/button><\/div><ol>(.*?)<\/ol><\/div>/g)];
-  assert.deepEqual(gruppen.map((g) => [g[1], g[2], g[3], g[4]]), [["ops-lab", "ops-lab", "2", "k1 k4"], ["live-plan", "live-plan", "2", "k2 k5"]]);
-  // Je Zeile: der Knopf gelesen mit der Kennung, die Wortzahl neben der Uhrzeit, der Link zur Sitzung, der aufklappbare Text.
-  assert.deepEqual([...gruppen[0]![5]!.matchAll(/data-ansage-gelesen="([^"]*)"/g)].map((m) => m[1]), ["k1", "k4"]);
-  assert.match(gruppen[0]![5]!, /<span class="an-uhr mono">15:26<\/span> <span class="an-woerter">\(5 Wörter\)<\/span> <span class="an-dauer">/);
-  assert.match(gruppen[0]![5]!, /<a class="an-repo" href="\/ops-lab\/s-2"/);
-  assert.match(gruppen[0]![5]!, /data-ansage-text="\d+" aria-expanded="false"/);
+  assert.doesNotMatch(html, /an-gruppe/, "keine Gruppen mehr je Repo");
+  // Eine Liste, neueste zuerst, ueber alle Repos; jede Zeile mit ihrem Knopf gelesen und ihrem Repo.
+  const zeilen = [...html.matchAll(/<li class="an-zeile">(.*?)<\/li>/g)].map((m) => m[1]!);
+  assert.deepEqual(zeilen.map((z) => [/data-ansage-gelesen="([^"]*)"/.exec(z)![1], /class="an-repo"[^>]*>([^<]*)</.exec(z)![1]]), [["k1", "ops-lab"], ["k2", "live-plan"], ["k4", "ops-lab"], ["k5", "live-plan"]]);
+  // Je Repo ein 'alle als gelesen' mit den offenen Kennungen dieses Repos, in derselben Reihenfolge.
+  assert.deepEqual([...html.matchAll(/<span class="an-repo-kopf">([^<]*)<\/span><button type="button" class="an-alle" data-ansage-gelesen="([^"]*)"/g)].map((m) => [m[1], m[2]]), [["ops-lab", "k1 k4"], ["live-plan", "k2 k5"]]);
+  // Die Zeile mit Wortzahl neben der Uhrzeit, Dauer, Link zur Sitzung und aufklappbarem Text.
+  const vier = zeilen[2]!;
+  assert.match(vier, /<span class="an-uhr mono">15:26<\/span> <span class="an-woerter">\(5 Wörter\)<\/span> <span class="an-dauer">/);
+  assert.match(vier, /<a class="an-repo" href="\/ops-lab\/s-2"/);
+  assert.match(vier, /data-ansage-text="\d+" aria-expanded="false"/);
   assert.doesNotMatch(html, /k3/, "gelesene stehen nicht in der Inbox");
   assert.doesNotMatch(html, /an-gelesen"/);
-  // Die Gruppe kennt <script> nicht.
+  // Der Repo-Name kennt <script> nicht.
   assert.doesNotMatch(a.ansageInbox(INBOX([ANSAGE(1, { repo: "<script>x</script>" })])), /<script>/);
+});
+
+test("ansageInbox: der Knopf Aufraeumen mit behalten 5 steht bei Ungelesenem, sonst nicht (#43)", () => {
+  const a = ansicht();
+  assert.match(a.ansageInbox(INBOX([ANSAGE(1)])), /<button type="button" class="an-aufraeumen" data-ansage-aufraeumen="5" title="[^"]*">Aufräumen<\/button>/);
+  assert.doesNotMatch(a.ansageInbox(INBOX([ANSAGE(1, { gelesen: true })])), /an-aufraeumen/);
 });
 
 test("ansageInbox: ohne Ungelesenes der Leerzustand ohne 'alle als gelesen'; ein Fehler steht im Kopf (#28)", () => {
@@ -607,7 +618,8 @@ const ereignis = (attrs: Record<string, string>) => ({
  * `startAnsagen` steht schon beim ersten Laden da (ohne Neuigkeit, also ohne Vorlesen); `vorher` ist der Speicher vor dem Start.
  */
 /** Weitere Attrappen: `host` ist die Antwort von GET /api/host, `zurueck` haelt Antworten bis `freigeben(url)` zurueck, `stimmen` sind die Stimmen der Sprachausgabe. */
-interface LaufOptionen { host?: unknown; zurueck?: string[]; stimmen?: unknown[]; stimme?: string; welt?: Welt; name?: string; speakWirft?: number }
+/** `aufraeumen` ist die Antwort von POST /api/ansagen/aufraeumen: die Kennungen, die der Server markiert, und ein Status (#43). */
+interface LaufOptionen { host?: unknown; zurueck?: string[]; stimmen?: unknown[]; stimme?: string; welt?: Welt; name?: string; speakWirft?: number; aufraeumen?: { kennungen: string[]; status?: number } }
 
 /** Ein Tab, wie ihn die Welt sieht: wie viele Aeusserungen in seiner Sprachausgabe stehen, und seine Ereignisse. */
 interface WeltTab { name: string; imBrowser: () => number; storage: (e: unknown) => void; geaendert: () => void; beende: () => void }
@@ -713,6 +725,7 @@ async function ansagenLauf(sperre: "fehlt" | "abgelehnt" | "echt", startAnsagen:
   };
   const gelesenKnopf = (kennung: string) => knoten(`gelesen:${kennung}`, { "data-ansage-gelesen": kennung });
   const alleKnopf = (kennungen: string) => knoten(`alle:${kennungen}`, { "data-ansage-gelesen": kennungen }, [".an-alle"]);
+  const aufraeumenKnopf = (wert: string) => knoten("aufraeumen", { "data-ansage-aufraeumen": wert }, [".an-aufraeumen"]);
   // Was der Server als gelesen fuehrt: die Kennungen aus erfolgreichen POST /api/ansagen/gelesen.
   const markiert = new Set<string>();
   const anfragen: { url: string; methode: string; body: unknown }[] = [];
@@ -768,6 +781,8 @@ async function ansagenLauf(sperre: "fehlt" | "abgelehnt" | "echt", startAnsagen:
         const treffer = [...wurzelHtml.matchAll(/class="(an-alle|an-gelesen-knopf)" data-ansage-gelesen="([^"]*)"/g)].find((m) => m[2] === g[2] && (!g[1] || m[1] === g[1]));
         return treffer ? (treffer[1] === "an-alle" ? alleKnopf(treffer[2]!) : gelesenKnopf(treffer[2]!)) : null;
       }
+      const aufr = /^(?:\.an-aufraeumen)?\[data-ansage-aufraeumen="([^"]*)"\]$/.exec(sel);
+      if (aufr) return wurzelHtml.includes(`class="an-aufraeumen" data-ansage-aufraeumen="${aufr[1]}"`) ? aufraeumenKnopf(aufr[1]!) : null;
       return null;
     },
     querySelectorAll: (sel: string) => sel === ".an-gelesen-knopf"
@@ -833,6 +848,12 @@ async function ansagenLauf(sperre: "fehlt" | "abgelehnt" | "echt", startAnsagen:
         (JSON.parse(init?.body ?? "{}").kennungen as string[]).forEach((k) => markiert.add(k));
         return antwort({ gelesen: 1 });
       }
+      if (url === "/api/ansagen/aufraeumen") {
+        const au = optionen.aufraeumen ?? { kennungen: [] };
+        if ((au.status ?? 200) !== 200) return antwort({ fehler: "kaputt" }, false, au.status);
+        au.kennungen.forEach((k) => markiert.add(k));
+        return antwort({ gelesen: au.kennungen.length });
+      }
       if (url === "/api/ansagen") return antwort({ ansagen: ((welt ? welt.ansagen : ansagen) as { kennung?: string; gelesen?: boolean }[]).map((a) => (a.kennung && markiert.has(a.kennung) ? { ...a, gelesen: true } : a)) });
       if (url === "/api/einstellungen") return antwort({ vorlesen: true, stimme: optionen.stimme ?? null });
       if (url === "/api/liste") return antwort({ wurzel: "/w", sitzungen: [] });
@@ -885,6 +906,8 @@ async function ansagenLauf(sperre: "fehlt" | "abgelehnt" | "echt", startAnsagen:
     anfragen: () => anfragen.map((x) => ({ ...x })),
     /** Gibt eine zurueckgehaltene Antwort frei (LaufOptionen.zurueck) und wartet, bis die Seite sie verarbeitet hat. */
     freigeben: async (url: string) => { tore.get(url)!.auf(); await warte(); },
+    /** Ein Klick auf 'Aufraeumen' (#43); `behalten` ist der Wert des Knopfs. */
+    klickeAufraeumen: async (behalten = "5") => { wurzelKlicks.forEach((f) => f(ereignis({ "data-ansage-aufraeumen": behalten }))); await warte(); },
     /** Wer den Fokus hat (K3); null heisst body. */
     fokus: () => fokus,
     /** Das Echo des Servers nach einem Markieren (S3): gelesen.json aendert sich, der Strom meldet geaendert, die Seite laedt und zeichnet neu. */
@@ -1145,12 +1168,13 @@ test("Klick auf gelesen: scheitert das Speichern, laedt die Seite den Stand des 
 
 // --- Review #28: Repo-Namen wie Object-Schluessel, Reihenfolge Inbox/Rechner, Fokus -----------------
 
-test("ansageInbox: ein Repo namens constructor, __proto__, toString oder hasOwnProperty bekommt seine Gruppe, ohne zu werfen (Review S1)", () => {
+test("ansageInbox: ein Repo namens constructor, __proto__, toString oder hasOwnProperty bekommt seinen Knopf je Repo und seine Zeilen, ohne zu werfen (Review S1, #43)", () => {
   const a = ansicht();
   a.setzeJetzt(JETZT);
   for (const repo of ["constructor", "__proto__", "toString", "hasOwnProperty", "valueOf"]) {
     const html = a.ansageInbox(INBOX([ANSAGE(1, { repo }), ANSAGE(2, { repo, kennung: "k2" })]));
-    assert.match(html, new RegExp(`data-ansage-gruppe="${repo}"><div class="an-gruppe-kopf"><h3>${repo}</h3><span class="an-zahl">2</span>`), repo);
+    assert.ok(html.includes(`<span class="an-repo-kopf">${repo}</span><button type="button" class="an-alle" data-ansage-gelesen="k1 k2"`), repo);
+    assert.equal([...html.matchAll(/<li class="an-zeile">/g)].length, 2, repo);
   }
 });
 
@@ -1160,6 +1184,40 @@ test("Klick auf gelesen: eine Ansage mit der Kennung constructor bleibt ungelese
   assert.match(lauf.html(), /data-ansage-gelesen="constructor"/);
   await lauf.klickeGelesen("constructor");
   assert.doesNotMatch(lauf.html(), /data-ansage-gelesen="constructor"/);
+});
+
+// --- Aufraeumen (#43): Knopf, Fehler, Fokus ----------------------------------------------------------
+
+test("Aufraeumen: der Knopf schickt POST /api/ansagen/aufraeumen mit behalten 5, danach zeigt die Inbox den Stand des Servers; nichts wird vorgelesen (#43)", async () => {
+  const ansagen = [{ ...ANSAGE_ZWEI, kennung: "kb" }, { ...ANSAGE_EINS, kennung: "ka" }, { ...ANSAGE_EINS, zeit: 500, kennung: "kc", repo: "q" }];
+  const lauf = await ansagenLauf("fehlt", ansagen, {}, 200, { aufraeumen: { kennungen: ["ka"] } });
+  assert.match(lauf.html(), /data-ansage-aufraeumen="5"/);
+  await lauf.klickeAufraeumen();
+  assert.deepEqual(lauf.anfragen(), [{ url: "/api/ansagen/aufraeumen", methode: "POST", body: { behalten: 5 } }]);
+  assert.doesNotMatch(lauf.html(), /data-ansage-gelesen="ka"/, "der Server fuehrt ka als gelesen");
+  assert.match(lauf.html(), /data-ansage-gelesen="kb"/);
+  assert.match(lauf.html(), /data-ansage-gelesen="kc"/);
+  assert.deepEqual(lauf.protokoll(), [], "Aufraeumen liest nicht vor und bricht nichts ab");
+});
+
+test("Aufraeumen scheitert: die Inbox zeigt den Stand des Servers und 'Nicht aufgeraeumt: …' im Kopf (#43)", async () => {
+  const lauf = await ansagenLauf("fehlt", [{ ...ANSAGE_EINS, kennung: "ka" }], {}, 200, { aufraeumen: { kennungen: [], status: 500 } });
+  await lauf.klickeAufraeumen();
+  assert.match(lauf.html(), /an-fehler">Nicht aufgeräumt: kaputt</);
+  assert.match(lauf.html(), /data-ansage-gelesen="ka"/, "nichts wurde markiert");
+});
+
+test("Fokus nach Aufraeumen: auf dem Knopf Aufraeumen, auch nach dem Echo des Servers; ohne Ungelesenes auf der Ueberschrift der Inbox (#43)", async () => {
+  const ansagen = [{ ...ANSAGE_ZWEI, kennung: "kb" }, { ...ANSAGE_EINS, kennung: "ka" }];
+  const lauf = await ansagenLauf("fehlt", ansagen, {}, 200, { aufraeumen: { kennungen: ["ka"] } });
+  await lauf.klickeAufraeumen();
+  assert.equal(lauf.fokus(), "aufraeumen");
+  await lauf.echo();
+  assert.equal(lauf.fokus(), "aufraeumen", "nach dem Echo noch auf dem Knopf");
+  const alle = await ansagenLauf("fehlt", ansagen, {}, 200, { aufraeumen: { kennungen: ["ka", "kb"] } });
+  await alle.klickeAufraeumen();
+  await alle.echo();
+  assert.equal(alle.fokus(), "inbox", "ohne Ungelesenes der Kopf der Inbox");
 });
 
 const HOST = {
@@ -1221,8 +1279,8 @@ test("Fokus nach gelesen uebersteht das Echo des Servers: Neuzeichnen nach dem M
   assert.equal(alle.fokus(), "inbox", "alle als gelesen: der Kopf, auch nach dem Echo");
 });
 
-test("Fokus nach dem Echo bleibt auf dem Knopf gelesen, nicht auf 'alle als gelesen' seiner Gruppe mit derselben Kennung (Review S3)", async () => {
-  // Zwei Gruppen; die zweite hat eine Ansage, ihr 'alle als gelesen' traegt also dieselbe Kennung wie ihr Knopf gelesen.
+test("Fokus nach dem Echo bleibt auf dem Knopf gelesen, nicht auf 'alle als gelesen' seines Repos mit derselben Kennung (Review S3)", async () => {
+  // Zwei Repos; das zweite hat eine Ansage, ihr 'alle als gelesen' traegt also dieselbe Kennung wie ihr Knopf gelesen.
   const lauf = await ansagenLauf("fehlt", [{ ...ANSAGE_ZWEI, kennung: "kb" }, { ...ANSAGE_EINS, repo: "q", kennung: "kq" }]);
   await lauf.klickeGelesen("kb");
   assert.equal(lauf.fokus(), "gelesen:kq");

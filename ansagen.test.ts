@@ -6,7 +6,7 @@ import { existsSync, lstatSync, mkdtempSync, readFileSync, rmSync, statSync, sym
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { ANSAGEN_HOECHSTENS, EINSTELLUNGEN_VORGABE, LESEN_HOECHSTENS, TEXT_HOECHSTENS, einstellungenAus, einstellungenMit, einstellungenYaml, ansageText, ansagenAus, ansagenDatei, gelesenDatei, istTrivial, kappeText, kurzAnsage, leseAnsagen, leseGelesen, markiereGelesen, saetze, schonAngesagt, schreibeAnsage, sprechText, type NeueAnsage } from "./ansagen.ts";
+import { ANSAGEN_HOECHSTENS, EINSTELLUNGEN_VORGABE, LESEN_HOECHSTENS, TEXT_HOECHSTENS, einstellungenAus, einstellungenMit, einstellungenYaml, alteKennungen, ansageText, ansagenAus, ansagenDatei, gelesenDatei, istTrivial, kappeText, kurzAnsage, leseAnsagen, leseGelesen, markiereGelesen, raeumeAuf, saetze, schonAngesagt, schreibeAnsage, sprechText, type NeueAnsage } from "./ansagen.ts";
 
 const ANTWORT = `## Ergebnis
 
@@ -425,6 +425,94 @@ test("Einstellungen: Vorgabe bei Fehlendem und Kaputtem, Aenderung nur mit passe
   for (const falsch of [null, [], "x", { vorlesen: 1 }, { stimme: 5 }, { stimme: "a\nb" }]) assert.equal(einstellungenMit(alt, falsch), null, JSON.stringify(falsch));
   assert.equal(einstellungenYaml({ vorlesen: true, stimme: 'Anna "de"' }).split("\n").slice(1).join("\n"), 'vorlesen: true\nstimme: "Anna \\"de\\""\n');
   assert.match(einstellungenYaml(EINSTELLUNGEN_VORGABE), /^vorlesen: false\nstimme: null$/m);
+});
+
+// --- Aufraeumen (#43): je Repo die fuenf neuesten behalten, der Rest wird gelesen ---------------------
+
+/** Eine Zeile je Ansage in dieser Reihenfolge; die Kennung ergibt sich aus Repo und Zeit. */
+const zeilenVon = (liste: readonly { zeit: number; repo: string }[]) =>
+  liste.map((a) => JSON.stringify({ v: 1, zeit: a.zeit, id: "s-1", repo: a.repo, text: `Ansage ${a.zeit}.`, quelle: "auto", kennung: kennungVon(a) })).join("\n") + "\n";
+const kennungVon = (a: { zeit: number; repo: string }) => `k${a.repo}${a.zeit}`;
+
+test("alteKennungen: je Repo alle ausser den neuesten, auch fuer einen Repo-Namen wie constructor; ohne Ansagen keine (#43)", () => {
+  const proj = [1, 2, 3, 4, 5, 6].map((z) => ({ zeit: z * 1000, repo: "constructor" }));
+  const liste = ansagenAus(zeilenVon(proj));
+  assert.deepEqual(alteKennungen(liste, 5), [kennungVon(proj[0]!)]);
+  assert.deepEqual(alteKennungen(liste, 6), []);
+  assert.deepEqual(alteKennungen([], 5), []);
+});
+
+test("Aufraeumen: je Repo bleiben die fuenf neuesten, der Rest wird gelesen, gleich in welcher Reihenfolge die Datei steht (#43)", () => {
+  const proj = [1, 2, 3, 4, 5, 6, 7].map((z) => ({ zeit: z * 1000, repo: "proj" }));
+  const andere = [1, 2, 3, 4, 5, 6].map((z) => ({ zeit: z * 1000 + 500, repo: "andere" }));
+  const alle = [...proj, ...andere];
+  // Die zwei aeltesten von proj und die aelteste von andere sind der Rest; die uebrigen bleiben.
+  const erwartet = [kennungVon(proj[0]!), kennungVon(proj[1]!), kennungVon(andere[0]!)].sort();
+  const reihen = {
+    aufsteigend: alle,
+    absteigend: [...alle].reverse(),
+    gemischt: [...alle.filter((_, i) => i % 3 === 0), ...alle.filter((_, i) => i % 3 !== 0)],
+  };
+  for (const [name, reihe] of Object.entries(reihen)) {
+    const tmp = mkdtempSync(path.join(os.tmpdir(), "live-plan-aufraeumen-"));
+    try {
+      const ansagen = ansagenDatei(tmp), gelesen = gelesenDatei(tmp);
+      writeFileSync(ansagen, zeilenVon(reihe));
+      assert.equal(raeumeAuf(gelesen, ansagen, 5), 3, name);
+      assert.deepEqual([...leseGelesen(gelesen)].sort(), erwartet, name);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  }
+});
+
+test("Aufraeumen: ein Repo mit hoechstens fuenf Ansagen bleibt unberuehrt; bereits gelesene stoeren nicht, ein zweiter Lauf schreibt nichts (#43)", () => {
+  const tmp = mkdtempSync(path.join(os.tmpdir(), "live-plan-aufraeumen-"));
+  try {
+    const ansagen = ansagenDatei(tmp), gelesen = gelesenDatei(tmp);
+    const klein = [1, 2, 3, 4, 5].map((z) => ({ zeit: z * 1000, repo: "klein" }));
+    const gross = [1, 2, 3, 4, 5, 6, 7].map((z) => ({ zeit: z * 1000 + 100, repo: "gross" }));
+    writeFileSync(ansagen, zeilenVon([...klein, ...gross]));
+    // Die aelteste von gross ist schon gelesen (ausserhalb der fuenf), dazu eine der fuenf neuesten.
+    writeFileSync(gelesen, JSON.stringify({ v: 1, gelesen: [kennungVon(gross[0]!), kennungVon(gross[3]!)] }));
+    assert.equal(raeumeAuf(gelesen, ansagen, 5), 2, "erfasst: die zwei Ansagen ausserhalb der fuenf, auch die schon gelesene");
+    assert.deepEqual([...leseGelesen(gelesen)].sort(), [kennungVon(gross[0]!), kennungVon(gross[1]!), kennungVon(gross[3]!)].sort());
+    for (const a of klein) assert.ok(!leseGelesen(gelesen).has(kennungVon(a)), kennungVon(a));
+    const vorher = readFileSync(gelesen, "utf8");
+    raeumeAuf(gelesen, ansagen, 5);
+    assert.equal(readFileSync(gelesen, "utf8"), vorher, "ein zweiter Lauf schreibt nichts");
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("Aufraeumen: ohne Ansagen oder ohne Repo mit mehr als fuenf keine Datei und keine Sperre noetig (#43)", () => {
+  const tmp = mkdtempSync(path.join(os.tmpdir(), "live-plan-aufraeumen-"));
+  try {
+    const ansagen = ansagenDatei(tmp), gelesen = gelesenDatei(tmp);
+    assert.equal(raeumeAuf(gelesen, ansagen, 5), 0);
+    assert.equal(existsSync(gelesen), false, "keine Datei angelegt");
+    writeFileSync(ansagen, zeilenVon([1, 2, 3, 4, 5].map((z) => ({ zeit: z * 1000, repo: "klein" }))));
+    // Eine besetzte Sperre schadet nicht, wenn es nichts zu tun gibt: kein Warten, kein Fehler.
+    writeFileSync(`${gelesen}.sperre`, "");
+    assert.equal(raeumeAuf(gelesen, ansagen, 5, 300), 0);
+    assert.equal(existsSync(gelesen), false);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("Aufraeumen: ohne Sperre der Gelesen-Datei ein Fehler, nichts wird geschrieben (#43)", () => {
+  const tmp = mkdtempSync(path.join(os.tmpdir(), "live-plan-aufraeumen-"));
+  try {
+    const ansagen = ansagenDatei(tmp), gelesen = gelesenDatei(tmp);
+    writeFileSync(ansagen, zeilenVon([1, 2, 3, 4, 5, 6].map((z) => ({ zeit: z * 1000, repo: "proj" }))));
+    writeFileSync(`${gelesen}.sperre`, "");
+    assert.throws(() => raeumeAuf(gelesen, ansagen, 5, 300), /Sperre/);
+    assert.equal(existsSync(gelesen), false);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
 });
 
 // --- live-plan sage gegen echte Dateien (bun) ---------------------------------------------------

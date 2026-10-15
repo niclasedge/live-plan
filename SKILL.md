@@ -309,9 +309,10 @@ Zwei bis drei gesprochene Saetze, ohne Pfade, Befehle oder URLs. Diese Ansage er
 dieses Zugs (Sitzung aus `CLAUDE_SESSION_ID`, REPO aus der Git-Wurzel); auch sie wird gesaeubert, bis sechs
 Saetze und 600 Zeichen. Alle Ansagen stehen in `${LIVE_PLAN_CACHE:-~/.cache/live-plan}/ansagen.jsonl`
 (die letzten 200, kaputte Zeilen ueberspringt der Server). `GET /api/ansagen` liefert sie neueste zuerst,
-`GET /api/ereignisse` meldet jede neue. Die Uebersicht beginnt mit der Inbox: alle ungelesenen Ansagen je Repo,
-je Zeile mit Uhrzeit und Wortzahl (`21:14 (183 Woerter)`) und dem Knopf gelesen, dazu "alle als gelesen" fuer die
-Inbox und je Repo. Gelesen steht auf dem Server in `${LIVE_PLAN_CACHE:-~/.cache/live-plan}/gelesen.json` (Kennungen,
+`GET /api/ereignisse` meldet jede neue. Die Uebersicht beginnt mit der Inbox: alle ungelesenen Ansagen als eine Liste
+nach Zeit, je Zeile mit dem Repo, Uhrzeit, Wortzahl (`21:14 (183 Woerter)`) und dem Knopf gelesen, dazu "alle als
+gelesen" fuer die Inbox und je Repo sowie "Aufraeumen" (je Repo alle bis auf die neuesten fuenf gelesen, `POST
+/api/ansagen/aufraeumen` mit `{ "behalten": 5 }`). Gelesen steht auf dem Server in `${LIVE_PLAN_CACHE:-~/.cache/live-plan}/gelesen.json` (Kennungen,
 `POST /api/ansagen/gelesen` mit `{ "kennungen": [...] }`) und gilt fuer jeden Browser; nur der Knopf markiert,
 Vorlesen nicht. In der Tabelle der Uebersicht steht je Sitzung ▶ mit Uhrzeit und Wortzahl ihrer
 neuesten Ansage; Vorlesen an/aus und die Stimme stehen im Menue ⚙ und zentral in
@@ -365,6 +366,6 @@ Eine lange Ansage geht in Teilen von etwa 10 s beim gemessenen Tempo (80 bis 250
 - Ansagen schreibt nur `live-plan sage` auf diesem Rechner, nie der Browser; wer die Seite erreicht, liest
   sie (`GET /api/ansagen`). Nichts Vertrauliches ansagen. Der Browser schreibt nur `einstellungen.yaml`
   (`POST /api/einstellungen`, JSON bis 2 KB, ohne fremden `Origin`) und `gelesen.json`
-  (`POST /api/ansagen/gelesen`, JSON bis 16 KB, ohne fremden `Origin`).
+  (`POST /api/ansagen/gelesen` und `POST /api/ansagen/aufraeumen`, JSON bis 16 KB, ohne fremden `Origin`).
 - `frage` schreibt nur neue Eintraege hinten an `fragen:`, nie durch einen Symlink und nie in eine
   Flow-Liste mit Inhalt.

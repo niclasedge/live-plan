@@ -366,6 +366,58 @@ test("ansagen gelesen: 415 ohne JSON, 413 zu gross, 400 ohne gueltige Kennungen,
   assert.equal(readFileSync(path.join(cacheOrdner, "gelesen.json"), "utf8"), vorher);
 });
 
+// --- POST /api/ansagen/aufraeumen: je Repo die fuenf neuesten behalten, der Rest gelesen (#43) --------------
+
+const aufraeumenPost = (body: unknown, kopf: Record<string, string> = {}) =>
+  fetch(`${seite}/api/ansagen/aufraeumen`, { method: "POST", headers: { "content-type": "application/json", ...kopf }, body: typeof body === "string" ? body : JSON.stringify(body) });
+const PROJ = [1, 2, 3, 4, 5, 6, 7].map((z) => ({ v: 1, zeit: z * 1000, id: ID, repo: "proj", text: `Proj ${z}.`, quelle: "auto", kennung: `p-${z}` }));
+const ANDERE = [1, 2, 3].map((z) => ({ v: 1, zeit: z * 1000 + 500, id: "s-9", repo: "andere", text: `Andere ${z}.`, quelle: "sage", kennung: `a-${z}` }));
+
+test("ansagen aufraeumen: je Repo bleiben die fuenf neuesten, der Rest ist gelesen; der Strom meldet es, gleich wie die Datei sortiert ist (#43)", async () => {
+  writeFileSync(path.join(cacheOrdner, "gelesen.json"), JSON.stringify({ v: 1, gelesen: [] }));
+  writeFileSync(path.join(cacheOrdner, "ansagen.jsonl"), [...PROJ].reverse().concat([...ANDERE].reverse()).map((a) => JSON.stringify(a)).join("\n") + "\n");
+  await new Promise((r) => setTimeout(r, 400));
+  const strom = await fetch(`${seite}/api/ereignisse`);
+  const gelesen = liesStrom(strom, "event: geaendert", 8000);
+  await new Promise((r) => setTimeout(r, 300));
+  const r = await aufraeumenPost({ behalten: 5 });
+  assert.equal(r.status, 200);
+  assert.deepEqual(await r.json(), { gelesen: 2 });
+  assert.match(await gelesen, /event: geaendert/);
+  // Die Reihenfolge der Liste folgt der Datei (hier umgekehrt gemischt), darum je Kennung: andere hat nur drei Ansagen
+  // und bleibt unberuehrt, proj ueber fuenf: p-1 und p-2 sind gelesen, die fuenf neuesten nicht.
+  assert.deepEqual(Object.fromEntries((await holeAnsagen()).map((a) => [a.kennung, a.gelesen])), {
+    "p-7": false, "p-6": false, "p-5": false, "p-4": false, "p-3": false, "p-2": true, "p-1": true, "a-1": false, "a-2": false, "a-3": false,
+  });
+  assert.deepEqual(JSON.parse(readFileSync(path.join(cacheOrdner, "gelesen.json"), "utf8")).gelesen.sort(), ["p-1", "p-2"]);
+});
+
+test("ansagen aufraeumen: 415 ohne JSON, 413 zu gross, 400 kaputtes JSON, 422 ohne ganze Zahl von 1 bis 200, 403 fremd, alles ohne Schreiben (#43)", async () => {
+  writeFileSync(path.join(cacheOrdner, "ansagen.jsonl"), PROJ.map((a) => JSON.stringify(a)).join("\n") + "\n");
+  writeFileSync(path.join(cacheOrdner, "gelesen.json"), JSON.stringify({ v: 1, gelesen: ["p-1"] }));
+  const vorher = readFileSync(path.join(cacheOrdner, "gelesen.json"), "utf8");
+  assert.equal((await fetch(`${seite}/api/ansagen/aufraeumen`, { method: "POST", headers: { "content-type": "text/plain" }, body: "{}" })).status, 415);
+  assert.equal((await aufraeumenPost({ behalten: 5, fuell: "x".repeat(20_000) })).status, 413);
+  assert.equal((await aufraeumenPost("{kaputt")).status, 400);
+  for (const falsch of [{}, { behalten: 0 }, { behalten: 201 }, { behalten: 2.5 }, { behalten: "5" }, { behalten: -1 }, null, []]) {
+    const antwort = await aufraeumenPost(falsch);
+    assert.equal(antwort.status, 422, JSON.stringify(falsch));
+    assert.match(((await antwort.json()) as { fehler: string }).fehler, /behalten/);
+  }
+  assert.equal((await aufraeumenPost({ behalten: 5 }, { Origin: "http://evil.example" })).status, 403);
+  assert.equal(readFileSync(path.join(cacheOrdner, "gelesen.json"), "utf8"), vorher);
+});
+
+test("ansagen aufraeumen: ohne Repo mit mehr als fuenf Ansagen 200 mit gelesen 0, nichts wird geschrieben (#43)", async () => {
+  writeFileSync(path.join(cacheOrdner, "ansagen.jsonl"), ANDERE.map((a) => JSON.stringify(a)).join("\n") + "\n");
+  writeFileSync(path.join(cacheOrdner, "gelesen.json"), JSON.stringify({ v: 1, gelesen: [] }));
+  const vorher = readFileSync(path.join(cacheOrdner, "gelesen.json"), "utf8");
+  const r = await aufraeumenPost({ behalten: 5 });
+  assert.equal(r.status, 200);
+  assert.deepEqual(await r.json(), { gelesen: 0 });
+  assert.equal(readFileSync(path.join(cacheOrdner, "gelesen.json"), "utf8"), vorher);
+});
+
 // --- GET und POST /api/einstellungen: Vorlesen und Stimme in LIVE_PLAN_CACHE/einstellungen.yaml -------------
 
 const einstellungen = (body: unknown, kopf: Record<string, string> = {}) =>
