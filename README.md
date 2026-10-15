@@ -162,7 +162,7 @@ Stimme (deutsche zuerst, Vorgabe Deutsch) und **▶ Letzte Ansage nochmal**. Bei
 jeden Browser: `GET /api/einstellungen` liest sie, `POST /api/einstellungen` (JSON `{ vorlesen?, stimme? }`, bis
 2 KB) schreibt sie, unter denselben Regeln wie eine Entscheidung (nur von der eigenen Seite, kein fremder `Origin`).
 Eine kaputte oder fehlende YAML gilt als Vorgabe (aus, deutsche Stimme). Die Stimme steht als Name; hat ein Browser
-sie nicht, spricht er mit seiner ersten deutschen Stimme. Die Sprache erkennt die Seite am Text ohne den Repo-Namen davor,
+sie nicht, spricht er deutsche Texte mit seiner ersten deutschen Stimme, englische nach der Regel unten. Die Sprache erkennt die Seite am Text ohne den Repo-Namen davor,
 aus seinen ersten zehn Wörtern: mehr englische als deutsche Stoppwörter heißt Englisch, sonst Deutsch. Die gewählte Stimme
 gilt für Texte ihrer Sprache: Passt sie nicht, nimmt die Seite für Englisch en-US vor anderen en-*, für Deutsch de-DE vor
 anderen de-*. Fehlt im Browser eine Stimme der erkannten Sprache, bleibt die Wahl.

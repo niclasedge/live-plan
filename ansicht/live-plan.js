@@ -2256,7 +2256,7 @@
    * Wort mit ä, ö, ü oder ß zaehlt Deutsch (je Wort eine Stimme). Englisch nur bei mehr Treffern, sonst Deutsch.
    */
   function spracheVon(text) {
-    var woerter = String(text || "").toLowerCase().replace(/’/g, "'").replace(/[^\p{L}\s'-]+/gu, " ").split(/\s+/).filter(Boolean).slice(0, 10);
+    var woerter = String(text || "").normalize("NFC").toLowerCase().replace(/’/g, "'").replace(/[^\p{L}\s'-]+/gu, " ").split(/\s+/).filter(Boolean).slice(0, 10);
     var en = 0, de = 0;
     woerter.forEach(function (w) {
       if (SPRACHE_EN.indexOf(w) >= 0) en++;
@@ -2369,7 +2369,7 @@
   }
   /** Die Namen der Stimmen ohne Doppel, deutsche zuerst, je { name, lang }. */
   function stimmenListe(stimmen) {
-    var de = function (s) { return /^de\b/i.test(s.lang) ? 0 : 1; }, da = {};
+    var de = function (s) { return /^de(?:[-_]|$)/i.test(s.lang) ? 0 : 1; }, da = {};
     return (Array.isArray(stimmen) ? stimmen : []).filter(function (s) { return s && s.name && !da[s.name] && (da[s.name] = true); })
       .map(function (s) { return { name: String(s.name), lang: String(s.lang || "") }; })
       .sort(function (a, b) { return de(a) - de(b) || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0); });
@@ -2377,10 +2377,10 @@
   /** Die Stimme zum gespeicherten Namen; fehlt sie im Browser, die erste deutsche, sonst null (Vorgabe des Browsers). */
   function stimmeWahl(stimmen, name) {
     var S = Array.isArray(stimmen) ? stimmen.filter(Boolean) : [];
-    return (name && S.find(function (s) { return s.name === name; })) || S.find(function (s) { return /^de\b/i.test(String(s.lang || "")); }) || null;
+    return (name && S.find(function (s) { return s.name === name; })) || S.find(function (s) { return /^de(?:[-_]|$)/i.test(String(s.lang || "")); }) || null;
   }
   /** Je Sprache: `passt` ist der Sprachcode, den die Basis haben darf; `vorzug` die Stimmen dieser Sprache in Reihenfolge. */
-  var STIMME_DE = { passt: /^de\b/i, vorzug: [/^de[-_]de\b/i, /^de\b/i] }, STIMME_EN = { passt: /^en\b/i, vorzug: [/^en[-_]us\b/i, /^en\b/i] };
+  var STIMME_DE = { passt: /^de(?:[-_]|$)/i, vorzug: [/^de[-_]de(?:[-_]|$)/i, /^de(?:[-_]|$)/i] }, STIMME_EN = { passt: /^en(?:[-_]|$)/i, vorzug: [/^en[-_]us(?:[-_]|$)/i, /^en(?:[-_]|$)/i] };
   /** Die erste Stimme, deren Sprachcode auf `re` passt, sonst null. */
   function ersteStimme(S, re) {
     return S.find(function (s) { return re.test(String(s.lang || "")); }) || null;

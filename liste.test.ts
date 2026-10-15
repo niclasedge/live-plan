@@ -243,6 +243,28 @@ test("spracheVon: nur die ersten zehn Woerter entscheiden", () => {
   assert.equal(ansicht().spracheVon("Lauf prüft gerade Inhalte sowie Ergebnis hier wird gemessen the is green and the tests are done"), "de");
 });
 
+test("spracheVon: das zehnte Wort zaehlt, das elfte nicht (Fenstergrenze genau)", () => {
+  const a = ansicht();
+  // Neun neutrale Woerter (in keiner Liste, ohne Umlaut), dann „the“ an Stelle 10: zaehlt noch.
+  assert.equal(a.spracheVon("Slice PR Gate Build Lauf Test Merge Review Branch the"), "en");
+  // Zehn neutrale Woerter, dann „the“ an Stelle 11: zaehlt nicht mehr.
+  assert.equal(a.spracheVon("Slice PR Gate Build Lauf Test Merge Review Branch Commit the"), "de");
+});
+
+test("spracheVon: zerlegte Umlaute (u + Combining Diaeresis) zaehlen wie das zusammengesetzte Zeichen", () => {
+  const a = ansicht();
+  assert.equal(a.spracheVon("Prüfung the"), "de"); // zerlegtes ü: Wort bleibt zusammen und zaehlt als Deutsch
+  assert.equal(a.spracheVon("Prüfung the"), "de");
+});
+
+test("Sprachcode mit _ (Android: en_GB, de_DE) zaehlt wie mit -: Wahl, Vorzug, Rueckfall und Sortierung", () => {
+  const a = ansicht();
+  assert.equal(a.stimmeWahl([{ name: "Petra", lang: "de_DE" }], null)!.name, "Petra");
+  assert.equal(a.stimmeFuer([{ name: "Petra", lang: "de_DE" }, { name: "Daniel", lang: "en_GB" }, { name: "Sam", lang: "en_US" }], "Daniel", "en")!.name, "Daniel");
+  assert.equal(a.stimmeFuer([{ name: "Daniel", lang: "en_GB" }], null, "en")!.name, "Daniel");
+  assert.deepEqual(a.stimmenListe([{ name: "Daniel", lang: "en_GB" }, { name: "Petra", lang: "de_DE" }]).map((s) => s.name), ["Petra", "Daniel"]);
+});
+
 test("spracheVon: mehrdeutige Woerter (an, in, so, was, am, will) zaehlen fuer keine Sprache", () => {
   assert.equal(ansicht().spracheVon("an in so was am will"), "de");
 });
