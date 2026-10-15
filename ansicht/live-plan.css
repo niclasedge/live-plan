@@ -247,13 +247,19 @@ body { margin: 0; background: var(--s1); font-family: var(--font); }
 .an-stimme select { max-width: 260px; min-width: 0; padding: 2px 4px; border: 1px solid var(--line-2); border-radius: 6px; background: var(--s2); color: var(--ink-1); font: inherit; }
 .an-notiz { color: var(--ink-3); }
 .an-fehler { color: var(--rot); }
-/* Leiste Ansagen oben auf der Sitzungsseite: Kopf mit dem Menue ⚙, darunter die neuesten Ansagen aller Sitzungen. */
+/* Leiste Ansagen oben auf der Sitzungsseite: Kopf mit dem Menue ⚙, darunter die neuesten Ansagen dieses Repos. */
 .an-leiste { display: grid; gap: 8px; margin: 0 0 12px; padding: 10px 12px; border: 1px solid var(--line-1); border-radius: var(--r-s); background: var(--s2); }
 .an-leiste-kopf { display: flex; gap: 10px; align-items: center; min-width: 0; }
 .an-leiste-kopf h2 { margin: 0; font-family: var(--font-kopf); font-size: 13px; font-weight: 700; color: var(--ink-1); }
-.an-leiste ol { display: grid; grid-template-columns: 30px minmax(0, 7em) minmax(0, 14em) minmax(0, 1fr); gap: 2px 8px; margin: 0; padding: 0; list-style: none; }
-/* Schmal: die Repo-Spalte gibt Breite an die Textspalte ab, Repo-Namen werden dort mit Ellipse gekuerzt (volle Namen im title). */
-@media (max-width: 620px) { .an-leiste ol { grid-template-columns: 30px minmax(0, 7em) minmax(0, 7em) minmax(0, 1fr); } }
+.an-leiste ol { display: grid; grid-template-columns: 30px minmax(0, 14em) minmax(0, 11em) minmax(0, 1fr) auto; gap: 2px 8px; margin: 0; padding: 0; list-style: none; }
+/*
+ * Schmal: die Repo-Spalte gibt Breite ab, Repo-Namen werden mit Ellipse gekuerzt (volle Namen im title), und der Text
+ * steht in einer eigenen Reihe unter Zeit und Repo, damit der Knopf gelesen daneben Platz hat.
+ */
+@media (max-width: 620px) {
+  .an-leiste ol { grid-template-columns: 30px minmax(0, 7em) minmax(0, 1fr) auto; }
+  .an-zeile .an-text { grid-column: 2 / -1; grid-row: 2; }
+}
 .an-zeile { display: grid; grid-column: 1 / -1; grid-template-columns: subgrid; align-items: baseline; min-width: 0; padding: 2px 6px; border-radius: 6px; }
 .an-zeile.an-eigen { background: color-mix(in srgb, var(--l1) 16%, transparent); }
 .an-zeile .an-spiel { width: 24px; height: 22px; padding: 0; border: 1px solid var(--line-2); border-radius: 6px; background: var(--s1); font-size: 11px; }
@@ -265,6 +271,16 @@ body { margin: 0; background: var(--s1); font-family: var(--font); }
 .an-zeile .an-text:hover, .an-zeile .an-text[aria-expanded="true"] { color: var(--ink-2); }
 .an-zeile .an-text:focus-visible { outline: 2px solid var(--l1); outline-offset: 1px; border-radius: 4px; }
 .an-leer { margin: 0; color: var(--ink-3); }
+/* Inbox der Uebersicht (#28): ungelesene Ansagen je Repo, gelesen per Knopf; gelesene Zeilen der Leiste ausgegraut. */
+.an-inbox { margin: 0 0 14px; }
+.an-gruppe { display: grid; gap: 4px; }
+.an-gruppe-kopf { display: flex; gap: 8px; align-items: center; min-width: 0; }
+.an-gruppe-kopf h3 { margin: 0; overflow: hidden; font-size: 12.5px; font-weight: 600; color: var(--ink-2); text-overflow: ellipsis; white-space: nowrap; }
+.an-zahl { font-size: 11px; color: var(--ink-3); white-space: nowrap; }
+.an-alle, .an-gelesen-knopf { padding: 1px 8px; border: 1px solid var(--line-2); border-radius: 6px; background: var(--s1); color: var(--ink-2); font-size: 11.5px; white-space: nowrap; }
+.an-alle:hover, .an-gelesen-knopf:hover { border-color: var(--l1); color: var(--ink-1); }
+.an-zeile.an-gelesen { opacity: 0.5; }
+.an-woerter { font-size: 11px; color: var(--ink-3); white-space: nowrap; }
 /* Dauer hinter der Uhrzeit (geschaetzt), der Verweis auf die Sitzung im Repo-Namen, Zustand des Knopfs, Stopp neben ⚙. */
 .an-dauer { font-size: 11px; color: var(--ink-3); white-space: nowrap; }
 a.an-repo { text-decoration: none; }

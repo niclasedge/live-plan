@@ -2,7 +2,7 @@
 //
 // Liest WURZEL/REPO/.live-plan/SLUG.yaml, fuehrt daneben Verlauf (SLUG.verlauf.jsonl) und den
 // zuletzt gesehenen Stand (SLUG.stand.json), schreibt nur fragen[].entscheidung und (#27)
-// fragen[].zurueckgezogen und liefert die Ansicht aus ansicht/. Dazu liest er das Register der
+// fragen[].zurueckgezogen, dazu den Gelesen-Zustand der Ansagen (#28), und liefert die Ansicht aus ansicht/. Dazu liest er das Register der
 // Claude-Sitzungen (LIVE_PLAN_CACHE/sitzungen, S5) und reicht es als `live` mit. Die Regeln stehen rein in logik.ts. Ohne Anfrage und ohne offene
 // Verbindung beendet er sich nach LIVE_PLAN_LEERLAUF_MS (Vorgabe 60 Minuten).
 
@@ -67,7 +67,7 @@ import {
   type Register,
   type Verlaufseintrag,
 } from "./logik.ts";
-import { ansagenDatei, einstellungenAus, einstellungenDatei, einstellungenMit, einstellungenYaml, leseAnsagen, type Einstellungen } from "./ansagen.ts";
+import { ansagenDatei, einstellungenAus, einstellungenDatei, einstellungenMit, einstellungenYaml, gelesenDatei, KENNUNG, leseAnsagen, leseGelesen, markiereGelesen, type Einstellungen } from "./ansagen.ts";
 import { hostSicht } from "./host.ts";
 import { verlauf } from "./verlauf.ts";
 import { aufgabeDetail, gueltigeAufgabenId, istFirstmateHome, prVorrat, type FirstmateSicht, type GhLauf } from "./firstmate.ts";
@@ -90,6 +90,10 @@ const ANSAGEN = ansagenDatei(CACHE);
 /** Vorlesen und Stimme der Uebersicht (ansagen.ts), eine YAML daneben; geschrieben nur von POST /api/einstellungen. */
 const EINSTELLUNGEN = einstellungenDatei(CACHE);
 const EINSTELLUNGEN_HOECHSTENS = 2 * 1024;
+/** Die als gelesen markierten Ansagen (ansagen.ts, #28); geschrieben vom Knopf gelesen (POST /api/ansagen/gelesen) und beim Kuerzen. */
+const GELESEN = gelesenDatei(CACHE);
+/** So lange wartet der Server hoechstens auf die Sperre von GELESEN; das Warten haelt ihn an (Atomics.wait). */
+const GELESEN_WARTEN_MS = 2_000;
 
 // --- Sicher lesen und schreiben (S1) -----------------------------------------------------------
 //
@@ -1249,11 +1253,37 @@ async function antworte(req: Request, server: Bun.Server): Promise<Response> {
     if (lesen && b === "gesund" && teile.length === 2) return json({ pid: process.pid, wurzel: WURZELN[0], wurzeln: WURZELN, port: PORT });
     if (lesen && b === "liste" && teile.length === 2) return json({ wurzel: WURZELN[0], wurzeln: WURZELN, sitzungen: listeSitzungen() });
     if (lesen && b === "abo" && teile.length === 2) return json(await aboAntwort());
-    // Die Ansagen aller Sitzungen, neueste zuerst; der Strom der Uebersicht meldet jede neue und jede Aenderung der Einstellungen.
-    if (lesen && b === "ansagen" && teile.length === 2) return json({ ansagen: leseAnsagen(ANSAGEN).reverse() });
+    // Die Ansagen aller Sitzungen, neueste zuerst, je mit `gelesen` (#28); der Strom der Uebersicht meldet jede neue,
+    // jede Gelesen-Marke und jede Aenderung der Einstellungen.
+    if (lesen && b === "ansagen" && teile.length === 2) {
+      const gelesen = leseGelesen(GELESEN);
+      return json({ ansagen: leseAnsagen(ANSAGEN).reverse().map((x) => ({ ...x, gelesen: gelesen.has(x.kennung) })) });
+    }
     if (lesen && b === "ereignisse" && teile.length === 2) {
       server.timeout(req, 0);
-      return ereignisse([ANSAGEN, EINSTELLUNGEN], req);
+      return ereignisse([ANSAGEN, EINSTELLUNGEN, GELESEN], req);
+    }
+    // Der Knopf gelesen, je Repo oder fuer alle: der Browser schickt die Kennungen, die er zeigt; eine Ansage, die erst
+    // danach kam, bleibt ungelesen. Schreiben wie bei den Einstellungen: nur JSON, klein, nur von der eigenen Seite.
+    if (req.method === "POST" && b === "ansagen" && c === "gelesen" && teile.length === 3) {
+      const art = (req.headers.get("content-type") ?? "").split(";")[0]!.trim().toLowerCase();
+      if (art !== "application/json") return json({ fehler: "Inhaltstyp application/json erwartet" }, 415);
+      const roh = await liesKoerper(req, KOERPER_HOECHSTENS);
+      if (roh === null) return json({ fehler: `Koerper groesser als ${KOERPER_HOECHSTENS} Bytes` }, 413);
+      let kennungen: unknown;
+      try {
+        const koerper: unknown = JSON.parse(roh);
+        kennungen = koerper && typeof koerper === "object" && "kennungen" in koerper ? koerper.kennungen : null;
+      } catch {
+        return json({ fehler: "JSON mit kennungen erwartet" }, 400);
+      }
+      const liste: unknown[] = Array.isArray(kennungen) ? kennungen : [];
+      const gueltig = liste.filter((k): k is string => typeof k === "string" && KENNUNG.test(k));
+      if (gueltig.length === 0 || gueltig.length !== liste.length) {
+        return json({ fehler: "kennungen muss eine nicht leere Liste von Kennungen sein (A-Z a-z 0-9 _ -, bis 64 Zeichen)" }, 400);
+      }
+      const zahl = markiereGelesen(GELESEN, ANSAGEN, gueltig, GELESEN_WARTEN_MS);
+      return zahl > 0 ? json({ gelesen: zahl }) : json({ fehler: "Ansage unbekannt (vielleicht schon gekuerzt)" }, 404);
     }
     if (lesen && b === "einstellungen" && teile.length === 2) return json(liesEinstellungen());
     // Schreiben wie eine Entscheidung: nur JSON, klein, und nur von der eigenen Seite (herkunftAbgelehnt oben).

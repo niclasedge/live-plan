@@ -2,11 +2,11 @@
 
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { ANSAGEN_HOECHSTENS, EINSTELLUNGEN_VORGABE, LESEN_HOECHSTENS, TEXT_HOECHSTENS, einstellungenAus, einstellungenMit, einstellungenYaml, ansageText, ansagenAus, ansagenDatei, istTrivial, kappeText, kurzAnsage, leseAnsagen, saetze, schonAngesagt, schreibeAnsage, sprechText, type Ansage } from "./ansagen.ts";
+import { ANSAGEN_HOECHSTENS, EINSTELLUNGEN_VORGABE, LESEN_HOECHSTENS, TEXT_HOECHSTENS, einstellungenAus, einstellungenMit, einstellungenYaml, ansageText, ansagenAus, ansagenDatei, gelesenDatei, istTrivial, kappeText, kurzAnsage, leseAnsagen, leseGelesen, markiereGelesen, saetze, schonAngesagt, schreibeAnsage, sprechText, type NeueAnsage } from "./ansagen.ts";
 
 const ANTWORT = `## Ergebnis
 
@@ -113,7 +113,7 @@ test("ansageText auto: ein Sprechtext ueber TEXT_HOECHSTENS endet am letzten gan
   assert.ok(text.endsWith(satz), text.slice(-80));
 });
 
-const A = (zeit: number, extra: Partial<Ansage> = {}): Ansage => ({ v: 1, zeit, id: "s-1", repo: "proj", text: `Ansage ${zeit}.`, quelle: "auto", ...extra });
+const A = (zeit: number, extra: Partial<NeueAnsage> = {}): NeueAnsage => ({ v: 1, zeit, id: "s-1", repo: "proj", text: `Ansage ${zeit}.`, quelle: "auto", ...extra });
 
 test("ansagenAus: kaputte und fremde Zeilen fallen weg, ein zu langer Text wird gekappt statt verworfen, URLs auch im gespeicherten Text, die letzten n", () => {
   const zeilen = [
@@ -266,6 +266,147 @@ test("schreibeAnsage: gleichzeitige Schreiber verlieren beim Kuerzen keine Ansag
       nummern.forEach((n, i) => assert.equal(n, nummern[0]! + i, `p${p}: ${nummern.join(",")}`));
       if (nummern.length) assert.equal(nummern.at(-1), 59, `p${p}: ${nummern.join(",")}`);
     }
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+// --- Kennung und Gelesen-Zustand (#28) ------------------------------------------------------------
+
+const KENNUNG = /^[A-Za-z0-9_-]{1,64}$/;
+
+test("Kennung: jede neue Ansage bekommt beim Schreiben eine eigene; eine alte Zeile ohne Kennung eine abgeleitete, stabil ueber Lesen und Kuerzen (#28)", () => {
+  const tmp = mkdtempSync(path.join(os.tmpdir(), "live-plan-ansagen-"));
+  try {
+    const datei = ansagenDatei(tmp);
+    // Zwei Ansagen derselben Sitzung in derselben Millisekunde: trotzdem zwei Kennungen.
+    schreibeAnsage(datei, A(5));
+    schreibeAnsage(datei, A(5));
+    const [eins, zwei] = leseAnsagen(datei);
+    assert.match(eins!.kennung, KENNUNG);
+    assert.match(zwei!.kennung, KENNUNG);
+    assert.notEqual(eins!.kennung, zwei!.kennung);
+    assert.equal(JSON.parse(readFileSync(datei, "utf8").split("\n")[0]!).kennung, eins!.kennung, "die Kennung steht in der Zeile");
+    // Vor #28 geschrieben: ohne Kennung. Abgeleitet ist sie bei jedem Lesen dieselbe und je Ansage verschieden.
+    const alt = [JSON.stringify(A(1)), JSON.stringify(A(2)), JSON.stringify({ ...A(3), kennung: "../boese" })].join("\n");
+    const k1 = ansagenAus(alt).map((a) => a.kennung);
+    assert.deepEqual(ansagenAus(alt).map((a) => a.kennung), k1);
+    for (const k of k1) assert.match(k, KENNUNG);
+    assert.equal(new Set(k1).size, 3);
+    // Eine eigene, gueltige Kennung bleibt.
+    assert.equal(ansagenAus(JSON.stringify({ ...A(4), kennung: "k-4" }))[0]!.kennung, "k-4");
+    // Das Kuerzen schreibt die abgeleitete Kennung mit: wer bleibt, behaelt sie.
+    const kurz = path.join(tmp, "kurz.jsonl");
+    writeFileSync(kurz, Array.from({ length: 71 }, (_, i) => `${JSON.stringify(A(i + 1))}\n`).join(""));
+    const vorher = new Map(leseAnsagen(kurz, 1000).map((a) => [a.zeit, a.kennung]));
+    schreibeAnsage(kurz, A(72), 20);
+    const nachher = leseAnsagen(kurz, 1000);
+    assert.deepEqual(nachher.map((a) => a.zeit), Array.from({ length: 20 }, (_, i) => 53 + i), "gekuerzt");
+    for (const a of nachher.slice(0, -1)) assert.equal(a.kennung, vorher.get(a.zeit), String(a.zeit));
+    for (const z of readFileSync(kurz, "utf8").trim().split("\n").slice(0, -1)) assert.match(JSON.parse(z).kennung, KENNUNG);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("Gelesen: markieren je Nachricht, je Repo und alle; unbekannte Kennungen zaehlen nicht und schreiben nichts (#28)", () => {
+  const tmp = mkdtempSync(path.join(os.tmpdir(), "live-plan-gelesen-"));
+  try {
+    const ansagen = ansagenDatei(tmp), gelesen = gelesenDatei(tmp);
+    assert.equal(gelesen, path.join(tmp, "gelesen.json"));
+    for (const [i, repo] of [[1, "proj"], [2, "proj"], [3, "andere"], [4, "andere"]] as const) schreibeAnsage(ansagen, A(i, { repo }));
+    const k = Object.fromEntries(leseAnsagen(ansagen).map((a) => [a.zeit, a.kennung]));
+    assert.deepEqual([...leseGelesen(gelesen)], []);
+    // Eine Nachricht.
+    assert.equal(markiereGelesen(gelesen, ansagen, [k[1]!]), 1);
+    assert.deepEqual([...leseGelesen(gelesen)].sort(), [k[1]].sort());
+    // Je Repo: die Kennungen der Gruppe "andere".
+    assert.equal(markiereGelesen(gelesen, ansagen, [k[3]!, k[4]!]), 2);
+    assert.deepEqual([...leseGelesen(gelesen)].sort(), [k[1], k[3], k[4]].sort());
+    // Alle, auch schon gelesene: die Menge enthaelt jede Kennung einmal.
+    assert.equal(markiereGelesen(gelesen, ansagen, [k[1]!, k[2]!, k[3]!, k[4]!]), 4);
+    assert.deepEqual([...leseGelesen(gelesen)].sort(), [k[1], k[2], k[3], k[4]].sort());
+    const inhalt = readFileSync(gelesen, "utf8");
+    assert.deepEqual(JSON.parse(inhalt).gelesen.sort(), [k[1], k[2], k[3], k[4]].sort());
+    // Unbekannt: 0, und die Datei bleibt, wie sie ist.
+    assert.equal(markiereGelesen(gelesen, ansagen, ["gibt-es-nicht"]), 0);
+    assert.equal(readFileSync(gelesen, "utf8"), inhalt);
+    // Kaputt gilt als leer, nicht als Fehler.
+    writeFileSync(gelesen, "{kaputt");
+    assert.deepEqual([...leseGelesen(gelesen)], []);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("Gelesen: Marken zu Ansagen, die beim Kuerzen herausfallen, raeumt das Kuerzen mit auf (#28)", () => {
+  const tmp = mkdtempSync(path.join(os.tmpdir(), "live-plan-gelesen-"));
+  try {
+    const ansagen = ansagenDatei(tmp), gelesen = gelesenDatei(tmp);
+    for (let i = 1; i <= 60; i++) schreibeAnsage(ansagen, A(i), 20);
+    const k = Object.fromEntries(leseAnsagen(ansagen, 1000).map((a) => [a.zeit, a.kennung]));
+    // 1 und 2 fallen beim Kuerzen heraus, 60 bleibt.
+    assert.equal(markiereGelesen(gelesen, ansagen, [k[1]!, k[2]!, k[60]!]), 3);
+    for (let i = 61; i <= 75; i++) schreibeAnsage(ansagen, A(i), 20);
+    assert.equal(leseAnsagen(ansagen, 1000)[0]!.zeit, 52, "gekuerzt auf 20, dann vier angehaengt");
+    assert.deepEqual([...leseGelesen(gelesen)], [k[60]]);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("Gelesen: ohne Sperre kein Schreiben, sondern ein Fehler; ein Symlink wird weder gelesen noch beschrieben; das Kuerzen speichert die Ansage auch bei besetzter Sperre (#28)", () => {
+  const tmp = mkdtempSync(path.join(os.tmpdir(), "live-plan-gelesen-"));
+  try {
+    const ansagen = ansagenDatei(tmp), gelesen = gelesenDatei(tmp);
+    for (let i = 1; i <= 70; i++) schreibeAnsage(ansagen, A(i), 20);
+    const k = leseAnsagen(ansagen, 1000).at(-1)!.kennung;
+    markiereGelesen(gelesen, ansagen, [k]);
+    const vorher = readFileSync(gelesen, "utf8");
+    const inode = statSync(gelesen).ino;
+    writeFileSync(`${gelesen}.sperre`, "");
+    const start = Date.now();
+    assert.throws(() => markiereGelesen(gelesen, ansagen, [leseAnsagen(ansagen, 1000)[0]!.kennung], 300), /Sperre/);
+    assert.ok(Date.now() - start >= 250, "wartet auf die Sperre");
+    assert.equal(readFileSync(gelesen, "utf8"), vorher);
+    // Das Kuerzen wartet auf die Sperre der Gelesen-Datei, scheitert dort aber nicht: die Ansage ist gespeichert.
+    schreibeAnsage(ansagen, A(71), 20, 300);
+    assert.equal(leseAnsagen(ansagen).at(-1)!.zeit, 71);
+    assert.equal(readFileSync(gelesen, "utf8"), vorher);
+    assert.ok(existsSync(`${gelesen}.sperre`), "die fremde Sperre bleibt");
+    // Atomar: ein Markieren ersetzt die Datei (neue Inode), statt sie zu ueberschreiben.
+    rmSync(`${gelesen}.sperre`);
+    markiereGelesen(gelesen, ansagen, [leseAnsagen(ansagen).at(-1)!.kennung]);
+    assert.notEqual(statSync(gelesen).ino, inode);
+    // Ein Symlink: nicht gelesen, nicht beschrieben, auch nicht durch rename ersetzt.
+    const fremd = path.join(tmp, "fremd.json");
+    writeFileSync(fremd, JSON.stringify({ v: 1, gelesen: [k] }));
+    const link = path.join(tmp, "gelesen-link.json");
+    symlinkSync(fremd, link);
+    assert.deepEqual([...leseGelesen(link)], []);
+    assert.throws(() => markiereGelesen(link, ansagen, [k]), /Symlink|regulaere/);
+    assert.equal(readFileSync(fremd, "utf8"), JSON.stringify({ v: 1, gelesen: [k] }));
+    assert.ok(lstatSync(link).isSymbolicLink());
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("Gelesen: eine besetzte Sperre der Gelesen-Datei haelt das Kuerzen hoechstens kurz auf, auch mit der Standard-Wartezeit (Review K1)", () => {
+  const tmp = mkdtempSync(path.join(os.tmpdir(), "live-plan-gelesen-"));
+  try {
+    const ansagen = ansagenDatei(tmp), gelesen = gelesenDatei(tmp);
+    for (let i = 1; i <= 70; i++) schreibeAnsage(ansagen, A(i), 20);
+    // Eine frische, fremde Sperre: ohne kurze Grenze wartete das Kuerzen, bis sie nach 10 s als verwaist gilt,
+    // und hielte so lange die Sperre von ansagen.jsonl.
+    writeFileSync(`${gelesen}.sperre`, "");
+    const start = Date.now();
+    schreibeAnsage(ansagen, A(71), 20);
+    const dauer = Date.now() - start;
+    assert.ok(dauer < 3000, `Kuerzen dauerte ${dauer} ms`);
+    assert.ok(dauer >= 900, `wartet kurz auf die Sperre (${dauer} ms)`);
+    assert.equal(leseAnsagen(ansagen).at(-1)!.zeit, 71);
+    assert.ok(!existsSync(`${ansagen}.sperre`), "die Sperre von ansagen.jsonl ist wieder frei");
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }

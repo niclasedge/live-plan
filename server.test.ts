@@ -1,4 +1,4 @@
-// live-plan: Tests der Endpunkte .../diff und .../bild (Pfadregeln, git-ignorierte Dateien, Bilder, eigene Plan-Datei) und der Ansagen (/api/ansagen, /api/ereignisse, /api/einstellungen), `node --test server.test.ts` (startet `bun server.ts`).
+// live-plan: Tests der Endpunkte .../diff und .../bild (Pfadregeln, git-ignorierte Dateien, Bilder, eigene Plan-Datei) und der Ansagen (/api/ansagen, /api/ansagen/gelesen, /api/ereignisse, /api/einstellungen), `node --test server.test.ts` (startet `bun server.ts`).
 
 import assert from "node:assert/strict";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
@@ -316,6 +316,54 @@ test("ansagen: nur lesen, fremde Herkunft 403, Schreiben gibt es nicht", async (
   assert.equal(fremdStrom.status, 403);
   const post = await fetch(`${seite}/api/ansagen`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
   assert.equal(post.status, 404);
+});
+
+// --- POST /api/ansagen/gelesen: Gelesen-Zustand in LIVE_PLAN_CACHE/gelesen.json (#28) -------------------
+
+const gelesenPost = (body: unknown, kopf: Record<string, string> = {}) =>
+  fetch(`${seite}/api/ansagen/gelesen`, { method: "POST", headers: { "content-type": "application/json", ...kopf }, body: typeof body === "string" ? body : JSON.stringify(body) });
+const DREI = [
+  { v: 1, zeit: 1000, id: ID, repo: "proj", text: "Erste Ansage.", quelle: "auto", kennung: "k-1" },
+  { v: 1, zeit: 2000, id: ID, repo: "proj", text: "Zweite Ansage.", quelle: "auto", kennung: "k-2" },
+  { v: 1, zeit: 3000, id: "s-9", repo: "andere", text: "Dritte Ansage.", quelle: "sage", kennung: "k-3" },
+];
+const holeAnsagen = async () => ((await (await fetch(`${seite}/api/ansagen`)).json()) as { ansagen: { kennung: string; gelesen: boolean }[] }).ansagen;
+
+test("ansagen gelesen: GET traegt Kennung und gelesen je Ansage, POST markiert, der Strom meldet die Aenderung (#28)", async () => {
+  writeFileSync(path.join(cacheOrdner, "ansagen.jsonl"), DREI.map((a) => JSON.stringify(a)).join("\n") + "\n");
+  await new Promise((r) => setTimeout(r, 400));
+  assert.deepEqual((await holeAnsagen()).map((a) => [a.kennung, a.gelesen]), [["k-3", false], ["k-2", false], ["k-1", false]]);
+
+  const strom = await fetch(`${seite}/api/ereignisse`);
+  const gelesen = liesStrom(strom, "event: geaendert", 8000);
+  await new Promise((r) => setTimeout(r, 300));
+  const r = await gelesenPost({ kennungen: ["k-1", "k-3"] });
+  assert.equal(r.status, 200);
+  assert.deepEqual(await r.json(), { gelesen: 2 });
+  assert.match(await gelesen, /event: geaendert/);
+  assert.deepEqual((await holeAnsagen()).map((a) => [a.kennung, a.gelesen]), [["k-3", true], ["k-2", false], ["k-1", true]]);
+  assert.deepEqual(JSON.parse(readFileSync(path.join(cacheOrdner, "gelesen.json"), "utf8")).gelesen.sort(), ["k-1", "k-3"]);
+  // Eine bekannte neben einer unbekannten: die bekannte zaehlt.
+  assert.deepEqual(await (await gelesenPost({ kennungen: ["k-2", "weg"] })).json(), { gelesen: 1 });
+  assert.ok((await holeAnsagen()).every((a) => a.gelesen));
+});
+
+test("ansagen gelesen: 415 ohne JSON, 413 zu gross, 400 ohne gueltige Kennungen, 404 unbekannt, 403 fremd, alles ohne Schreiben (#28)", async () => {
+  writeFileSync(path.join(cacheOrdner, "ansagen.jsonl"), DREI.map((a) => JSON.stringify(a)).join("\n") + "\n");
+  writeFileSync(path.join(cacheOrdner, "gelesen.json"), JSON.stringify({ v: 1, gelesen: ["k-1"] }));
+  const vorher = readFileSync(path.join(cacheOrdner, "gelesen.json"), "utf8");
+  assert.equal((await fetch(`${seite}/api/ansagen/gelesen`, { method: "POST", headers: { "content-type": "text/plain" }, body: "{}" })).status, 415);
+  assert.equal((await gelesenPost({ kennungen: ["k-2"], fuell: "x".repeat(20_000) })).status, 413);
+  for (const falsch of ["{kaputt", {}, { kennungen: "k-2" }, { kennungen: [] }, { kennungen: [5] }, { kennungen: ["../x"] }, { kennungen: ["a b"] }, [], "null"]) {
+    const antwort = await gelesenPost(falsch);
+    assert.equal(antwort.status, 400, JSON.stringify(falsch));
+    assert.match(((await antwort.json()) as { fehler: string }).fehler, /kennungen/);
+  }
+  const unbekannt = await gelesenPost({ kennungen: ["gibt-es-nicht"] });
+  assert.equal(unbekannt.status, 404);
+  assert.match(((await unbekannt.json()) as { fehler: string }).fehler, /unbekannt/);
+  assert.equal((await gelesenPost({ kennungen: ["k-2"] }, { Origin: "http://evil.example" })).status, 403);
+  assert.equal(readFileSync(path.join(cacheOrdner, "gelesen.json"), "utf8"), vorher);
 });
 
 // --- GET und POST /api/einstellungen: Vorlesen und Stimme in LIVE_PLAN_CACHE/einstellungen.yaml -------------
