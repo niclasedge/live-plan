@@ -298,7 +298,7 @@ Die Uebersicht `http://localhost:4410/` liest am Ende eines Zugs dessen Antwort 
 Sitzungen, vorneweg das Repo ("live-plan: ..."). Ohne Ihr Zutun macht das die Mod `live-plan-sitzung`: sie gibt
 die letzte Antwort der Hauptsitzung an `live-plan sage --auto`, das Markdown, Links, URLs und Codebloecke
 entfernt und den ganzen uebrigen Text nimmt (hoechstens 8000 Zeichen, ein laengerer endet am letzten ganzen Satz
-davor, ein riesiger Satz an einer Wortgrenze mit "…"); eine Antwort unter vier Woertern ("Captain, shipshape.") faellt weg. Wollen Sie selbst formulieren, sagen
+davor, ein riesiger Satz an einer Wortgrenze mit "…"); eine Antwort unter vier Woertern ("Captain, shipshape.") faellt weg. Firstmate-Worker (Ship, Scout, Secondmate, mit gesetztem `FM_TASK_INBOX`) erzeugen keine automatische Ansage; Subagenten ohnehin nicht. Wollen Sie selbst formulieren, sagen
 Sie im selben Zug an:
 
 ```bash

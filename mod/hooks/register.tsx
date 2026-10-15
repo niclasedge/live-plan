@@ -440,7 +440,12 @@ async function neuAuto($: EngineInterface, s: Sitzung): Promise<void> {
 // A firstmate worker (ship, scout, secondmate) is a Claude process of its own; firstmate's bin/fm-spawn.sh
 // exports FM_TASK_INBOX into each of them. Its turns are not announced, the firstmate main agent's are.
 async function istFlottenWorker($: EngineInterface): Promise<boolean> {
-  return Boolean((await $.env.get('FM_TASK_INBOX'))?.trim())
+  try {
+    return Boolean((await $.env.get('FM_TASK_INBOX'))?.trim())
+  } catch {
+    // A variable that cannot be read counts as unset: the announcement comes.
+    return false
+  }
 }
 
 // `bun <skript> sage --auto` with the turn's answer on stdin; `--seit` is the turn's start, so an
@@ -448,6 +453,8 @@ async function istFlottenWorker($: EngineInterface): Promise<boolean> {
 // `run` resolves for any exit code: a failed save (the lock stayed taken) shows as a toast, with the
 // script's own `live-plan: …` line from stderr, else its exit code.
 async function ansageAuto($: EngineInterface, s: Sitzung, antwort: string, dauerMs: number): Promise<void> {
+  // A firstmate worker's turn is not announced; checked here, so the turn's end never waits for the variable.
+  if (await istFlottenWorker($)) return
   const skript = await skriptDa($)
   if (!skript) return
   const seit = (await $.clock.now()) - Math.max(0, dauerMs) - 1000
@@ -650,8 +657,7 @@ export const register: Register = (on, options: PluginOptions) => {
         if (e.usage?.model) s.modell = e.usage.model
         await merken($)
         // Not awaited: the end of the turn never waits for the script.
-        if (e.reason === 'answer' && e.answer.trim() && !(await istFlottenWorker($)))
-          void ansageAuto($, s, e.answer, e.durationMs).catch(() => undefined)
+        if (e.reason === 'answer' && e.answer.trim()) void ansageAuto($, s, e.answer, e.durationMs).catch(() => undefined)
       }
     } catch {
       // Never disturb the session.

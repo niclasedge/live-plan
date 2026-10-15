@@ -8,10 +8,24 @@ const START = { cwd: '/repo/sub', surface: null, isInteractive: false } as const
 // The world beneath the plugin: files in memory, a repo at /repo, a mocked clock.
 function welt(
   on: On,
-  opts: { skriptDa?: boolean; sageEnde?: { exitCode: number; stderr: string }; env?: Record<string, string> } = {},
+  opts: {
+    skriptDa?: boolean
+    sageEnde?: { exitCode: number; stderr: string }
+    env?: Record<string, string>
+    // FM_TASK_INBOX stays unanswered ('haengt') or the engine refuses the read ('fehler').
+    envStoert?: 'haengt' | 'fehler'
+  } = {},
 ) {
   const clock = mock.clock(on, { now: 10_000 })
-  mock.env(on, { HOME: '/home/t', ...opts.env })
+  const umgebung: Record<string, string> = { HOME: '/home/t', ...opts.env }
+  if (opts.envStoert) {
+    on('env.get', ($, e) => {
+      if (e.name !== 'FM_TASK_INBOX') return { value: umgebung[e.name] }
+      return opts.envStoert === 'fehler' ? { deny: 'env.get kaputt' } : new Promise<never>(() => {})
+    })
+  } else {
+    mock.env(on, umgebung)
+  }
   const dateien = new Map<string, string>()
   const prozesse: string[][] = []
   const laeufe: { argv: string[]; cwd?: string; stdin?: string }[] = []
@@ -352,6 +366,33 @@ test('Ansage: ein firstmate-Worker (FM_TASK_INBOX gesetzt) geht ohne sage aus, d
 
 test('Ansage: ein leerer FM_TASK_INBOX zaehlt als nicht gesetzt, sage laeuft wie bisher', SKRIPT, async ($, on) => {
   const w = welt(on, { skriptDa: true, env: { FM_TASK_INBOX: '' } })
+  await $.session.start(START)
+  await $.turn.complete({ answer: 'Der Build ist gruen, der PR ist offen.', durationMs: 4_000, isAborted: false, turnId: 't-1', reason: 'answer' })
+  await w.clock.settle()
+  expect(sage(w)).toHaveLength(1)
+})
+
+test('Zugende: haengt $.env.get, kehrt der turn.complete-Handler trotzdem zurueck', SKRIPT, async ($, on) => {
+  welt(on, { skriptDa: true, envStoert: 'haengt' })
+  await $.session.start(START)
+  // Real time, not the mocked clock: a handler that never returns must show up as a failure, not a hang.
+  const zurueck = await Promise.race([
+    $.turn.complete({ answer: 'Der Build ist gruen, der PR ist offen.', durationMs: 4_000, isAborted: false, turnId: 't-1', reason: 'answer' }).then(() => true),
+    new Promise<boolean>(weiter => setTimeout(() => weiter(false), 300)),
+  ])
+  expect(zurueck).toBe(true)
+})
+
+test('Ansage: wirft $.env.get, gilt FM_TASK_INBOX als nicht gesetzt, die Ansage kommt', SKRIPT, async ($, on) => {
+  const w = welt(on, { skriptDa: true, envStoert: 'fehler' })
+  await $.session.start(START)
+  await $.turn.complete({ answer: 'Der Build ist gruen, der PR ist offen.', durationMs: 4_000, isAborted: false, turnId: 't-1', reason: 'answer' })
+  await w.clock.settle()
+  expect(sage(w)).toHaveLength(1)
+})
+
+test('Ansage: ein FM_TASK_INBOX nur aus Leerzeichen zaehlt als nicht gesetzt, sage laeuft', SKRIPT, async ($, on) => {
+  const w = welt(on, { skriptDa: true, env: { FM_TASK_INBOX: '   ' } })
   await $.session.start(START)
   await $.turn.complete({ answer: 'Der Build ist gruen, der PR ist offen.', durationMs: 4_000, isAborted: false, turnId: 't-1', reason: 'answer' })
   await w.clock.settle()

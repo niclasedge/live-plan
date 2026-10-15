@@ -106,7 +106,7 @@ das Repo: „live-plan: Der Umbau ist fertig …“.
   URLs, HTML, Emoji und Markdown-Zeichen (ein Link wird zu seinem Text) und nimmt den ganzen übrigen Text, höchstens
   8000 Zeichen (bei 14 Zeichen je Sekunde gut neun Minuten); ein längerer endet am letzten ganzen Satz davor, und
   besteht er fast nur aus einem riesigen Satz, an einer Wortgrenze mit „…“. Eine
-  Antwort unter vier Wörtern („Captain, shipshape.“) wird nicht angesagt.
+  Antwort unter vier Wörtern („Captain, shipshape.“) wird nicht angesagt. Firstmate-Worker (Ship, Scout, Secondmate, mit gesetztem `FM_TASK_INBOX`) erzeugen keine automatische Ansage; Subagenten ohnehin nicht.
 - **Selbst formuliert:** `live-plan sage "<2-3 Sätze>"` sagt einen eigenen Text an (gesäubert, bis sechs Sätze und
   600 Zeichen; Sitzung aus `CLAUDE_SESSION_ID`, Repo aus der Git-Wurzel). Er ersetzt die automatische Ansage
   desselben Zugs: `--auto` übergeht eine Sitzung, die seit dem Beginn des Zugs selbst angesagt hat.
