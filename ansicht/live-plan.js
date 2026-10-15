@@ -3205,9 +3205,11 @@
   /**
    * Bricht ab, was spricht oder pausiert ist. Eine Pause wird vorher aufgehoben, auch wenn keine Ansage mehr laeuft (die
    * Synthese bliebe sonst pausiert, und Chrome haengt nach cancel). Die Nummer des Abbruchs macht die Ereignisse der
-   * abgebrochenen Ansagen ungueltig; die Seiten-Warteschlange und die neuen Ansagen dieses Tabs sind danach leer.
+   * abgebrochenen Ansagen ungueltig; die Seiten-Warteschlange und die neuen Ansagen dieses Tabs sind danach leer. Die
+   * verworfenen neuen Ansagen gelten als erledigt (Gesprochen-Merkmal), damit kein anderer Tab sie nachliest.
    */
   function abbrechen() {
+    SCHLANGE.forEach(function (l) { if (l.neu) merkeGesprochen(l.zeit); });
     abbruchNr++;
     SCHLANGE = [];
     NEUE = [];
@@ -3236,8 +3238,13 @@
     wachhundStellen();
     zeichneAnsagen();
   }
-  /** Stoppt alles in diesem Tab: die laufende oder pausierte Ansage und die Warteschlange; die Sperre geht frei (weiter). */
+  /**
+   * Stoppt alles in diesem Tab: die laufende oder pausierte Ansage und die Warteschlange; die Sperre geht frei (weiter).
+   * Der Spiegel der anderen Tabs (FREMD) wird geleert: wer noch spricht, meldet sich nach dem Stopp neu, und ein Tab, der
+   * ohne Abmeldung verschwunden ist, haelt so den Stopp nicht fest.
+   */
   function stoppenHier() {
+    FREMD = Object.create(null);
     abbrechen();
     zeichneAnsagen();
     weiter();
@@ -3255,16 +3262,21 @@
    * auf ihn, und die Saetze zweier Ansagen koennen sich nicht verschraenken.
    */
   function sprich(a, sofort) {
-    if (!einreihen(a, sofort)) return;
+    if (!SPRACHE || !a) return;
+    // Der Stopp an die anderen Tabs geht vor dem eigenen Zustand hinaus, sonst raeumte er ihn dort gleich wieder (stoppenHier).
     if (sofort && KANAL) KANAL.postMessage({ art: "stopp" });
+    einreihen(a, sofort, false);
     weiter();
   }
-  /** Stellt eine Ansage als Lauf hinten in die Seiten-Warteschlange (s. sprich); true, wenn sie dort steht. */
-  function einreihen(a, sofort) {
+  /**
+   * Stellt eine Ansage als Lauf hinten in die Seiten-Warteschlange (s. sprich); true, wenn sie dort steht. `neu`: eine neue
+   * Ansage (beanspruche); ihr Ende schreibt das Gesprochen-Merkmal fort.
+   */
+  function einreihen(a, sofort, neu) {
     if (!SPRACHE || !a) return false;
     var text = ansageSprechtext(a), teile = sprechTeile(text, teilZeichen(zeichenJeSekunde()));
     if (sofort) abbrechen();
-    var lauf = { zeit: a.zeit, pausiert: false, gepausiert: false, zeichen: Array.from(text).length, start: null, nr: abbruchNr, teile: teile, offen: teile.length, fehler: false, sprache: spracheVon(a.text) };
+    var lauf = { zeit: a.zeit, pausiert: false, gepausiert: false, zeichen: Array.from(text).length, start: null, nr: abbruchNr, teile: teile, offen: teile.length, fehler: false, sprache: spracheVon(a.text), neu: !!neu };
     SCHLANGE.push(lauf);
     if (sofort) {
       LAUFT = lauf;
@@ -3294,6 +3306,7 @@
       if (!regulaer) lauf.fehler = true;
       if (--lauf.offen > 0) { weiter(); return; }
       if (!lauf.fehler && LAUFT === lauf && !lauf.gepausiert) kalibriere(lauf);
+      if (lauf.neu) merkeGesprochen(lauf.zeit);
       SCHLANGE.splice(SCHLANGE.indexOf(lauf), 1);
       endeLauf(lauf);
       weiter();
@@ -3309,7 +3322,11 @@
         ende(false);
       },
     };
-    SPRACHE.speak(u);
+    try {
+      SPRACHE.speak(u);
+    } catch (e) {
+      ende(false); // wie onerror: der Teil ist vorbei, der naechste folgt
+    }
     wachhundStellen();
   }
   /** Das Zeitlimit eines Teils: seine Zeichen beim langsamsten gueltigen Tempo (ZPS_GRENZEN), mindestens WACHHUND_MIN_MS. */
@@ -3365,10 +3382,22 @@
     G.navigator.locks.request(SPERRE_SPRACHE, function () {
       var gehalten = new Promise(function (r) { loesen = r; });
       HAELT = true;
-      weiter();
+      try {
+        weiter();
+      } catch (e) {
+        melde("live-plan: Sprechen unter der Sperre", e); // die Sperre bleibt; das naechste Ende oder Ereignis macht weiter
+      }
       return gehalten;
-    }).catch(function () {
-      // Verweigert (etwa ohne sicheren Kontext, #20): Rueckfall, die Ansagen dieses Tabs spricht er selbst.
+    }).catch(function (e) {
+      // Nur ein Verweigern des Browsers ist der Rueckfall (#42, F5); jeder andere Fehler laesst die Sperre gelten, die naechste
+      // Ansage fordert sie neu an. Sonst spraeche dieser Tab ohne Sperre neben dem Halter.
+      if (!e || (e.name !== "SecurityError" && e.name !== "NotSupportedError")) {
+        HAELT = ANGEFORDERT = false;
+        loesen = null;
+        melde("live-plan: Lock " + SPERRE_SPRACHE, e);
+        return;
+      }
+      // Verweigert (etwa in einem Dokument mit opakem Ursprung, vgl. #20): Rueckfall, die Ansagen dieses Tabs spricht er selbst.
       sperreKaputt = true;
       HAELT = ANGEFORDERT = false;
       var meine = NEUE.filter(function (n) { return n.meins; });
@@ -3384,17 +3413,29 @@
     loesen = null;
     if (l) l();
   }
-  /** Das Gesprochen-Merkmal: die Zeit der zuletzt zum Sprechen genommenen Ansage, oder null. */
+  /** Ein Fehler, der nichts anhalten soll, auf der Konsole, wenn es eine gibt. */
+  function melde(was, e) {
+    if (G.console && G.console.error) G.console.error(was, e);
+  }
+  /**
+   * Das Gesprochen-Merkmal: die Zeit der neuesten Ansage, die zu Ende gesprochen (oder verworfen) ist, oder null. Mit Locks
+   * steht es erst nach dem Ende, damit ein Tab, der die Sperre nach dem Schliessen des Halters bekommt, dessen ungesprochenen
+   * Rest nachliest (#42, F2); ohne Locks steht es wie bisher schon beim Einreihen.
+   */
   function gesprochenBisLesen() {
     var g = lies(SCHLUESSEL_GESPROCHEN), bis = g === null ? NaN : Number(g);
     return Number.isFinite(bis) ? bis : null;
   }
-  /** Reiht eine neue Ansage ein, wenn das Gesprochen-Merkmal sie noch nicht fuehrt, und schreibt es fort: genau einmal. */
+  function merkeGesprochen(zeit) {
+    var bis = gesprochenBisLesen();
+    if (bis === null || zeit > bis) merke(SCHLUESSEL_GESPROCHEN, String(zeit));
+  }
+  /** Reiht eine neue Ansage ein, wenn das Gesprochen-Merkmal sie noch nicht fuehrt: genau einmal. */
   function beanspruche(a) {
     var bis = gesprochenBisLesen();
     if (bis !== null && a.zeit <= bis) return;
-    merke(SCHLUESSEL_GESPROCHEN, String(a.zeit));
-    einreihen(a, false);
+    if (!mitSperre()) merke(SCHLUESSEL_GESPROCHEN, String(a.zeit));
+    einreihen(a, false, true);
   }
   /** Unter der Sperre: jede gemerkte neue Ansage, die das Gesprochen-Merkmal noch nicht fuehrt, die aelteste zuerst. */
   function nimmNeue() {
@@ -3432,8 +3473,9 @@
   }
   /**
    * Eine neue Ansage. Ohne Locks (Rueckfall) spricht sie der Tab, der dran ist (sollSprechen), und schreibt das
-   * Gesprochen-Merkmal sofort. Mit Locks merkt sich jeder Tab die Ansagen, die ein Tab sprechen soll (es gibt einen
-   * Sprecher, oder dieser Tab ist dran), und wer dran ist, fordert die Sperre an. Der Halter nimmt unter der Sperre alle
+   * Gesprochen-Merkmal sofort. Mit Locks merkt sich jeder freigeschaltete Tab jede neue Ansage bei Vorlesen an, auch wenn
+   * er nicht dran ist (#42, F1: der Halter kann ein anderer sein als der Sprecher), und wer dran ist, fordert die Sperre an.
+   * Ein Tab ohne Klick merkt sich nichts: eine Ansage, die damals niemand sprechen konnte, kommt nicht spaeter nach. Der Halter nimmt unter der Sperre alle
    * gemerkten, die das Merkmal noch nicht fuehrt (nimmNeue): wechselt der Sprecher, waehrend ein anderer Tab noch spricht,
    * bleibt so keine liegen, und keine kommt doppelt (#42).
    */
@@ -3448,7 +3490,7 @@
       return;
     }
     NEUE = NEUE.filter(function (n) { return bis === null || n.ansage.zeit > bis; });
-    if (!darf && !(EINST.vorlesen && sprecher && (bis === null || a.zeit > bis))) return;
+    if (!darf && !(EINST.vorlesen && ansageFrei && (bis === null || a.zeit > bis))) return;
     NEUE.push({ ansage: a, meins: darf });
     weiter();
   }
@@ -3494,6 +3536,12 @@
     else if (m.art === "einstellungen") uebernehmeEinstellungen(m.einst);
     // Stopp und Pause aus einem anderen Tab (#42); Pause und Fortsetzen gelten nur der genannten Ansage.
     else if (m.art === "stopp") stoppenHier();
+    // Der Halter schliesst (pagehide): wer freigeschaltet ist, fordert die Sperre an und liest den ungesprochenen Rest (#42, F2).
+    else if (m.art === "uebernehmen") {
+      if (!ansageFrei || !EINST.vorlesen) return;
+      NEUE.forEach(function (n) { n.meins = true; });
+      weiter();
+    }
     else if (m.art === "pause" && LAUFT && LAUFT.zeit === m.zeit) pausieren();
     else if (m.art === "fortsetzen" && LAUFT && LAUFT.zeit === m.zeit) fortsetzen();
     else if (m.art === "zustand" && typeof m.tab === "string" && m.tab !== TAB) {
@@ -3614,6 +3662,7 @@
     G.addEventListener("pagehide", function () {
       if (lies(SCHLUESSEL_SPRECHER) === TAB) vergiss(SCHLUESSEL_SPRECHER);
       if (KANAL) KANAL.postMessage({ art: "zustand", tab: TAB, laeuft: null, wartet: false });
+      if (KANAL && (HAELT || SCHLANGE.length)) KANAL.postMessage({ art: "uebernehmen" });
     });
     // Rueckfall ohne Locks (#42): nennt der Sprecher-Schluessel einen anderen Tab, bricht dieser Tab ab, was er spricht.
     G.addEventListener("storage", function (e) {

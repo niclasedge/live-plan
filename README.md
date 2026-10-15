@@ -182,9 +182,11 @@ Mehrere Tabs teilen sich die Verbindung: ein Tab hält `GET /api/ereignisse`, di
 BroadcastChannel. Vorgelesen wird nur im Sprecher-Tab, also dem, den der Nutzer zuletzt bedient hat (ohne Sprecher im
 Leiter-Tab), und jede Ansage genau einmal. Ansagen kommen strikt nacheinander, nie zwei Stimmen zugleich (#42): Sprechen
 darf nur der Tab mit dem Web Lock `live-plan-sprache`, und er hält ihn, bis seine Warteschlange leer ist. Unter dem Lock
-liest und schreibt er das Gesprochen-Merkmal (`live-plan.gesprochen`) und nimmt jede neue Ansage, die es noch nicht führt;
-wechselt der Sprecher, während ein anderer Tab noch spricht, liest der die neuen Ansagen in ihrer Reihenfolge mit weiter,
-und keine geht verloren. Ohne Web Locks (etwa über eine LAN-IP, Tailscale, `.local` oder ohne sicheren
+nimmt er jede neue Ansage, die das Gesprochen-Merkmal (`live-plan.gesprochen`) noch nicht führt, und schreibt es nach
+ihrem Ende fort; jeder Tab mit Klick merkt sich dafür die neuen Ansagen. Wechselt der Sprecher, während ein anderer Tab
+noch spricht, liest der die neuen Ansagen in ihrer Reihenfolge mit weiter. Schließt der Nutzer den sprechenden Tab, liest
+ein anderer Tab mit Klick den Rest, die angefangene Ansage von vorn. Stürzt er ab (ohne `pagehide`), bleibt es still,
+bis die nächste neue Ansage kommt; dann folgt der Rest vor ihr. ⏹ oder ▶ einer anderen Zeile verwirft die wartenden. Ohne Web Locks (etwa über eine LAN-IP, Tailscale, `.local` oder ohne sicheren
 Kontext) lauscht jeder Tab selbst; gesprochen wird dann nur im zuletzt geklickten Tab, und schließt der, schweigt es bis
 zum nächsten Klick oder Tabwechsel. Wird dort ein anderer Tab Sprecher, bricht der bisherige ab, was er spricht. Dort hält jeder Sitzungstab zwei Dauerverbindungen; ab etwa drei Sitzungstabs stockt
 der Browser (HTTP/1.1, 6 Verbindungen je Host). Über `localhost` (`live-plan open`) zeigte sich das in unseren Läufen
