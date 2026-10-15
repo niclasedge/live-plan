@@ -253,10 +253,24 @@ test("spracheVon: typografische Apostrophe zaehlen wie ', damit „don't“ und 
   assert.equal(a.spracheVon("Don’t stop"), "en"); // nur mit normalisiertem Apostroph ist „don't“ ein Stoppwort
 });
 
-test("stimmeFuer: Deutsch bleibt die Wahl wie bei stimmeWahl", () => {
+test("stimmeFuer: Deutsch bleibt die Wahl, wenn sie Deutsch spricht", () => {
   const a = ansicht();
-  assert.deepEqual(a.stimmeFuer(STIMMEN_SPRACHEN, "Daniel", "de"), a.stimmeWahl(STIMMEN_SPRACHEN, "Daniel"));
-  assert.deepEqual(a.stimmeFuer(STIMMEN_SPRACHEN, null, "de"), a.stimmeWahl(STIMMEN_SPRACHEN, null));
+  assert.equal(a.stimmeFuer(STIMMEN_SPRACHEN, null, "de")!.name, "Petra");
+  assert.deepEqual(a.stimmeFuer([{ name: "Anna", lang: "de-AT" }, { name: "Petra", lang: "de-DE" }], "Anna", "de"), { name: "Anna", lang: "de-AT" });
+});
+
+test("stimmeFuer: Deutsch mit einer englischen Wahl nimmt de-DE vor de-*, sonst die erste de-*", () => {
+  const a = ansicht();
+  assert.equal(a.stimmeFuer(STIMMEN_SPRACHEN, "Daniel", "de")!.name, "Petra");
+  assert.equal(a.stimmeFuer([{ name: "Anna", lang: "de-AT" }, { name: "Daniel", lang: "en-GB" }], "Daniel", "de")!.name, "Anna");
+  assert.equal(a.stimmeFuer([{ name: "Anna", lang: "de-AT" }, { name: "Petra", lang: "de-DE" }, { name: "Daniel", lang: "en-GB" }], "Daniel", "de")!.name, "Petra");
+});
+
+test("stimmeFuer: Deutsch ohne deutsche Stimme bleibt die Wahl; ohne Wahl null", () => {
+  const a = ansicht();
+  const englisch = [{ name: "Daniel", lang: "en-GB" }, { name: "Sam", lang: "en-US" }];
+  assert.equal(a.stimmeFuer(englisch, "Daniel", "de")!.name, "Daniel");
+  assert.equal(a.stimmeFuer(englisch, null, "de"), null);
 });
 
 test("stimmeFuer: Englisch mit deutscher Basis nimmt en-US vor en-GB", () => {
@@ -571,7 +585,7 @@ const ereignis = (attrs: Record<string, string>) => ({
  * `startAnsagen` steht schon beim ersten Laden da (ohne Neuigkeit, also ohne Vorlesen); `vorher` ist der Speicher vor dem Start.
  */
 /** Weitere Attrappen: `host` ist die Antwort von GET /api/host, `zurueck` haelt Antworten bis `freigeben(url)` zurueck, `stimmen` sind die Stimmen der Sprachausgabe. */
-interface LaufOptionen { host?: unknown; zurueck?: string[]; stimmen?: unknown[] }
+interface LaufOptionen { host?: unknown; zurueck?: string[]; stimmen?: unknown[]; stimme?: string }
 
 async function ansagenLauf(sperre: "fehlt" | "abgelehnt", startAnsagen: unknown[] = [], vorher: Record<string, string> = {}, gelesenStatus = 200, optionen: LaufOptionen = {}) {
   const gesprochen: string[] = [];
@@ -691,7 +705,7 @@ async function ansagenLauf(sperre: "fehlt" | "abgelehnt", startAnsagen: unknown[
         return antwort({ gelesen: 1 });
       }
       if (url === "/api/ansagen") return antwort({ ansagen: (ansagen as { kennung?: string; gelesen?: boolean }[]).map((a) => (a.kennung && markiert.has(a.kennung) ? { ...a, gelesen: true } : a)) });
-      if (url === "/api/einstellungen") return antwort({ vorlesen: true, stimme: null });
+      if (url === "/api/einstellungen") return antwort({ vorlesen: true, stimme: optionen.stimme ?? null });
       if (url === "/api/liste") return antwort({ wurzel: "/w", sitzungen: [] });
       return antwort(null, false);
     },
@@ -786,6 +800,17 @@ test("Vorlesen: eine englische Ansage spricht die en-US-Stimme, eine deutsche di
   assert.equal(lauf.letzte().lang, "de-DE");
   lauf.klickeAnsage(7000);
   assert.equal(lauf.letzte().voice?.name, "Petra");
+  lauf.klickeStopp();
+});
+
+test("Vorlesen: eine gewaehlte englische Stimme spricht englische Texte, deutsche Texte nehmen de-DE", async () => {
+  const lauf = await ansagenLauf("fehlt", [ANSAGE_DEUTSCH, ANSAGE_ENGLISCH], {}, 200, { stimmen: STIMMEN_SPRACHEN, stimme: "Daniel" });
+  lauf.klickeAnsage(6000);
+  assert.equal(lauf.letzte().voice?.name, "Petra");
+  assert.equal(lauf.letzte().lang, "de-DE");
+  lauf.klickeAnsage(5000);
+  assert.equal(lauf.letzte().voice?.name, "Daniel");
+  assert.equal(lauf.letzte().lang, "en-GB");
   lauf.klickeStopp();
 });
 

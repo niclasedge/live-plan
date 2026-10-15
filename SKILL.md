@@ -317,9 +317,9 @@ Vorlesen nicht. In der Tabelle der Uebersicht steht je Sitzung ▶ mit Uhrzeit u
 neuesten Ansage; Vorlesen an/aus und die Stimme stehen im Menue ⚙ und zentral in
 `${LIVE_PLAN_CACHE:-~/.cache/live-plan}/einstellungen.yaml` (`GET`/`POST /api/einstellungen`). Die Sprache erkennt die
 Seite am Text ohne den Repo-Namen davor, aus seinen ersten zehn Woertern: mehr englische als deutsche Stoppwoerter heissen
-Englisch, sonst Deutsch. Englische Texte bekommen eine englische Stimme (die gewaehlte, wenn sie Englisch spricht, sonst
-en-US, sonst eine andere en-*); hat der Browser keine, bleibt es bei der gewaehlten. Deutsche Texte nehmen die gewaehlte
-Stimme wie bisher, auch eine englische.
+Englisch, sonst Deutsch. Die gewaehlte Stimme gilt fuer Texte ihrer Sprache: Passt sie nicht, nimmt die Seite fuer Englisch
+en-US vor anderen en-*, fuer Deutsch de-DE vor anderen de-*. Fehlt im Browser eine Stimme der erkannten Sprache, bleibt die
+Wahl.
 Auf jeder Sitzungsseite gilt dasselbe: neue Ansagen aller Sitzungen werden dort ebenfalls vorgelesen, und oben
 unter dem Kopf steht die Leiste Ansagen mit den letzten fuenf dieses Repos (und der eigenen Sitzung), neueste zuerst;
 gelesene bleiben ausgegraut stehen, ungelesene tragen den Knopf gelesen, die Zeilen der eigenen Sitzung sind

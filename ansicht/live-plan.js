@@ -2379,16 +2379,26 @@
     var S = Array.isArray(stimmen) ? stimmen.filter(Boolean) : [];
     return (name && S.find(function (s) { return s.name === name; })) || S.find(function (s) { return /^de\b/i.test(String(s.lang || "")); }) || null;
   }
+  /** Je Sprache: `passt` ist der Sprachcode, den die Basis haben darf; `vorzug` die Stimmen dieser Sprache in Reihenfolge. */
+  var STIMME_DE = { passt: /^de\b/i, vorzug: [/^de[-_]de\b/i, /^de\b/i] }, STIMME_EN = { passt: /^en\b/i, vorzug: [/^en[-_]us\b/i, /^en\b/i] };
+  /** Die erste Stimme, deren Sprachcode auf `re` passt, sonst null. */
+  function ersteStimme(S, re) {
+    return S.find(function (s) { return re.test(String(s.lang || "")); }) || null;
+  }
   /**
-   * Die Stimme fuer einen Text der Sprache `sprache` ("en" oder "de"): deutsch bleibt die Wahl (stimmeWahl). Englisch bleibt
-   * die Wahl, wenn sie Englisch spricht; sonst die erste en-US, dann die erste en-*; ohne englische Stimme die Wahl.
+   * Die Stimme fuer einen Text der Sprache `sprache` ("en" oder "de"). Passt die Basis (stimmeWahl: die gewaehlte Stimme,
+   * sonst die erste deutsche) zur Sprache, bleibt sie. Sonst die erste Stimme dieser Sprache in der Reihenfolge `vorzug`
+   * (de: de-DE vor de-*, en: en-US vor en-*); fehlt auch die, bleibt die Basis.
    */
   function stimmeFuer(stimmen, name, sprache) {
-    var basis = stimmeWahl(stimmen, name);
-    if (sprache !== "en" || (basis && /^en\b/i.test(String(basis.lang || "")))) return basis;
+    var regel = sprache === "de" ? STIMME_DE : sprache === "en" ? STIMME_EN : null, basis = stimmeWahl(stimmen, name);
+    if (!regel || (basis && regel.passt.test(String(basis.lang || "")))) return basis;
     var S = Array.isArray(stimmen) ? stimmen.filter(Boolean) : [];
-    return S.find(function (s) { return /^en[-_]us\b/i.test(String(s.lang || "")); }) ||
-      S.find(function (s) { return /^en\b/i.test(String(s.lang || "")); }) || basis;
+    for (var i = 0; i < regel.vorzug.length; i++) {
+      var treffer = ersteStimme(S, regel.vorzug[i]);
+      if (treffer) return treffer;
+    }
+    return basis;
   }
   /** Spricht stumm eine leere Aeusserung; im Klick selbst gibt das auch Safari die Sprachausgabe fuer spaeter frei. */
   function tonFreischalten(sprache, Aeusserung) {
