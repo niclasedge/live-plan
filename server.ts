@@ -67,7 +67,7 @@ import {
   type Register,
   type Verlaufseintrag,
 } from "./logik.ts";
-import { ansagenDatei, einstellungenAus, einstellungenDatei, einstellungenMit, einstellungenYaml, gelesenDatei, KENNUNG, leseAnsagen, leseGelesen, markiereGelesen, type Einstellungen } from "./ansagen.ts";
+import { ANSAGEN_HOECHSTENS, ansagenDatei, einstellungenAus, einstellungenDatei, einstellungenMit, einstellungenYaml, gelesenDatei, KENNUNG, leseAnsagen, leseGelesen, markiereGelesen, raeumeAuf, type Einstellungen } from "./ansagen.ts";
 import { hostSicht } from "./host.ts";
 import { verlauf } from "./verlauf.ts";
 import { aufgabeDetail, gueltigeAufgabenId, istFirstmateHome, prVorrat, type FirstmateSicht, type GhLauf } from "./firstmate.ts";
@@ -1284,6 +1284,24 @@ async function antworte(req: Request, server: Bun.Server): Promise<Response> {
       }
       const zahl = markiereGelesen(GELESEN, ANSAGEN, gueltig, GELESEN_WARTEN_MS);
       return zahl > 0 ? json({ gelesen: zahl }) : json({ fehler: "Ansage unbekannt (vielleicht schon gekuerzt)" }, 404);
+    }
+    // Aufraeumen (#43): je Repo alle Ansagen ausser den `behalten` neuesten als gelesen, auch fuer Ansagen ausserhalb der
+    // Inbox. Dasselbe Schreiben wie /gelesen, also dasselbe GELESEN-Ereignis. Nichts zu tun ist 200 mit 0, kein Fehler.
+    if (req.method === "POST" && b === "ansagen" && c === "aufraeumen" && teile.length === 3) {
+      const art = (req.headers.get("content-type") ?? "").split(";")[0]!.trim().toLowerCase();
+      if (art !== "application/json") return json({ fehler: "Inhaltstyp application/json erwartet" }, 415);
+      const roh = await liesKoerper(req, KOERPER_HOECHSTENS);
+      if (roh === null) return json({ fehler: `Koerper groesser als ${KOERPER_HOECHSTENS} Bytes` }, 413);
+      let behalten: unknown;
+      try {
+        const koerper: unknown = JSON.parse(roh);
+        behalten = koerper && typeof koerper === "object" && "behalten" in koerper ? koerper.behalten : null;
+      } catch {
+        return json({ fehler: "JSON mit behalten erwartet" }, 400);
+      }
+      const n = typeof behalten === "number" && Number.isInteger(behalten) && behalten >= 1 && behalten <= ANSAGEN_HOECHSTENS ? behalten : null;
+      if (n === null) return json({ fehler: `behalten muss eine ganze Zahl von 1 bis ${ANSAGEN_HOECHSTENS} sein` }, 422);
+      return json({ gelesen: raeumeAuf(GELESEN, ANSAGEN, n, GELESEN_WARTEN_MS) });
     }
     if (lesen && b === "einstellungen" && teile.length === 2) return json(liesEinstellungen());
     // Schreiben wie eine Entscheidung: nur JSON, klein, und nur von der eigenen Seite (herkunftAbgelehnt oben).

@@ -2474,27 +2474,40 @@
     return '<button type="button" class="an-alle" data-ansage-gelesen="' + esc(liste.map(function (a) { return a.kennung; }).join(" ")) + '"' +
       (titel ? ' title="' + esc(titel) + '"' : "") + ">alle als gelesen</button>";
   }
+  /** Wie viele Ansagen Aufraeumen je Repo behaelt (#43); der Knopf traegt die Zahl, der Server prueft sie beim Schreiben. */
+  var AUFRAEUMEN_BEHALTEN = 5;
   /**
-   * Die Inbox der Uebersicht (#28): alle ungelesenen Ansagen (`z.ansagen`, neueste zuerst), gruppiert je Repo, die Gruppe
-   * mit der neuesten Ansage zuerst. Je Zeile der Knopf gelesen, je Gruppe und im Kopf "alle als gelesen".
+   * Der Knopf Aufraeumen im Kopf der Inbox (#43): alle Ansagen außer den letzten AUFRAEUMEN_BEHALTEN je Repo als gelesen,
+   * serverseitig (aufraeumen). Sein Wert ist die Zahl, die er behaelt.
+   */
+  function aufraeumenKnopf() {
+    return '<button type="button" class="an-aufraeumen" data-ansage-aufraeumen="' + AUFRAEUMEN_BEHALTEN + '" title="Alle Ansagen außer den letzten ' +
+      AUFRAEUMEN_BEHALTEN + ' je Repo als gelesen markieren">Aufräumen</button>';
+  }
+  /**
+   * Die Inbox der Uebersicht (#28, #43): alle ungelesenen Ansagen (`z.ansagen`) als eine Liste nach zeit, die neueste zuerst,
+   * je Zeile das Repo. Im Kopf "alle als gelesen" fuer alle und "Aufräumen"; darunter je Repo ein "alle als gelesen" fuer
+   * dessen ungelesene Ansagen. Je Zeile der Knopf gelesen.
    * `z`: { ansagen, laeuft, zps, aufgeklappt, fehler }; `fehler` steht im Kopf (ein Markieren, das nicht gespeichert wurde).
    */
   function ansageInbox(z) {
     var offen = (Array.isArray(z.ansagen) ? z.ansagen : []).filter(function (a) { return a && !a.gelesen; });
-    var gruppen = [], je = Object.create(null); // ohne Prototyp: ein Repo namens constructor ist ein gewoehnlicher Schluessel
+    offen.sort(function (x, y) { return y.zeit - x.zeit; });
+    var repos = [], je = Object.create(null); // ohne Prototyp: ein Repo namens constructor ist ein gewoehnlicher Schluessel
     offen.forEach(function (a) {
       var k = String(a.repo || "");
-      if (!je[k]) gruppen.push(je[k] = { repo: k, ansagen: [] });
+      if (!je[k]) repos.push(je[k] = { repo: k, ansagen: [] });
       je[k].ansagen.push(a);
     });
     var kopf = '<div class="an-leiste-kopf"><h2 tabindex="-1">Inbox</h2><span class="an-zahl">' + offen.length + " ungelesen</span>" +
-      (offen.length ? alleKnopf(offen, "Alle Ansagen der Inbox als gelesen markieren") : "") +
+      (offen.length ? alleKnopf(offen, "Alle Ansagen der Inbox als gelesen markieren") + aufraeumenKnopf() : "") +
       (z.fehler ? '<span class="an-fehler">' + esc(z.fehler) + "</span>" : "") + "</div>";
-    var inhalt = gruppen.length ? gruppen.map(function (g) {
-      return '<div class="an-gruppe" data-ansage-gruppe="' + esc(g.repo) + '"><div class="an-gruppe-kopf"><h3>' + esc(g.repo) + '</h3><span class="an-zahl">' +
-        g.ansagen.length + "</span>" + alleKnopf(g.ansagen, "Alle Ansagen aus " + g.repo + " als gelesen markieren") + "</div><ol>" +
-        g.ansagen.map(function (a) { return ansageZeile(a, z, false); }).join("") + "</ol></div>";
-    }).join("") : '<p class="an-leer">Keine ungelesene Ansage.</p>';
+    var jeRepo = repos.length ? '<div class="an-knopfleiste">' + repos.map(function (g) {
+      return '<span class="an-repo-alle"><span class="an-repo-kopf">' + esc(g.repo) + "</span>" +
+        alleKnopf(g.ansagen, "Alle Ansagen aus " + g.repo + " als gelesen markieren") + "</span>";
+    }).join("") + "</div>" : "";
+    var inhalt = offen.length ? jeRepo + "<ol>" + offen.map(function (a) { return ansageZeile(a, z, false); }).join("") + "</ol>" :
+      '<p class="an-leer">Keine ungelesene Ansage.</p>';
     return '<section class="an-leiste an-inbox" data-testid="ansagen-inbox">' + kopf + inhalt + "</section>";
   }
   /**
@@ -3116,15 +3129,15 @@
   /** Der Kopf von Inbox und Leiste; dorthin geht der Fokus, wenn kein Knopf gelesen bleibt (gelesenMarkieren). */
   var ANSAGE_KOEPFE = [".an-inbox h2", '[data-testid="ansagen-leiste"] h2'];
   /**
-   * Der Knopf einer Ansage in `el` mit dem Fokus (▶, ihr Text, gelesen bzw. alle als gelesen) oder der Kopf von Inbox und
+   * Der Knopf einer Ansage in `el` mit dem Fokus (▶, ihr Text, gelesen, alle als gelesen bzw. Aufräumen) oder der Kopf von Inbox und
    * Leiste als Selektor, sonst null; vor dem Neuzeichnen zu merken. Ohne gelesen und Kopf fiele der Fokus nach einem
    * Markieren beim Echo des Servers (Strom, neu laden, neu zeichnen) auf body (S3).
    */
   function ansageFokus(el) {
     var a = doc.activeElement;
     if (!el || !a || !el.contains(a)) return null;
-    var attr = ["data-ansage", "data-ansage-text", "data-ansage-gelesen"].find(function (x) { return a.hasAttribute(x); });
-    // Mit Klasse: 'alle als gelesen' einer Gruppe mit einer Ansage traegt dieselben Kennungen wie ihr Knopf gelesen und steht davor.
+    var attr = ["data-ansage", "data-ansage-text", "data-ansage-gelesen", "data-ansage-aufraeumen"].find(function (x) { return a.hasAttribute(x); });
+    // Mit Klasse: 'alle als gelesen' eines Repos mit einer Ansage traegt dieselben Kennungen wie ihr Knopf gelesen und steht davor.
     var art = attr === "data-ansage-gelesen" ? (a.matches(".an-alle") ? ".an-alle" : ".an-gelesen-knopf") : "";
     if (attr) return art + "[" + attr + '="' + a.getAttribute(attr) + '"]';
     return ANSAGE_KOEPFE.find(function (sel) { return a.matches && a.matches(sel); }) || null;
@@ -3583,6 +3596,27 @@
       return ladeAnsagen().then(zeichneAnsagen);
     });
   }
+  /**
+   * Aufraeumen (#43): der Server markiert je Repo alle Ansagen außer den `behalten` neuesten (POST /api/ansagen/aufraeumen).
+   * Der Stand kommt danach vom Server (ladeAnsagen), also auch für Ansagen außerhalb der Inbox. Der Fokus bleibt auf dem
+   * Knopf Aufräumen, ohne Knopf auf der Überschrift der Inbox. Scheitert es, steht die Meldung im Kopf.
+   */
+  function aufraeumen(behalten) {
+    gelesenFehler = "";
+    return fetch("/api/ansagen/aufraeumen", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ behalten: behalten }) }).then(function (r) {
+      return r.json().catch(function () { return {}; }).then(function (b) {
+        if (!r.ok) throw new Error((b && b.fehler) || "HTTP " + r.status);
+      });
+    }).catch(function (err) {
+      gelesenFehler = "Nicht aufgeräumt: " + err.message;
+    }).then(function () {
+      return ladeAnsagen();
+    }).then(function () {
+      zeichneAnsagen();
+      var ziel = wurzel.querySelector('[data-ansage-aufraeumen="' + AUFRAEUMEN_BEHALTEN + '"]') || wurzel.querySelector(ANSAGE_KOEPFE[0]);
+      if (ziel) ziel.focus();
+    });
+  }
   /** Die Verbindung GET /api/ereignisse; nur der Leiter-Tab oeffnet sie (oder jeder Tab ohne Lock, s. startAnsagen). */
   function lauscheAnsagen() {
     if (!G.EventSource) return;
@@ -3595,7 +3629,7 @@
   }
   /** Ein Klick auf Einstellungen, einen Abspielknopf, den Text einer Zeile oder gelesen; true, wenn er ihnen galt. */
   function ansageKlick(e) {
-    var t = e.target.closest && e.target.closest("[data-einst-auf], [data-ansage-auto], [data-ansage-letzte], [data-ansage-stopp], [data-ansage-text], [data-ansage-gelesen], [data-ansage]");
+    var t = e.target.closest && e.target.closest("[data-einst-auf], [data-ansage-auto], [data-ansage-letzte], [data-ansage-stopp], [data-ansage-text], [data-ansage-gelesen], [data-ansage-aufraeumen], [data-ansage]");
     if (!t) return false;
     if (t.hasAttribute("data-einst-auf")) {
       einstAuf = !einstAuf;
@@ -3611,6 +3645,7 @@
     else if (t.hasAttribute("data-ansage-stopp")) stoppen();
     else if (t.hasAttribute("data-ansage-text")) textUmschalten(t);
     else if (t.hasAttribute("data-ansage-gelesen")) gelesenMarkieren(String(t.getAttribute("data-ansage-gelesen") || "").split(/\s+/).filter(Boolean));
+    else if (t.hasAttribute("data-ansage-aufraeumen")) aufraeumen(Number(t.getAttribute("data-ansage-aufraeumen")));
     else {
       // Die laufende Ansage haelt an oder setzt fort, auch die eines anderen Tabs (ueber den Kanal); jede andere Zeile spielt sofort.
       var zeit = Number(t.getAttribute("data-ansage")), fremd = LAUFT ? null : anzeigeLauf();
