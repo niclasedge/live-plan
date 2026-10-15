@@ -17,7 +17,7 @@ const band = atom(BAND, null)
 
 type Ort = { repo: string; slug: string; wurzel: string }
 
-type ApiFrage = { id?: unknown; frage?: unknown; entscheidung?: unknown; optionen?: unknown }
+type ApiFrage = { id?: unknown; frage?: unknown; entscheidung?: unknown; zurueckgezogen?: unknown; optionen?: unknown }
 type ApiAgent = { agentId?: unknown; beschreibung?: unknown; status?: unknown }
 type Api = {
   plan?: { titel?: unknown; fragen?: unknown; schritte?: unknown } | null
@@ -121,9 +121,10 @@ async function standAuffrischen($: EngineInterface): Promise<void> {
 const text = (x: unknown): string => (typeof x === 'string' ? x.trim() : '')
 const zahl = (x: unknown): number => (typeof x === 'number' && Number.isFinite(x) ? Math.max(0, Math.round(x)) : 0)
 
+// Open as logik.ts's frageOffen reads it: neither decided nor withdrawn (#27).
 const offeneFragen = (roh: unknown): LivePlanSitzungFrage[] =>
   (Array.isArray(roh) ? (roh as ApiFrage[]) : [])
-    .filter(f => f && text(f.id) && text(f.frage) && !text(f.entscheidung))
+    .filter(f => f && text(f.id) && text(f.frage) && !text(f.entscheidung) && !text(f.zurueckgezogen))
     .map(f => ({
       id: text(f.id),
       frage: text(f.frage),

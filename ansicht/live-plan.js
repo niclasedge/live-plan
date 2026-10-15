@@ -165,9 +165,18 @@
   function frage(id) {
     return D.plan.fragen.find(function (f) { return f.id === id; });
   }
-  /** Eine eigene Antwort: entschieden, aber mit keinem label der Optionen. */
+  /** Offen wie frageOffen in logik.ts: weder entschieden noch zurueckgezogen (#27). */
+  function frageOffen(f) {
+    return !(f && (f.entscheidung || f.zurueckgezogen));
+  }
+  /**
+   * Eine eigene Antwort: entschieden, aber mit keinem label der Optionen. Eine Mehrfachauswahl aus dem
+   * Chat kommt als Labels mit Komma verbunden an (#27); sie ist keine eigene Antwort.
+   */
   function istEigen(f) {
-    return !!(f && f.entscheidung) && !f.optionen.some(function (o) { return o.label === f.entscheidung; });
+    if (!f || !f.entscheidung) return false;
+    var ist = function (t) { return f.optionen.some(function (o) { return o.label === t; }); };
+    return !ist(f.entscheidung) && !f.entscheidung.split(",").every(function (t) { return ist(t.trim()); });
   }
   function zeit(id) {
     return (D.zeiten.je && D.zeiten.je[id]) || {};
@@ -478,7 +487,7 @@
     var laeuft = S.filter(function (s) { return s.status === "laeuft"; });
     var L = D.live && typeof D.live === "object" ? D.live : null;
     var agenten = L && Array.isArray(L.agenten) ? L.agenten.filter(function (a) { return a && a.status === "laeuft"; }).length : 0;
-    var fragen = p.fragen.filter(function (f) { return !f.entscheidung; });
+    var fragen = p.fragen.filter(frageOffen);
     var halt = fragen.filter(function (f) { return f.blockiert && f.blockiert.length; }).map(function (f) { return f.id + " haelt " + f.blockiert.join(", ") + " an"; });
     var pct = S.length ? Math.round((fertig / S.length) * 100) : 0;
     var wellen = p.wellen.length;
@@ -542,23 +551,28 @@
 
   /**
    * Fragen an Sie (Vorlage): entschiedene als Zeile mit der Wahl, offene als Karte mit Optionen und eigener
-   * Antwort. Wie die anderen Abschnitte nur die fuenf neuesten entschiedenen; `+N aeltere` klappt den Rest auf.
+   * Antwort, zurueckgezogene (#27) ausgegraut mit ihrem Grund. Wie die anderen Abschnitte nur die fuenf
+   * neuesten geschlossenen; `+N aeltere` klappt den Rest auf.
    */
   function fragenAnSie() {
     var F = D.plan.fragen || [];
     if (!F.length) return "";
-    var offen = F.filter(function (f) { return !f.entscheidung; }).length;
-    var entschieden = F.filter(function (f) { return f.entscheidung; });
-    var aelter = entschieden.slice(0, Math.max(0, entschieden.length - FRAGEN_N));
+    var offen = F.filter(frageOffen).length;
+    var geschlossen = F.filter(function (f) { return !frageOffen(f); });
+    var aelter = geschlossen.slice(0, Math.max(0, geschlossen.length - FRAGEN_N));
     var auf = mehrAuf("fragen");
     var knopf = aelter.length
       ? '<button type="button" class="mehr" data-mehr="fragen" aria-expanded="' + auf + '">' + (auf ? "nur die neuesten " + FRAGEN_N : "+" + aelter.length + " aeltere") + "</button>"
       : "";
     return '<section class="lp-abschnitt lp-fragen-sie" data-abschnitt="fragen" data-testid="sitzung-fragen"><h2>Fragen an Sie <span class="zaehler">' + offen + " offen</span>" + knopf + "</h2>" +
       F.map(function (f) {
-        if (!f.entscheidung) return frageKarte(f, true);
+        if (frageOffen(f)) return frageKarte(f, true);
         var alt = aelter.indexOf(f) >= 0;
         if (alt && !auf) return "";
+        if (!f.entscheidung) {
+          return '<div class="lp-az fr-zurueck" data-zurueck="' + esc(f.id) + '"' + (alt ? " data-aelter" : "") + ">" + dokuGlyph("frage", "var(--ink-3)", 16) + '<span class="id">' + esc(f.id) + "</span>" +
+            '<span class="t">' + esc(f.frage) + ' <span class="grund">zurückgezogen: ' + esc(f.zurueckgezogen) + "</span></span>" + alterMarke(f.id) + "</div>";
+        }
         return '<div class="lp-az fr-entschieden" data-entschieden="' + esc(f.id) + '"' + (alt ? " data-aelter" : "") + ">" + dokuGlyph("fertig", "var(--l1)", 16) + '<span class="id">' + esc(f.id) + "</span>" +
           '<span class="t">' + esc(f.frage) + ' <span class="wahl">→ ' + esc(f.entscheidung) + "</span>" + (istEigen(f) ? '<span class="eigen-marke">eigene Antwort</span>' : "") + "</span>" +
           alterMarke(f.id) + dokuTag("entschieden") + "</div>";
@@ -711,7 +725,7 @@
     if (!ids.length) return '<p class="leer">—</p>';
     return '<div class="verweise">' + ids.map(function (id) {
       var s = schritt(id), f = frage(id);
-      var status = s ? s.status : f ? (f.entscheidung ? "fertig" : "offen") : "offen";
+      var status = s ? s.status : f ? (f.entscheidung ? "fertig" : f.zurueckgezogen ? "verworfen" : "offen") : "offen";
       return '<button type="button" class="ref s-' + status + '" data-id="' + esc(id) + '"><span class="id">' + esc(id) + '</span><span class="t">' + esc(s ? s.titel : f ? f.frage : "") + "</span></button>";
     }).join("") + "</div>";
   }

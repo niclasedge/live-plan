@@ -157,6 +157,18 @@ test('Band ohne offene Frage zeigt die Jetzt-Zeile', async ($, on) => {
   expect(await ui.findAll({ type: 'Button' })).toHaveLength(0)
 })
 
+test('Band zeigt eine zurueckgezogene Frage nicht als offen (#27)', async ($, on) => {
+  const api = {
+    plan: { titel: 'Umbau', fragen: [{ ...FRAGE, zurueckgezogen: 'in der Sitzung abgebrochen' }], schritte: [{ status: 'fertig' }] },
+    live: { agenten: [] },
+  }
+  const w = welt(on, { api })
+  const ui = await $.ui.mount({ plugin: 'live-plan-sitzung', surface: 'terminal', component: 'AbovePrompt', props: BAND })
+  await w.clock.advance(0)
+  expect(await ui.findAll({ type: 'Button' })).toHaveLength(0)
+  expect(await ui.find({ text: 'Umbau · Schritte 1/1' })).toBeDefined()
+})
+
 test('Band ohne Server zeichnet nichts und folgt dem Takt', async ($, on) => {
   const welt0: Welt = { apiStatus: 404, api: { plan: { titel: 'Spaeter', fragen: [FRAGE] } } }
   const w = welt(on, welt0)

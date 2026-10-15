@@ -11,6 +11,12 @@
 //                              auf die naechste Entscheidung warten, Position in .live-plan/SLUG.seit
 //   live-plan frage [SLUG]     Fragen als JSON von stdin an fragen: anhaengen, legt die Sitzung bei
 //                              Bedarf wie neu --auto an; stdout: {"ids":[...],"url":"..."}
+//   live-plan frage-zurueck ID [GRUND] [--sitzung SLUG]
+//                              Frage ohne Entscheidung schliessen (#27): `zurueckgezogen: GRUND` (Vorgabe
+//                              "ohne Angabe"), auch ohne Server; eine entschiedene bleibt (Exit 3), eine schon
+//                              zurueckgezogene behaelt ihren ersten Grund. SLUG fehlt: CLAUDE_SESSION_ID
+//   live-plan frage-zurueck --alle [GRUND] [--sitzung SLUG]
+//                              alle offenen Fragen in einem Schreibvorgang (Sitzungsende ohne Server)
 //   live-plan stand [SLUG] --kurz
 //                              Stand als Klartext fuer den System-Prompt (hoechstens 1500 Zeichen);
 //                              ohne Sitzung leer
@@ -33,7 +39,7 @@ import { chmodSync, closeSync, constants, existsSync, fstatSync, ftruncateSync, 
 import os from "node:os";
 import path from "node:path";
 import { ansagenDatei, ansageText, leseAnsagen, schonAngesagt, schreibeAnsage } from "./ansagen.ts";
-import { CHROME_MAC, chromePfad, fragenEingabe, fuegeFragenAnImText, handoutName, kurzStand, naechsteFrageIds, pruefeAngehaengt, pruefePlan, yamlWert } from "./logik.ts";
+import { CHROME_MAC, chromePfad, frageOffen, fragenEingabe, fuegeFragenAnImText, handoutName, kurzStand, naechsteFrageIds, pruefeAngehaengt, pruefePlan, yamlWert, zieheFrageZurueckImText, zurueckGrund } from "./logik.ts";
 
 const SKILL = import.meta.dir;
 const PORT = Number.parseInt(process.env.LIVE_PLAN_PORT ?? "", 10) || 4410;
@@ -45,10 +51,13 @@ const NAME = /^[A-Za-z0-9._-]+$/;
 
 const schlafe = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-function abbruch(meldung: string): never {
+function abbruch(meldung: string, code = 1): never {
   console.error(`live-plan: ${meldung}`);
-  process.exit(1);
+  process.exit(code);
 }
+
+/** Exit-Code von `frage-zurueck` fuer eine schon entschiedene Frage (#27); die Mod liest ihn statt des Wortlauts. */
+const ENTSCHIEDEN_EXIT = 3;
 
 async function gesund(): Promise<{ pid: number; wurzel: string; wurzeln?: string[] } | null> {
   try {
@@ -398,6 +407,67 @@ async function frage(slug: string): Promise<void> {
   abbruch(`${datei} aendert sich laufend, nach drei Anlaeufen aufgegeben`);
 }
 
+/**
+ * Fragen zurueckziehen (#27), ohne Server; Ablauf wie zieheZurueck im Server: aendern, gegenlesen,
+ * atomar schreiben. `id` null: alle offenen Fragen in einem Schreibvorgang (Sitzungsende ohne Server).
+ */
+function frageZurueck(slug: string, id: string | null, roh: string): void {
+  const datei = path.join(sitzungsOrdner(gitWurzel()), `${slug}.yaml`);
+  const grund = zurueckGrund(roh);
+  for (let anlauf = 0; anlauf < 3; anlauf++) {
+    const text = liesSicher(datei);
+    if (text === null) abbruch(`${datei} fehlt`);
+    let vorher: unknown;
+    try {
+      vorher = Bun.YAML.parse(text);
+    } catch (e) {
+      abbruch(`YAML nicht lesbar: ${ersteZeile(e)}`);
+    }
+    const fragen = pruefePlan(vorher).plan.fragen;
+    let ids: string[];
+    if (id === null) {
+      ids = fragen.filter(frageOffen).map((f) => f.id);
+      if (!ids.length) {
+        console.log("keine offene Frage");
+        return;
+      }
+    } else {
+      const f = fragen.find((x) => x.id === id);
+      if (!f) abbruch(`Frage ${id} unbekannt`);
+      if (f.entscheidung) abbruch(`${id} ist schon entschieden (${f.entscheidung})`, ENTSCHIEDEN_EXIT);
+      if (f.zurueckgezogen) {
+        console.log(`${id} war schon zurueckgezogen: ${f.zurueckgezogen}`);
+        return;
+      }
+      ids = [id];
+    }
+    let neuText = text;
+    for (const x of ids) {
+      const ergebnis = zieheFrageZurueckImText(neuText, x, grund);
+      if (ergebnis.art === "unbekannt") abbruch(`${x} steht nicht als Block in der Datei`);
+      if (ergebnis.art === "fehler") abbruch(ergebnis.grund);
+      if (ergebnis.art === "entschieden") abbruch(`${x} ist schon entschieden (${ergebnis.entscheidung})`, ENTSCHIEDEN_EXIT);
+      neuText = ergebnis.text;
+    }
+    let nachher: unknown;
+    try {
+      nachher = Bun.YAML.parse(neuText);
+    } catch (e) {
+      abbruch(`Ergebnis nicht lesbar: ${ersteZeile(e)}`);
+    }
+    const neu = pruefePlan(nachher).plan.fragen;
+    for (const x of ids) {
+      const f = neu.find((y) => y.id === x);
+      if (f?.zurueckgezogen !== grund || f.entscheidung) abbruch(`zurueckgezogen von ${x} liesse sich nicht unveraendert zuruecklesen`);
+    }
+    if (schreibeAtomar(datei, neuText, text)) {
+      console.log(`${ids.join(", ")} zurueckgezogen: ${grund}`);
+      return;
+    }
+  }
+  abbruch(`${datei} aendert sich laufend, nach drei Anlaeufen aufgegeben`);
+}
+
 /** Der kurze Stand fuer den System-Prompt; ohne Git-Repo oder Sitzung leer. */
 function stand(slug: string): void {
   const lauf = spawnSync("git", ["rev-parse", "--show-toplevel"], { encoding: "utf8" });
@@ -728,6 +798,21 @@ switch (befehl) {
     }
     break;
   }
+  case "frage-zurueck": {
+    const i = rest.indexOf("--sitzung");
+    const sitzung = i >= 0 ? rest[i + 1] : undefined;
+    if (i >= 0 && (sitzung === undefined || sitzung.startsWith("--"))) abbruch("--sitzung braucht einen SLUG");
+    const frei = rest.filter((a, j) => (i < 0 || (j !== i && j !== i + 1)) && !a.startsWith("--"));
+    const slug = () => sitzungsSlug(befehl, sitzung === undefined ? [] : [sitzung]);
+    if (rest.includes("--alle")) {
+      frageZurueck(slug(), null, frei.join(" "));
+      break;
+    }
+    const [id, ...grund] = frei;
+    if (!id) abbruch("frage-zurueck braucht die Id einer Frage");
+    frageZurueck(slug(), id, grund.join(" "));
+    break;
+  }
   case "handout": {
     const name = rest.find((a) => !a.startsWith("--")) ?? process.env.CLAUDE_SESSION_ID;
     if (!name) abbruch("handout braucht einen SLUG oder CLAUDE_SESSION_ID");
@@ -746,6 +831,6 @@ switch (befehl) {
     await stop();
     break;
   default:
-    console.error("Aufruf: live-plan start | open [SLUG] | neu [SLUG] [--auto] | warte SLUG [--hoechstens MS] | frage [SLUG] | stand [SLUG] --kurz | handout [SLUG] | sage TEXT | stop");
+    console.error("Aufruf: live-plan start | open [SLUG] | neu [SLUG] [--auto] | warte SLUG [--hoechstens MS] | frage [SLUG] | frage-zurueck ID|--alle [GRUND] [--sitzung SLUG] | stand [SLUG] --kurz | handout [SLUG] | sage TEXT | stop");
     process.exit(befehl === undefined || befehl === "-h" || befehl === "--help" ? 0 : 2);
 }

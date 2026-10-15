@@ -25,7 +25,8 @@ const RM_MESSUNG: Messung = argv => (argv[0] === 'bash' ? { stdout: RM_AUSGABE }
 // The world beneath the plugin, as in fragen.test.ts: the live-plan script and server in
 // memory, a mocked clock, and the Bash tool itself, which records what it ran.
 // chat: the chat dialog answers `wahl` after `nachMs`; without it the dialog never answers.
-function welt(on: On, opts: { skriptDa?: boolean; messung?: Messung; chat?: { wahl: string; nachMs: number } } = {}) {
+// server false: the script takes the question, the server never answers.
+function welt(on: On, opts: { skriptDa?: boolean; messung?: Messung; chat?: { wahl: string; nachMs: number }; server?: boolean } = {}) {
   const clock = mock.clock(on, { now: 10_000 })
   mock.env(on, { HOME: '/home/t' })
   mock.store(on)
@@ -72,6 +73,7 @@ function welt(on: On, opts: { skriptDa?: boolean; messung?: Messung; chat?: { wa
     return m === 'wirft' ? { deny: 'Zeitlimit' } : lauf(m)
   })
   on('http.fetch', async ($, e) => {
+    if (opts.server === false) return { deny: 'ECONNREFUSED' }
     if (e.init?.method === 'POST' && e.url === `${API}/entscheidung`) {
       const b = JSON.parse(e.init.body ?? '{}') as { frage: string; wahl: string }
       posts.push(b)
@@ -331,6 +333,19 @@ test('ohne live-plan wird nicht gehalten: Hinweis und der Befehl laeuft', MIT_SK
   expect(w.ausgefuehrt).toEqual(['rm -rf build'])
   expect(w.notizen).toEqual(['Sprengradius: 12 Dateien löschen (3,4 MB) — ohne live-plan nicht gehalten'])
   expect(w.frageEingabe()).toBeNull()
+})
+
+test('nimmt das Skript die Frage an, der Server zeigt sie aber nicht: zurueckgezogen, Hinweis, der Befehl laeuft (#27)', MIT_SKRIPT, async ($, on) => {
+  const w = welt(on, { server: false, messung: RM_MESSUNG })
+  const r = await $.tool.call({ tool: 'Bash', command: 'rm -rf build' })
+  expect(r).toMatchObject({ result: { stdout: 'gelaufen' } })
+  expect(w.ausgefuehrt).toEqual(['rm -rf build'])
+  expect(w.prozesse.filter(p => p.argv[0] === 'bun').map(p => p.argv.slice(2))).toEqual([
+    ['frage', ID],
+    ['start'],
+    ['frage-zurueck', 'F1', 'live-plan nicht erreichbar', '--sitzung', ID],
+  ])
+  expect(w.notizen).toEqual(['Sprengradius: 12 Dateien löschen (3,4 MB) — ohne live-plan nicht gehalten'])
 })
 
 test('eine Messung, die scheitert, haelt trotzdem: Wirkung unbekannt', MIT_SKRIPT, async ($, on) => {
