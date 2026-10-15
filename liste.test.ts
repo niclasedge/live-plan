@@ -607,10 +607,97 @@ const ereignis = (attrs: Record<string, string>) => ({
  * `startAnsagen` steht schon beim ersten Laden da (ohne Neuigkeit, also ohne Vorlesen); `vorher` ist der Speicher vor dem Start.
  */
 /** Weitere Attrappen: `host` ist die Antwort von GET /api/host, `zurueck` haelt Antworten bis `freigeben(url)` zurueck, `stimmen` sind die Stimmen der Sprachausgabe. */
-interface LaufOptionen { host?: unknown; zurueck?: string[]; stimmen?: unknown[]; stimme?: string }
+interface LaufOptionen { host?: unknown; zurueck?: string[]; stimmen?: unknown[]; stimme?: string; welt?: Welt; name?: string; speakWirft?: number }
 
-async function ansagenLauf(sperre: "fehlt" | "abgelehnt", startAnsagen: unknown[] = [], vorher: Record<string, string> = {}, gelesenStatus = 200, optionen: LaufOptionen = {}) {
+/** Ein Tab, wie ihn die Welt sieht: wie viele Aeusserungen in seiner Sprachausgabe stehen, und seine Ereignisse. */
+interface WeltTab { name: string; imBrowser: () => number; storage: (e: unknown) => void; geaendert: () => void; beende: () => void }
+
+/**
+ * Mehrere Tabs eines Browsers (#42): ein gemeinsamer localStorage (mit dem Ereignis storage in den anderen Tabs), Web Locks
+ * (exklusiv, je Name eine Warteschlange, die Zusage kommt asynchron wie im Browser) und BroadcastChannel (Zustellung an die
+ * anderen Tabs, asynchron). `verstoesse` haelt jeden Moment fest, in dem ein Tab spricht, waehrend ein anderer etwas in
+ * seiner Sprachausgabe hat; `gesprochen` ist die Reihenfolge der Aeusserungen ueber alle Tabs.
+ */
+interface Welt {
+  speicher: Map<string, string>; ansagen: unknown[]; tabs: WeltTab[]; verstoesse: string[]; gesprochen: string[];
+  /** Je Tab seine Web Locks und sein BroadcastChannel; `Kanal` gehoert keinem Tab (eine fremde Seite). */
+  locksFuer: (tab: string) => unknown; kanalFuer: (tab: string) => unknown; Kanal: unknown;
+  /** Jede Anforderung eines Locks: "TAB:NAME", in der Reihenfolge. */
+  anforderungen: string[];
+  /** Anforderungen "TAB:NAME", die einmal mit AbortError scheitern (kein Verweigern des Browsers). */
+  einmalAbbrechen: Set<string>;
+  /** Ein Tab verschwindet: seine Locks gehen frei, seine Anforderungen und Kanaele fallen weg. */
+  sterben: (tab: WeltTab) => void;
+  neueAnsagen: (liste: unknown[]) => Promise<void>; abspielen: () => Promise<void>; warte: () => Promise<void>;
+}
+const warteAlles = async () => { for (let i = 0; i < 20; i++) await new Promise((r) => setImmediate(r)); };
+
+function welt(): Welt {
+  type Halt = { tab: string };
+  const sperren = new Map<string, { halter: Halt | null; warten: Array<{ tab: string; los: () => void }> }>();
+  const naechster = (s: { halter: Halt | null; warten: Array<{ tab: string; los: () => void }> }) => { s.halter = null; s.warten.shift()?.los(); };
+  let kanaele: Array<{ tab: string; name: string; onmessage: ((e: { data: unknown }) => void) | null }> = [];
+  const kanalFuer = (tab: string) => class {
+    name: string; tab = tab; onmessage: ((e: { data: unknown }) => void) | null = null;
+    constructor(name: string) { this.name = name; kanaele.push(this); }
+    postMessage(data: unknown) {
+      const kopie = structuredClone(data);
+      kanaele.forEach((k) => { if (k !== this && k.name === this.name) setImmediate(() => { if (kanaele.includes(k)) k.onmessage?.({ data: kopie }); }); });
+    }
+    close() {}
+  };
+  const w: Welt = {
+    speicher: new Map(), ansagen: [], tabs: [], verstoesse: [], gesprochen: [], anforderungen: [], einmalAbbrechen: new Set(),
+    locksFuer: (tab) => ({
+      request: (name: string, a: unknown, b?: unknown) => {
+        const cb = (typeof a === "function" ? a : b) as (l: unknown) => unknown;
+        const s = sperren.get(name) ?? { halter: null, warten: [] };
+        sperren.set(name, s);
+        w.anforderungen.push(`${tab}:${name}`);
+        if (w.einmalAbbrechen.delete(`${tab}:${name}`)) return Promise.reject(Object.assign(new Error("abgebrochen"), { name: "AbortError" }));
+        return new Promise((ok, fehler) => {
+          const eintrag = {
+            tab,
+            los: () => {
+              const halt = { tab };
+              s.halter = halt;
+              Promise.resolve().then(() => cb({ name })).then(ok, fehler).finally(() => { if (s.halter === halt) naechster(s); });
+            },
+          };
+          if (!s.halter && !s.warten.length) eintrag.los(); else s.warten.push(eintrag);
+        });
+      },
+    }),
+    kanalFuer,
+    Kanal: kanalFuer("extern"),
+    sterben: (t) => {
+      w.tabs = w.tabs.filter((x) => x !== t);
+      kanaele = kanaele.filter((k) => k.tab !== t.name);
+      sperren.forEach((s) => {
+        s.warten = s.warten.filter((x) => x.tab !== t.name);
+        if (s.halter?.tab === t.name) naechster(s);
+      });
+    },
+    /** Der Server hat jetzt diese Ansagen (neueste zuerst); jede Ereignisquelle meldet geaendert. */
+    neueAnsagen: async (liste) => { w.ansagen = liste; w.tabs.forEach((t) => t.geaendert()); await warteAlles(); },
+    /** Beendet reihum, was in einer Sprachausgabe steht (Beginn und Ende), bis nirgends mehr etwas steht. */
+    abspielen: async () => {
+      for (let i = 0; i < 100; i++) {
+        const t = w.tabs.find((x) => x.imBrowser() > 0);
+        if (!t) return;
+        t.beende();
+        await warteAlles();
+      }
+      throw new Error("abspielen endet nicht");
+    },
+    warte: warteAlles,
+  };
+  return w;
+}
+
+async function ansagenLauf(sperre: "fehlt" | "abgelehnt" | "echt", startAnsagen: unknown[] = [], vorher: Record<string, string> = {}, gelesenStatus = 200, optionen: LaufOptionen = {}) {
   const gesprochen: string[] = [];
+  const welt = optionen.welt;
   const tore = new Map((optionen.zurueck ?? []).map((url) => { let auf = () => {}; const p = new Promise<void>((r) => { auf = r; }); return [url, { p, auf }] as const; }));
   // Welcher Knopf den Fokus hat (K3): "gelesen:KENNUNG", "inbox" oder "leiste"; `aktiv` ist sein Knoten (document.activeElement).
   // Wie im Browser faellt der Fokus auf body (null), sobald innerHTML den Knoten ersetzt (S3: das SSE-Echo zeichnet neu).
@@ -634,7 +721,16 @@ async function ansagenLauf(sperre: "fehlt" | "abgelehnt", startAnsagen: unknown[
   const klicks: Array<(e: unknown) => void> = [];
   const wurzelKlicks: Array<(e: unknown) => void> = [];
   const quellen: Array<Record<string, () => void>> = [];
-  const speicher = new Map<string, string>(Object.entries(vorher));
+  const speicher = welt?.speicher ?? new Map<string, string>(Object.entries(vorher));
+  const name = optionen.name ?? `tab${welt ? welt.tabs.length + 1 : 1}`;
+  // Was in der Sprachausgabe dieses Tabs steht: gesprochen und weder beendet noch abgebrochen (#42). `hoechstens` ist das Maximum.
+  const imBrowser: Aeusserung[] = [];
+  let hoechstens = 0;
+  // Die Uhr fuer setTimeout: Wecker laufen nur, wenn der Test die Zeit vorstellt (zeitVor).
+  let uhr = 0, weckerNr = 0;
+  const wecker: Array<{ id: number; um: number; f: () => void }> = [];
+  // Die Hoerer am Fenster (storage, pagehide).
+  const fenster: Record<string, Array<(e: unknown) => void>> = {};
   let ansagen: unknown[] = startAnsagen;
   let pausiert = false;
   // Was cancel synchron ausloest, wie Chrome die Enden der abgebrochenen Aeusserungen meldet (s. beimAbbruch).
@@ -691,18 +787,26 @@ async function ansagenLauf(sperre: "fehlt" | "abgelehnt", startAnsagen: unknown[
     location: { pathname: "/", search: "" },
     localStorage: {
       getItem: (k: string) => speicher.get(k) ?? null,
-      setItem: (k: string, v: string) => { speicher.set(k, String(v)); },
-      removeItem: (k: string) => { speicher.delete(k); },
+      setItem: (k: string, v: string) => { const alt = speicher.get(k) ?? null; speicher.set(k, String(v)); melde(k, alt, String(v)); },
+      removeItem: (k: string) => { const alt = speicher.get(k) ?? null; speicher.delete(k); melde(k, alt, null); },
     },
     speechSynthesis: {
       speak: (u: Aeusserung) => {
+        if (u.text !== "" && optionen.speakWirft !== undefined && optionen.speakWirft-- === 0) throw new Error("speak scheitert");
         gesprochen.push(u.text);
         if (u.text === "") return; // die Freischaltung spricht stumm und bleibt im Protokoll außen vor
         protokoll.push("speak:" + u.text);
         aeusserungen.push(u);
+        imBrowser.push(u);
+        hoechstens = Math.max(hoechstens, imBrowser.length);
+        if (welt) {
+          welt.gesprochen.push(u.text);
+          const andere = welt.tabs.filter((t) => t !== ich && t.imBrowser() > 0).map((t) => t.name);
+          if (andere.length) welt.verstoesse.push(`${ich.name} spricht "${u.text}", waehrend ${andere.join(", ")} spricht`);
+        }
       },
       get paused() { return pausiert; },
-      cancel: () => { protokoll.push("cancel"); beimCancel?.(); },
+      cancel: () => { imBrowser.length = 0; protokoll.push("cancel"); beimCancel?.(); },
       pause: () => { protokoll.push("pause"); pausiert = true; },
       resume: () => { protokoll.push("resume"); pausiert = false; },
       getVoices: () => optionen.stimmen ?? [],
@@ -713,10 +817,13 @@ async function ansagenLauf(sperre: "fehlt" | "abgelehnt", startAnsagen: unknown[
       quellen.push(hoert);
       return { addEventListener: (typ: string, f: () => void) => { hoert[typ] = f; }, close: () => {} };
     },
-    navigator: sperre === "fehlt" ? {} : { locks: { request: () => Promise.reject(new Error("verweigert")) } },
-    BroadcastChannel: class { onmessage: unknown = null; postMessage() {} },
-    setInterval: () => 1, clearInterval: () => {}, setTimeout: () => 1,
-    addEventListener: () => {},
+    // Verweigert ein Browser den Lock, dann mit SecurityError (etwa ein Dokument mit opakem Ursprung).
+    navigator: sperre === "fehlt" ? {} : sperre === "echt" && welt ? { locks: welt.locksFuer(name) } : { locks: { request: () => Promise.reject(Object.assign(new Error("verweigert"), { name: "SecurityError" })) } },
+    BroadcastChannel: sperre === "echt" && welt ? welt.kanalFuer(name) : class { onmessage: unknown = null; postMessage() {} },
+    setInterval: () => 1, clearInterval: () => {},
+    setTimeout: (f: () => void, ms = 0) => { const id = ++weckerNr; wecker.push({ id, um: uhr + (Number(ms) || 0), f }); return id; },
+    clearTimeout: (id: number) => { const i = wecker.findIndex((x) => x.id === id); if (i >= 0) wecker.splice(i, 1); },
+    addEventListener: (typ: string, f: (e: unknown) => void) => { (fenster[typ] ??= []).push(f); },
     fetch: async (url: string, init?: { method?: string; body?: string }) => {
       await tore.get(url)?.p;
       if (url === "/api/host") return optionen.host ? antwort(optionen.host) : antwort(null, false);
@@ -726,15 +833,27 @@ async function ansagenLauf(sperre: "fehlt" | "abgelehnt", startAnsagen: unknown[
         (JSON.parse(init?.body ?? "{}").kennungen as string[]).forEach((k) => markiert.add(k));
         return antwort({ gelesen: 1 });
       }
-      if (url === "/api/ansagen") return antwort({ ansagen: (ansagen as { kennung?: string; gelesen?: boolean }[]).map((a) => (a.kennung && markiert.has(a.kennung) ? { ...a, gelesen: true } : a)) });
+      if (url === "/api/ansagen") return antwort({ ansagen: ((welt ? welt.ansagen : ansagen) as { kennung?: string; gelesen?: boolean }[]).map((a) => (a.kennung && markiert.has(a.kennung) ? { ...a, gelesen: true } : a)) });
       if (url === "/api/einstellungen") return antwort({ vorlesen: true, stimme: optionen.stimme ?? null });
       if (url === "/api/liste") return antwort({ wurzel: "/w", sitzungen: [] });
       return antwort(null, false);
     },
   };
+  // Dieser Tab in der Welt: das Ereignis storage geht an die anderen Tabs, asynchron wie im Browser.
+  const ich: WeltTab = {
+    name,
+    imBrowser: () => imBrowser.length,
+    storage: (e) => { (fenster.storage ?? []).forEach((f) => f(e)); },
+    geaendert: () => { quellen.forEach((h) => h.geaendert?.()); },
+    beende: () => { const u = imBrowser.shift(); u?.onstart?.(); u?.onend?.(); },
+  };
+  function melde(key: string, oldValue: string | null, newValue: string | null) {
+    welt?.tabs.forEach((t) => { if (t !== ich) setImmediate(() => t.storage({ key, oldValue, newValue })); });
+  }
+  welt?.tabs.push(ich);
   g.globalThis = g;
   vm.runInNewContext(readFileSync(path.join(import.meta.dirname, "ansicht", "live-plan.js"), "utf8"), g);
-  const warte = async () => { for (let i = 0; i < 20; i++) await new Promise((r) => setImmediate(r)); };
+  const warte = warteAlles;
   await warte();
   return {
     /** Gesprochene Texte; die Freischaltung spricht stumm einen leeren Text und zaehlt nicht. */
@@ -783,6 +902,33 @@ async function ansagenLauf(sperre: "fehlt" | "abgelehnt", startAnsagen: unknown[
     speicher: () => speicher,
     /** Was cancel ab jetzt synchron ausloest, etwa das Ende der laufenden Aeusserung. */
     beimAbbruch: (f: (() => void) | null) => { beimCancel = f; },
+    /** Wie viele Aeusserungen gerade in der Sprachausgabe dieses Tabs stehen, und wie viele es hoechstens waren (#42). */
+    imBrowser: () => imBrowser.length,
+    hoechstens: () => hoechstens,
+    /** Die erste Aeusserung in der Sprachausgabe beginnt (onstart). */
+    beginne: () => { imBrowser[0]?.onstart?.(); },
+    /** Die erste Aeusserung in der Sprachausgabe beginnt und endet regulaer, wie der Browser es meldet. */
+    beende: () => ich.beende(),
+    /**
+     * Der Tab verschwindet. Mit `pagehide` schliesst der Nutzer ihn (die Seite meldet sich ab); ohne stuerzt er ab. Danach
+     * sind seine Locks frei, seine Sprachausgabe ist leer, und er hoert und sendet nichts mehr.
+     */
+    sterben: async (mitPagehide = true) => {
+      if (mitPagehide) (fenster.pagehide ?? []).forEach((f) => f({}));
+      welt?.sterben(ich);
+      imBrowser.length = 0;
+      await warte();
+    },
+    /** Stellt die Uhr der Wecker (setTimeout) um `ms` vor und laesst faellige Wecker in ihrer Reihenfolge laufen. */
+    zeitVor: (ms: number) => {
+      uhr += ms;
+      for (;;) {
+        const faellig = wecker.filter((x) => x.um <= uhr).sort((x, y) => x.um - y.um || x.id - y.id)[0];
+        if (!faellig) return;
+        wecker.splice(wecker.indexOf(faellig), 1);
+        faellig.f();
+      }
+    },
   };
 }
 
@@ -853,17 +999,19 @@ test("Vorlesen ohne Stimmen: englisch mit lang en-US, deutsch mit de-DE", async 
 const LANG_SATZ = "Ein Satz einer langen Ansage, die in Teilen gesprochen wird.";
 const ANSAGE_LANG = { v: 1, zeit: 3000, id: "c", repo: "r", text: Array.from({ length: 3 }, () => LANG_SATZ).join(" "), quelle: "test" };
 
-test("Lange Ansage: alle Teile in die Warteschlange; Pause, Fortsetzen und Stopp gelten der ganzen Ansage, der Stopp bleibt bis zum letzten Teil", async () => {
+test("Lange Ansage: ein Teil nach dem anderen in die Sprachausgabe (#42); Pause, Fortsetzen und Stopp gelten der ganzen Ansage, der Stopp bleibt bis zum letzten Teil", async () => {
   const lauf = await ansagenLauf("fehlt", [ANSAGE_LANG]);
   lauf.klickeAnsage(3000);
-  const teile = lauf.aeusserungen();
-  assert.equal(teile.length, 2);
-  assert.equal(teile.map((u) => u.text).join(" "), `r: ${ANSAGE_LANG.text}`);
-  const [eins, zwei] = teile as [Aeusserung, Aeusserung];
+  assert.equal(lauf.aeusserungen().length, 1, "erst der erste Teil");
+  const eins = lauf.letzte();
   eins.onstart?.();
   lauf.klickeAnsage(3000); // anhalten
   lauf.klickeAnsage(3000); // fortsetzen
-  eins.onend?.(); // der erste Teil ist fertig, der zweite spricht weiter
+  eins.onend?.(); // der erste Teil ist fertig, jetzt erst kommt der zweite
+  const teile = lauf.aeusserungen();
+  assert.equal(teile.length, 2);
+  assert.equal(teile.map((u) => u.text).join(" "), `r: ${ANSAGE_LANG.text}`);
+  const zwei = teile[1]!;
   assert.equal(lauf.stoppSichtbar(), true, "die Ansage laeuft noch");
   zwei.onstart?.();
   lauf.klickeAnsage(3000); // haelt die Ansage an, spricht sie nicht neu
@@ -876,12 +1024,14 @@ test("Lange Ansage: alle Teile in die Warteschlange; Pause, Fortsetzen und Stopp
 test("Lange Ansage: erst das Ende des letzten Teils beendet sie; die Kalibrierung misst alle Teile vom ersten Beginn an", async () => {
   const lauf = await ansagenLauf("fehlt", [ANSAGE_LANG]);
   lauf.klickeAnsage(3000);
-  const [eins, zwei] = lauf.aeusserungen() as [Aeusserung, Aeusserung];
+  const eins = lauf.letzte();
   lauf.jetzt(10_000);
   eins.onstart?.();
   lauf.jetzt(20_000);
   eins.onend?.();
   assert.equal(lauf.speicher().has(SCHLUESSEL_ZPS), false, "nach dem ersten Teil misst noch nichts");
+  const zwei = lauf.letzte(); // der zweite Teil kommt erst nach dem Ende des ersten (#42)
+  assert.notEqual(zwei, eins);
   zwei.onstart?.();
   lauf.jetzt(30_000);
   zwei.onend?.();
@@ -893,11 +1043,13 @@ test("Lange Ansage: erst das Ende des letzten Teils beendet sie; die Kalibrierun
 test("Lange Ansage: ein Fehler in einem Teil beendet sie nicht vor dem letzten Teil, gemessen wird dann nicht", async () => {
   const lauf = await ansagenLauf("fehlt", [ANSAGE_LANG]);
   lauf.klickeAnsage(3000);
-  const [eins, zwei] = lauf.aeusserungen() as [Aeusserung, Aeusserung];
+  const eins = lauf.letzte();
   lauf.jetzt(10_000);
   eins.onstart?.();
   eins.onerror?.();
   assert.equal(lauf.stoppSichtbar(), true, "der zweite Teil steht noch aus");
+  const zwei = lauf.letzte(); // nach dem Fehler des ersten Teils folgt der zweite (#42)
+  assert.notEqual(zwei, eins);
   zwei.onstart?.();
   lauf.jetzt(30_000);
   zwei.onend?.();
@@ -912,6 +1064,8 @@ test("Lange Ansage: die Teile richten sich nach dem gemessenen Tempo, langsam ku
   const laengen = async (zps: string) => {
     const lauf = await ansagenLauf("fehlt", [ANSAGE_SEHR_LANG], { [SCHLUESSEL_ZPS]: zps });
     lauf.klickeAnsage(4000);
+    // Die Teile kommen nacheinander (#42): jedes Ende gibt den naechsten frei.
+    for (let n = 0; n < 50 && lauf.imBrowser() > 0; n++) lauf.beende();
     const teile = lauf.aeusserungen().map((u) => u.text);
     assert.equal(teile.join(" "), `r: ${ANSAGE_SEHR_LANG.text}`);
     return teile.map((t) => Array.from(t).length);
@@ -1120,19 +1274,23 @@ test("Abbruch: ein verspaetet gemeldeter Beginn der abgebrochenen Ansage setzt d
   assert.deepEqual(lauf.protokoll().slice(-2), ["speak:r: Zwei.", "pause"]);
 });
 
-test("Vorlesen von selbst: die naechste Ansage wartet hinter der laufenden, ohne Abbruch, und wird erst mit ihrem Beginn die laufende", async () => {
+test("Vorlesen von selbst: die naechste Ansage wartet in der Seite hinter der laufenden, ohne Abbruch, und wird erst mit ihrem Beginn die laufende", async () => {
   const lauf = await ansagenLauf("fehlt", [ANSAGE_EINS]);
   lauf.klick(); // dieser Tab wird Sprecher
   lauf.klickeAnsage(1000); // Eins spricht
-  lauf.letzte().onstart?.();
+  const eins = lauf.letzte();
+  eins.onstart?.();
   await lauf.neueAnsage(3000); // Neu kommt automatisch
-  const neu = lauf.letzte();
-  assert.deepEqual(lauf.protokoll(), ["cancel", "speak:r: Eins.", "speak:r: Neu"]);
+  assert.deepEqual(lauf.protokoll(), ["cancel", "speak:r: Eins."], "Neu wartet in der Seite, nicht in der Sprachausgabe (#42)");
   lauf.klickeAnsage(1000); // der Knopf ist noch bei Eins: anhalten
   lauf.klickeAnsage(1000); // und fortsetzen
-  neu.onstart?.(); // Neu beginnt: ab jetzt ist sie die laufende
+  eins.onend?.(); // Eins ist fertig: jetzt erst geht Neu an die Sprachausgabe
+  assert.deepEqual(lauf.protokoll().slice(-1), ["speak:r: Neu"]);
+  assert.doesNotMatch(lauf.html(), /an-laeuft/, "vor ihrem Beginn ist Neu noch nicht die laufende");
+  lauf.letzte().onstart?.(); // Neu beginnt: ab jetzt ist sie die laufende
+  assert.match(lauf.html(), /an-laeuft/);
   lauf.klickeAnsage(3000); // Neu haelt an
-  assert.deepEqual(lauf.protokoll().slice(-3), ["pause", "resume", "pause"]);
+  assert.deepEqual(lauf.protokoll().slice(-4), ["pause", "resume", "speak:r: Neu", "pause"]);
 });
 
 test("Vorlesen aus stoppt eine laufende Ansage und leert die Warteschlange (stoppen)", async () => {
@@ -1166,16 +1324,22 @@ test("Fehler-Ende: die laufende Ansage meldet onerror, der Stopp geht, und ein K
   assert.deepEqual(lauf.protokoll(), ["cancel", "speak:r: Eins.", "cancel", "speak:r: Eins."]);
 });
 
-test("Fehler-Ende einer wartenden Ansage: die laufende bleibt laufend, ein Klick auf sie pausiert weiter", async () => {
+test("Fehler-Ende einer wartenden Ansage: sie steht erst nach A in der Sprachausgabe; ihr Fehler vor dem Beginn laesst nichts haengen", async () => {
   const lauf = await ansagenLauf("fehlt", [ANSAGE_EINS]);
   lauf.klick(); // dieser Tab spricht, Neues wird von selbst vorgelesen
   lauf.klickeAnsage(1000); // A spricht
-  lauf.letzte().onstart?.();
-  await lauf.neueAnsage(3000); // B wartet hinter A
-  lauf.letzte().onerror?.(); // B meldet einen Fehler, bevor sie begonnen hat
-  assert.equal(lauf.stoppSichtbar(), true, "A spricht noch");
-  lauf.klickeAnsage(1000); // A anhalten
+  const a = lauf.letzte();
+  a.onstart?.();
+  await lauf.neueAnsage(3000); // B wartet hinter A, in der Seite (#42): ein Fehler von B kann A nicht mehr treffen
+  assert.equal(lauf.aeusserungen().length, 1, "nur A in der Sprachausgabe");
+  lauf.klickeAnsage(1000); // A anhalten: A bleibt die laufende
   assert.deepEqual(lauf.protokoll().slice(-1), ["pause"]);
+  lauf.klickeAnsage(1000); // fortsetzen
+  a.onend?.(); // A fertig, B geht an die Sprachausgabe
+  const b = lauf.letzte();
+  assert.notEqual(b, a);
+  b.onerror?.(); // B meldet einen Fehler, bevor sie begonnen hat
+  assert.equal(lauf.stoppSichtbar(), false, "nichts spricht und wartet mehr");
 });
 
 test("Pausiert und mit onerror beendet: endeLauf hebt die Pause auf, damit die naechste Ansage spricht", async () => {
@@ -1196,10 +1360,11 @@ test("Stopp: bleibt, solange eine Ansage wartet, auch wenn die laufende endet un
   lauf.klickeAnsage(1000); // A spricht
   const a = lauf.letzte();
   a.onstart?.();
-  await lauf.neueAnsage(3000); // B wartet hinter A
-  const b = lauf.letzte();
+  await lauf.neueAnsage(3000); // B wartet hinter A, in der Seite (#42)
   assert.equal(lauf.stoppSichtbar(), true, "A laeuft, B wartet");
-  a.onend?.(); // A ist fertig, B hat noch keinen Beginn gemeldet
+  a.onend?.(); // A ist fertig, B geht an die Sprachausgabe und hat noch keinen Beginn gemeldet
+  const b = lauf.letzte();
+  assert.notEqual(b, a);
   assert.equal(lauf.stoppSichtbar(), true, "B wartet noch");
   b.onend?.(); // B endet, ohne dass ein Beginn kam
   assert.equal(lauf.stoppSichtbar(), false, "nichts wartet mehr");
@@ -1212,11 +1377,13 @@ test("Stopp: das Ende einer abgebrochenen Ansage veraendert den Zaehler der neue
   const alt = lauf.letzte();
   lauf.klickeAnsage(2000); // bricht Eins ab, Zwei spricht
   const zwei = lauf.letzte();
-  await lauf.neueAnsage(3000); // Neu wartet hinter Zwei
-  const neu = lauf.letzte();
-  alt.onend?.(); // das fremde Ende von Eins zaehlt nicht
+  await lauf.neueAnsage(3000); // Neu wartet hinter Zwei, in der Seite (#42)
+  alt.onend?.(); // das fremde Ende von Eins zaehlt nicht und gibt Neu nicht frei
+  assert.equal(lauf.letzte(), zwei, "das fremde Ende startet nichts");
   assert.equal(lauf.stoppSichtbar(), true, "Zwei spricht, Neu wartet");
-  zwei.onend?.(); // Zwei ist fertig, Neu wartet noch
+  zwei.onend?.(); // Zwei ist fertig, Neu geht an die Sprachausgabe
+  const neu = lauf.letzte();
+  assert.notEqual(neu, zwei);
   assert.equal(lauf.stoppSichtbar(), true, "Neu wartet noch, obwohl das fremde Ende kam");
   neu.onend?.();
   assert.equal(lauf.stoppSichtbar(), false);
@@ -1240,13 +1407,13 @@ test("Stopp: der Stopp-Knopf leert die Warteschlange; die Ereignisse der abgebro
   lauf.klick();
   lauf.klickeAnsage(1000);
   const a = lauf.letzte();
-  await lauf.neueAnsage(3000);
-  const b = lauf.letzte();
+  await lauf.neueAnsage(3000); // B wartet in der Seite (#42)
   lauf.klickeStopp();
   assert.equal(lauf.stoppSichtbar(), false, "nach dem Stopp kein Knopf");
-  a.onend?.();
-  b.onend?.();
+  a.onend?.(); // das alte Ende gibt B nicht mehr frei
+  a.onerror?.();
   assert.equal(lauf.stoppSichtbar(), false, "die alten Enden zaehlen nicht");
+  assert.equal(lauf.aeusserungen().length, 1, "B kommt nach dem Stopp nicht mehr an die Sprachausgabe");
 });
 
 test("Kalibrierung: eine regulaer zu Ende gesprochene Ansage mischt ihre Zeichen je Sekunde gleitend ein (0,7 alt, 0,3 gemessen)", async () => {
@@ -1318,4 +1485,301 @@ test("Fallback ohne Lock: ohne Sprecher-Tab spricht kein Tab, auch nicht der fre
     await lauf.neueAnsage(1000);
     assert.deepEqual(lauf.gesprochen(), [], sperre);
   }
+});
+
+// Ansagen strikt nacheinander, ein Sprecher ueber alle Tabs (#42): je Tab steht hoechstens ein Teil in der Sprachausgabe,
+// der naechste folgt erst auf das Ende des vorigen; gesprochen wird nur unter dem Web Lock live-plan-sprache.
+const NEU = (zeit: number, text: string) => ({ v: 1, zeit, id: `n${zeit}`, repo: "r", text, quelle: "test" });
+
+/** Zwei Tabs derselben Welt, beide freigeschaltet; A ist Sprecher (zuletzt geklickt) und Leiter (zuerst geoeffnet). */
+async function zweiTabs(sperre: "echt" | "fehlt" = "echt") {
+  const w = welt();
+  const a = await ansagenLauf(sperre, [], {}, 200, { welt: w, name: "A" });
+  const b = await ansagenLauf(sperre, [], {}, 200, { welt: w, name: "B" });
+  b.klick();
+  a.klick();
+  await w.warte();
+  return { w, a, b };
+}
+
+test("Zwei Tabs: Sprecherwechsel mitten in einer Ansage, zu keinem Zeitpunkt sprechen beide, kein Satz verschraenkt (#42)", async () => {
+  const { w, a, b } = await zweiTabs();
+  await w.neueAnsagen([ANSAGE_LANG]); // zwei Teile, A spricht
+  assert.equal(a.imBrowser(), 1, "A hat genau den ersten Teil in der Sprachausgabe");
+  b.klick(); // B wird Sprecher, waehrend A mitten in der Ansage ist
+  await w.neueAnsagen([NEU(4000, "Später."), ANSAGE_LANG]);
+  assert.equal(b.imBrowser(), 0, "B wartet, bis A fertig ist");
+  await w.abspielen();
+  assert.deepEqual(w.verstoesse, []);
+  const [t1, t2, t3] = w.gesprochen;
+  assert.equal(w.gesprochen.length, 3, String(w.gesprochen));
+  assert.equal(`${t1} ${t2}`, `r: ${ANSAGE_LANG.text}`, "die Teile der langen Ansage stehen zusammen");
+  assert.equal(t3, "r: Später.");
+});
+
+test("Drei Ansagen in einem Tab: speak je Teil erst nach dem Ende des vorigen, die Reihenfolge bleibt (#42)", async () => {
+  for (const sperre of ["echt", "fehlt"] as const) {
+    const w = welt();
+    const t = await ansagenLauf(sperre, [], {}, 200, { welt: w });
+    t.klick();
+    await w.neueAnsagen([ANSAGE_LANG, ANSAGE_ZWEI, ANSAGE_EINS]); // neueste zuerst, wie der Server sie liefert
+    for (let i = 0; i < 4; i++) {
+      assert.equal(t.imBrowser(), 1, `${sperre}: Schritt ${i}, genau ein Teil in der Sprachausgabe`);
+      assert.equal(t.gesprochen().length, i + 1, `${sperre}: Schritt ${i}, der naechste Teil erst nach dem Ende des vorigen`);
+      t.beende();
+      await w.warte();
+    }
+    assert.equal(t.imBrowser(), 0, sperre);
+    assert.equal(t.hoechstens(), 1, sperre);
+    const [eins, zwei, ...lang] = t.gesprochen();
+    assert.deepEqual([eins, zwei, lang.join(" ")], ["r: Eins.", "r: Zwei.", `r: ${ANSAGE_LANG.text}`], sperre);
+  }
+});
+
+test("Zwei Tabs: jede Ansage genau einmal und in ihrer Reihenfolge, auch wenn der Sprecher hin und her wechselt (#42)", async () => {
+  const { w, a, b } = await zweiTabs();
+  const liste: unknown[] = [];
+  const kommt = async (zeit: number) => { liste.unshift(NEU(zeit, `Nummer ${zeit}.`)); await w.neueAnsagen([...liste]); };
+  await kommt(1000); // A spricht 1
+  b.klick();
+  await kommt(2000); // B ist Sprecher, A spricht noch
+  await kommt(3000);
+  a.klick();
+  await kommt(4000); // A wieder Sprecher, haelt noch die Sperre
+  await w.abspielen();
+  assert.deepEqual(w.gesprochen, ["r: Nummer 1000.", "r: Nummer 2000.", "r: Nummer 3000.", "r: Nummer 4000."]);
+  assert.deepEqual(w.verstoesse, []);
+  assert.equal(a.imBrowser() + b.imBrowser(), 0);
+});
+
+test("Wachhund: meldet der Browser das Ende nicht, geht es nach dem Zeitlimit weiter (Zeichen / 4 je Sekunde, mindestens 10 s) (#42)", async () => {
+  const w = welt();
+  const t = await ansagenLauf("echt", [], {}, 200, { welt: w });
+  t.klick();
+  await w.neueAnsagen([ANSAGE_ZWEI, ANSAGE_EINS]);
+  t.beginne(); // Eins beginnt und meldet nie ihr Ende
+  t.zeitVor(9_999);
+  assert.deepEqual(t.gesprochen(), ["r: Eins."], "vor der Untergrenze von 10 s geschieht nichts");
+  t.zeitVor(1);
+  assert.deepEqual(t.protokoll().slice(-2), ["cancel", "speak:r: Zwei."], "abgebrochen und weiter");
+  assert.equal(t.imBrowser(), 1);
+  t.beende();
+  await w.warte();
+  // Ein langer Teil: das Limit waechst mit der Laenge, gerechnet mit dem langsamsten gueltigen Tempo (4 Zeichen je Sekunde).
+  await w.neueAnsagen([ANSAGE_LANG, ANSAGE_ZWEI, ANSAGE_EINS]);
+  const erster = t.letzte().text, limit = Array.from(erster).length * 250;
+  assert.ok(limit > 10_000, String(limit));
+  t.beginne();
+  t.klickeAnsage(3000); // angehalten: der Wachhund schweigt, solange die Pause dauert
+  t.zeitVor(10 * limit);
+  assert.equal(t.letzte().text, erster, "die Pause bricht nicht ab");
+  t.klickeAnsage(3000); // fortsetzen: das Limit beginnt neu
+  t.zeitVor(limit - 1);
+  assert.equal(t.letzte().text, erster);
+  t.zeitVor(1);
+  assert.equal(`${erster} ${t.letzte().text}`, `r: ${ANSAGE_LANG.text}`, "der zweite Teil folgt");
+  assert.equal(t.speicher().has(SCHLUESSEL_ZPS), false, "ein Abbruch durch den Wachhund misst nicht");
+});
+
+test("Stopp und Pause aus Tab B wirken auf die Ansage, die Tab A spricht (#42)", async () => {
+  const { w, a, b } = await zweiTabs();
+  await w.neueAnsagen([ANSAGE_EINS]);
+  a.beginne();
+  await w.warte();
+  assert.equal(b.stoppSichtbar(), true, "B zeigt den Stopp, solange A spricht");
+  assert.match(b.html() + a.html(), /an-laeuft/);
+  b.klickeAnsage(1000); // ⏸ in B haelt A an
+  await w.warte();
+  assert.deepEqual(a.protokoll().slice(-1), ["pause"]);
+  b.klickeAnsage(1000); // ▶ in B setzt A fort
+  await w.warte();
+  assert.deepEqual(a.protokoll().slice(-1), ["resume"]);
+  b.klickeStopp();
+  await w.warte();
+  assert.deepEqual(a.protokoll().slice(-1), ["cancel"]);
+  assert.equal(a.imBrowser(), 0);
+  assert.equal(a.stoppSichtbar(), false);
+  assert.equal(b.stoppSichtbar(), false);
+  await w.neueAnsagen([ANSAGE_ZWEI, ANSAGE_EINS]); // danach spricht A wieder
+  assert.deepEqual(a.gesprochen(), ["r: Eins.", "r: Zwei."]);
+  assert.deepEqual(w.verstoesse, []);
+});
+
+test("Fallback ohne Lock: verliert ein Tab die Sprecherrolle, bricht er seine Warteschlange ab (storage) (#42)", async () => {
+  const { w, a, b } = await zweiTabs("fehlt");
+  await w.neueAnsagen([ANSAGE_LANG]);
+  assert.equal(a.imBrowser(), 1, "A spricht");
+  b.klick(); // B wird Sprecher: A erfaehrt es ueber das Ereignis storage
+  await w.warte();
+  assert.equal(a.imBrowser(), 0, "A hat abgebrochen");
+  assert.equal(a.stoppSichtbar(), false);
+  await w.neueAnsagen([NEU(4000, "Später."), ANSAGE_LANG]);
+  assert.deepEqual(b.gesprochen(), ["r: Später."]);
+  assert.deepEqual(w.verstoesse, []);
+});
+
+// Review #42: Befunde F1 bis F5 und die Testluecken (Proben T1 bis T4 des Reviewers).
+test("Review F4/T1: der Leiter wartet mit seiner neuen Ansage, waehrend ein anderer Tab die Sperre haelt (#42)", async () => {
+  const { w, a, b } = await zweiTabs();
+  await w.neueAnsagen([ANSAGE_EINS]);
+  await w.abspielen();
+  b.klick();
+  b.klickeAnsage(1000); // B spielt Eins nochmal und haelt die Sperre
+  await w.warte();
+  assert.equal(b.imBrowser(), 1);
+  a.klick(); // A (Leiter) wird Sprecher, B spricht noch
+  await w.warte();
+  await w.neueAnsagen([NEU(4000, "Vier."), ANSAGE_EINS]);
+  assert.equal(a.imBrowser(), 0, "A wartet auf die Sperre");
+  await w.abspielen();
+  assert.deepEqual(w.gesprochen, ["r: Eins.", "r: Eins.", "r: Vier."]);
+  assert.deepEqual(w.verstoesse, []);
+});
+
+test("Review F4/T2: ▶ einer anderen Zeile in B, waehrend A spricht: A hoert auf, bevor B beginnt (#42)", async () => {
+  const { w, a, b } = await zweiTabs();
+  await w.neueAnsagen([ANSAGE_LANG, ANSAGE_EINS]);
+  await w.abspielen();
+  await w.neueAnsagen([NEU(4000, `Vier. ${LANG_SATZ} ${LANG_SATZ}`), ANSAGE_LANG, ANSAGE_EINS]);
+  assert.equal(a.imBrowser(), 1, "A spricht Vier");
+  b.klick();
+  b.klickeAnsage(1000);
+  await w.warte();
+  await w.abspielen();
+  assert.deepEqual(w.verstoesse, []);
+  assert.equal(w.gesprochen.at(-1), "r: Eins.");
+});
+
+test("Review F1/T3: fehlt der Sprecher-Schluessel, waehrend ein Nicht-Leiter spricht, geht keine Ansage verloren (#42)", async () => {
+  const w = welt();
+  const a = await ansagenLauf("echt", [], {}, 200, { welt: w, name: "A" });
+  const c = await ansagenLauf("echt", [], {}, 200, { welt: w, name: "C" });
+  const d = await ansagenLauf("echt", [], {}, 200, { welt: w, name: "D" });
+  d.klick(); c.klick(); a.klick();
+  await w.warte();
+  await w.neueAnsagen([ANSAGE_LANG]);
+  await w.abspielen();
+  c.klick(); c.klickeAnsage(3000); // C spricht die lange Ansage nochmal und haelt die Sperre
+  await w.warte();
+  d.klick(); await w.warte();
+  d.sprecherSchliessen(); // D schliesst, der Schluessel ist weg
+  await w.warte();
+  await w.neueAnsagen([NEU(4000, "Vier."), ANSAGE_LANG]); // nur der Leiter A ist dran und wartet auf die Sperre
+  c.klick(); await w.warte(); // der Nutzer kehrt zu C zurueck
+  await w.neueAnsagen([NEU(5000, "Fuenf."), NEU(4000, "Vier."), ANSAGE_LANG]);
+  await w.abspielen();
+  assert.deepEqual(w.gesprochen.filter((t) => /Vier|Fuenf/.test(t)), ["r: Vier.", "r: Fuenf."]);
+  assert.deepEqual(w.verstoesse, []);
+});
+
+test("Review F2: schliesst der Nutzer den sprechenden Tab, liest ein anderer Tab den ungesprochenen Rest, die laufende von vorn (#42)", async () => {
+  const { w, a, b } = await zweiTabs();
+  await w.neueAnsagen([ANSAGE_ZWEI, ANSAGE_EINS]); // A spricht Eins, Zwei wartet in A
+  a.beginne();
+  assert.deepEqual(a.gesprochen(), ["r: Eins."]);
+  await a.sterben(); // pagehide, dann ist A weg: Sperre frei, Warteschlange verloren
+  await w.abspielen();
+  assert.deepEqual(b.gesprochen(), ["r: Eins.", "r: Zwei."]);
+  assert.deepEqual(w.verstoesse, []);
+  assert.equal(w.speicher.get("live-plan.gesprochen"), "2000", "das Merkmal steht erst nach dem Ende");
+});
+
+test("Review F2: das Gesprochen-Merkmal steht erst nach dem Ende einer Ansage, ein Stopp verwirft die wartenden (#42)", async () => {
+  const { w, a } = await zweiTabs();
+  await w.neueAnsagen([ANSAGE_ZWEI, ANSAGE_EINS]);
+  assert.equal(w.speicher.has("live-plan.gesprochen"), false, "Eins spricht noch");
+  a.beende();
+  await w.warte();
+  assert.equal(w.speicher.get("live-plan.gesprochen"), "1000");
+  a.klickeStopp(); // Zwei laeuft und wird verworfen: sie gilt als erledigt, kein anderer Tab liest sie nach
+  await w.warte();
+  assert.equal(w.speicher.get("live-plan.gesprochen"), "2000");
+});
+
+test("Review F3/T4: ein Tab meldet Sprechen und verschwindet ohne pagehide: Stopp raeumt die Anzeige, ▶ spielt wieder (#42)", async () => {
+  const { w, b } = await zweiTabs();
+  await w.neueAnsagen([ANSAGE_EINS]);
+  await w.abspielen();
+  const geist = new (w.Kanal as new (n: string) => { postMessage: (d: unknown) => void })("live-plan-ansagen");
+  geist.postMessage({ art: "zustand", tab: "geist", laeuft: { zeit: 1000, pausiert: false }, wartet: true });
+  await w.warte();
+  assert.equal(b.stoppSichtbar(), true);
+  b.klick();
+  b.klickeStopp();
+  await w.warte();
+  assert.equal(b.stoppSichtbar(), false, "der Stopp raeumt auch den gespiegelten Zustand");
+  const vorher = w.gesprochen.length;
+  b.klickeAnsage(1000);
+  await w.warte();
+  await w.abspielen();
+  assert.equal(w.gesprochen.length - vorher, 1, "▶ spielt, statt an einen Geist zu senden");
+});
+
+test("Review F5: ein Fehler beim Sprechen unter der Sperre ist kein Rueckfall, der Tab spricht weiter nur unter der Sperre (#42)", async () => {
+  const w = welt();
+  const a = await ansagenLauf("echt", [], {}, 200, { welt: w, name: "A", speakWirft: 0 });
+  a.klick();
+  await w.neueAnsagen([ANSAGE_EINS]); // speak wirft: Eins gilt als mit Fehler beendet
+  assert.deepEqual(a.gesprochen(), []);
+  assert.equal(a.stoppSichtbar(), false, "nichts haengt");
+  const zaehle = () => w.anforderungen.filter((x) => x === "A:live-plan-sprache").length;
+  const vorher = zaehle();
+  await w.neueAnsagen([ANSAGE_ZWEI, ANSAGE_EINS]);
+  assert.equal(zaehle(), vorher + 1, "Zwei spricht wieder unter der Sperre");
+  assert.deepEqual(a.gesprochen(), ["r: Zwei."]);
+});
+
+test("Review F5: scheitert die Anforderung ohne Verweigern (AbortError), bleibt es bei der Sperre; die naechste Ansage holt sie (#42)", async () => {
+  const w = welt();
+  const a = await ansagenLauf("echt", [], {}, 200, { welt: w, name: "A" });
+  const b = await ansagenLauf("echt", [], {}, 200, { welt: w, name: "B" });
+  b.klick();
+  a.klick();
+  await w.warte();
+  w.einmalAbbrechen.add("A:live-plan-sprache");
+  await w.neueAnsagen([ANSAGE_EINS]); // die Anforderung scheitert, A spricht nicht ohne Sperre
+  assert.equal(a.imBrowser(), 0);
+  b.klick();
+  b.klickeAnsage(1000); // B haelt jetzt die Sperre und spricht
+  await w.warte();
+  a.klick();
+  await w.neueAnsagen([ANSAGE_ZWEI, ANSAGE_EINS]); // A fordert neu an und wartet auf B
+  assert.equal(a.imBrowser(), 0, "A wartet auf die Sperre");
+  await w.abspielen();
+  assert.deepEqual(w.verstoesse, []);
+  // Der Halter B nimmt Zwei mit (nimmNeue); A spricht nicht ohne Sperre daneben, sondern hat sie neu angefordert.
+  assert.deepEqual(w.gesprochen, ["r: Eins.", "r: Zwei."]);
+  assert.equal(w.anforderungen.filter((x) => x === "A:live-plan-sprache").length, 2);
+});
+
+test("Review: beginnt ein Teil, waehrend die Ansage angehalten ist, schweigt der Wachhund bis zum Fortsetzen (#42)", async () => {
+  const w = welt();
+  const t = await ansagenLauf("echt", [], {}, 200, { welt: w });
+  t.klick();
+  await w.neueAnsagen([ANSAGE_LANG]);
+  const eins = t.letzte();
+  eins.onstart?.();
+  t.klickeAnsage(3000); // anhalten
+  eins.onerror?.(); // der Browser beendet den angehaltenen ersten Teil mit einem Fehler: der zweite geht an die Sprachausgabe
+  const zwei = t.letzte();
+  assert.notEqual(zwei, eins);
+  const limit = Array.from(zwei.text).length * 250;
+  t.zeitVor(10 * Math.max(limit, 10_000));
+  assert.equal(t.protokoll().filter((x) => x === "cancel").length, 0, "kein Abbruch waehrend der Pause");
+  t.klickeAnsage(3000); // fortsetzen: jetzt laeuft das Limit
+  t.zeitVor(Math.max(limit, 10_000));
+  assert.deepEqual(t.protokoll().slice(-1), ["cancel"]);
+});
+
+test("Review F2: stuerzt der sprechende Tab ohne pagehide ab, kommt sein Rest mit der naechsten neuen Ansage (#42)", async () => {
+  const { w, a, b } = await zweiTabs();
+  await w.neueAnsagen([ANSAGE_ZWEI, ANSAGE_EINS]);
+  a.beginne();
+  await a.sterben(false); // kein pagehide: niemand erfaehrt es, die Sperre ist nur frei
+  assert.deepEqual(b.gesprochen(), [], "bis zur naechsten Ansage bleibt es still");
+  b.klick();
+  await w.neueAnsagen([NEU(4000, "Vier."), ANSAGE_ZWEI, ANSAGE_EINS]);
+  await w.abspielen();
+  assert.deepEqual(b.gesprochen(), ["r: Eins.", "r: Zwei.", "r: Vier."]);
+  assert.deepEqual(w.verstoesse, []);
 });

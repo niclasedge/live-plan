@@ -3053,7 +3053,8 @@
   // zeigt die Leiste oben die neuesten Ansagen aller Sitzungen; die Uebersicht zeigt sie in ihrer Liste.
   // Ein Tab spricht (#18, Runde 2): den Lock haelt ein Tab und oeffnet die eine Verbindung, die anderen Tabs bekommen
   // die Aenderungen ueber BroadcastChannel. Gesprochen wird im Sprecher-Tab (der zuletzt bediente), ohne Schluessel im Leiter.
-  // Gesprochen-Merkmal in localStorage verhindert eine doppelte Vorlesung auch bei Race-Conditions.
+  // Strikt nacheinander (#42): je Tab steht hoechstens ein Teil in der Sprachausgabe (SCHLANGE), und gesprochen wird nur
+  // unter dem Web Lock live-plan-sprache; unter ihm wird das Gesprochen-Merkmal gelesen und fortgeschrieben.
   var ANSAGEN = [], ansagenBekannt = null, ansageFrei = false;
   var EINST = { vorlesen: false, stimme: null }, einstAuf = false, einstFehler = "";
   var SPRACHE = G.speechSynthesis && G.SpeechSynthesisUtterance ? G.speechSynthesis : null;
@@ -3062,12 +3063,21 @@
   var KANAL_NAME = "live-plan-ansagen", SCHLUESSEL_SPRECHER = "live-plan.sprecher", SCHLUESSEL_GESPROCHEN = "live-plan.gesprochen";
   var MENUE_FELDER = ["data-einst-auf", "data-ansage-auto", "data-ansage-stimme", "data-ansage-letzte", "data-ansage-stopp"];
   var KANAL = null, istLeiter = false;
-  // Was gerade spricht: { zeit, pausiert, gepausiert, zeichen, start, nr, gezaehlt } oder null. Gesetzt beim Klick oder Beginn,
-  // geloescht beim Ende oder Abbruch. `pausiert` ist der Zustand jetzt; `gepausiert` merkt, ob die Ansage je pausiert war (eine
-  // solche misst die Dauer nicht). `zeichen` und `start` speisen die Kalibrierung, `nr` ist die Warteschlange (abbruchNr) und
-  // `gezaehlt`, ob die Ansage schon aus `wartend` gezaehlt ist (s. sprich und endeLauf).
-  // `wartend` zaehlt die Ansagen vom Sprechen bis zu ihrem Ende; `abbruchNr` ordnet Ereignisse ihrer Warteschlange zu.
-  var LAUFT = null, abbruchNr = 0, wartend = 0, SCHLUESSEL_ZPS = "live-plan.zeichen-je-sekunde";
+  // Was gerade spricht: { zeit, pausiert, gepausiert, zeichen, start, nr, teile, offen, fehler } oder null. Gesetzt beim Klick
+  // oder Beginn, geloescht beim Ende oder Abbruch. `pausiert` ist der Zustand jetzt; `gepausiert` merkt, ob die Ansage je
+  // pausiert war (eine solche misst die Dauer nicht). `zeichen` und `start` speisen die Kalibrierung, `nr` ist die
+  // Warteschlange (abbruchNr); `abbruchNr` ordnet Ereignisse ihrer Warteschlange zu.
+  var LAUFT = null, abbruchNr = 0, SCHLUESSEL_ZPS = "live-plan.zeichen-je-sekunde";
+  // Die Seiten-Warteschlange (#42): SCHLANGE sind die Laeufe vom Sprechen bis zu ihrem Ende, der erste spricht. AKTIV ist der
+  // eine Teil in der Sprachausgabe ({ u, lauf, ms, abgelaufen }) oder null; WACHHUND die Uhr, die ihn nach `ms` aufgibt.
+  var SCHLANGE = [], AKTIV = null, WACHHUND = null, WACHHUND_MIN_MS = 10000;
+  // Der Sprecher ueber alle Tabs (#42): den Web Lock SPERRE_SPRACHE haelt der Tab, der spricht (HAELT), solange seine
+  // Warteschlange nicht leer ist. NEUE sind neue Ansagen, die ein Tab sprechen soll; der Halter nimmt sie unter der Sperre.
+  // `sperreKaputt`: der Browser verweigert den Lock, dann gilt der Rueckfall wie ohne navigator.locks.
+  var SPERRE_SPRACHE = "live-plan-sprache", HAELT = false, ANGEFORDERT = false, loesen = null, sperreKaputt = false, NEUE = [];
+  // Was die anderen Tabs sprechen, je Tab { laeuft: { zeit, pausiert } oder null } (Spiegel ueber den Kanal); `gemeldet` ist
+  // der zuletzt gesendete eigene Zustand.
+  var FREMD = Object.create(null), gemeldet = "";
   // Die aufgeklappten Texte der Leiste, je Zeit der Ansage; ein Neuzeichnen der Zeilen liest sie (leisteZustand).
   var TEXT_AUF = {};
   // Ein Markieren als gelesen, das der Server nicht gespeichert hat (#28); steht in Inbox und Leiste bis zum naechsten Klick.
@@ -3097,11 +3107,11 @@
   }
   /** Was die Leiste auf einer Sitzungsseite braucht: alle Ansagen, Repo und Sitzung der Seite, das Sprechen, die aufgeklappten Texte, das Menue. */
   function leisteZustand() {
-    return { ansagen: ANSAGEN, repo: REPO, eigeneId: SLUG, laeuft: LAUFT, zps: zeichenJeSekunde(), aufgeklappt: TEXT_AUF, menue: einstellungenZustand(), fehler: gelesenFehler };
+    return { ansagen: ANSAGEN, repo: REPO, eigeneId: SLUG, laeuft: anzeigeLauf(), zps: zeichenJeSekunde(), aufgeklappt: TEXT_AUF, menue: einstellungenZustand(), fehler: gelesenFehler };
   }
   /** Was die Inbox der Uebersicht braucht (ansageInbox). */
   function inboxZustand() {
-    return { ansagen: ANSAGEN, laeuft: LAUFT, zps: zeichenJeSekunde(), aufgeklappt: TEXT_AUF, fehler: gelesenFehler };
+    return { ansagen: ANSAGEN, laeuft: anzeigeLauf(), zps: zeichenJeSekunde(), aufgeklappt: TEXT_AUF, fehler: gelesenFehler };
   }
   /** Der Kopf von Inbox und Leiste; dorthin geht der Fokus, wenn kein Knopf gelesen bleibt (gelesenMarkieren). */
   var ANSAGE_KOEPFE = [".an-inbox h2", '[data-testid="ansagen-leiste"] h2'];
@@ -3140,6 +3150,7 @@
   }
   /** Der Stopp-Knopf neben ⚙ kommt und geht mit dem Sprechen. Nur er wird eingefuegt oder entfernt, das Menue bleibt, damit eine offene Stimmenwahl nicht zugeht. */
   function zeichneStopp() {
+    meldeZustand();
     var alt = wurzel.querySelector("[data-ansage-stopp]"), offen = stoppOffen();
     if (alt && !offen) {
       var hatFokus = alt === doc.activeElement;
@@ -3150,8 +3161,23 @@
       if (auf) auf.insertAdjacentHTML("afterend", stoppKnopf(offen));
     }
   }
-  /** Der Stopp steht, solange etwas spricht oder pausiert ist oder eine Ansage in der Warteschlange wartet (wartend, s. sprich). */
-  function stoppOffen() { return LAUFT || wartend > 0; }
+  /** Der Stopp steht, solange etwas spricht oder pausiert ist oder eine Ansage wartet, hier oder in einem anderen Tab (FREMD). */
+  function stoppOffen() { return !!(LAUFT || SCHLANGE.length || Object.keys(FREMD).length); }
+  /** Was als laufend gilt: die Ansage dieses Tabs, sonst die, die ein anderer Tab spricht; dort zeigt ihre Zeile ⏸ bzw. ▶. */
+  function anzeigeLauf() {
+    if (LAUFT) return LAUFT;
+    var tab = Object.keys(FREMD).find(function (t) { return FREMD[t].laeuft; });
+    return tab ? FREMD[tab].laeuft : null;
+  }
+  /** Meldet den anderen Tabs, ob und was hier spricht, nur bei einer Aenderung; sie zeigen danach ⏸ und ⏹ (#42). */
+  function meldeZustand() {
+    if (!KANAL) return;
+    var z = { art: "zustand", tab: TAB, laeuft: LAUFT ? { zeit: LAUFT.zeit, pausiert: LAUFT.pausiert } : null, wartet: SCHLANGE.length > 0 };
+    var text = JSON.stringify(z);
+    if (text === gemeldet) return;
+    gemeldet = text;
+    KANAL.postMessage(z);
+  }
   /** Nur die Zeilen neu: die der Leiste oder die der Uebersicht. */
   function zeichneZeilen() {
     if (API) zeichneLeiste(); else zeichneListe();
@@ -3179,91 +3205,244 @@
   /**
    * Bricht ab, was spricht oder pausiert ist. Eine Pause wird vorher aufgehoben, auch wenn keine Ansage mehr laeuft (die
    * Synthese bliebe sonst pausiert, und Chrome haengt nach cancel). Die Nummer des Abbruchs macht die Ereignisse der
-   * abgebrochenen Ansagen ungueltig, und die Warteschlange ist danach leer.
+   * abgebrochenen Ansagen ungueltig; die Seiten-Warteschlange und die neuen Ansagen dieses Tabs sind danach leer. Die
+   * verworfenen neuen Ansagen gelten als erledigt (Gesprochen-Merkmal), damit kein anderer Tab sie nachliest.
    */
   function abbrechen() {
+    SCHLANGE.forEach(function (l) { if (l.neu) merkeGesprochen(l.zeit); });
     abbruchNr++;
-    wartend = 0;
+    SCHLANGE = [];
+    NEUE = [];
+    AKTIV = null;
+    wachhundAus();
     if (SPRACHE) {
       if (LAUFT || SPRACHE.paused) SPRACHE.resume();
       SPRACHE.cancel();
     }
     LAUFT = null;
   }
-  /** Haelt an, was spricht (der Klick auf ⏸ der laufenden Zeile). */
+  /** Haelt an, was spricht (der Klick auf ⏸ der laufenden Zeile); der Wachhund schweigt, solange die Pause dauert. */
   function pausieren() {
     if (!LAUFT || LAUFT.pausiert) return;
     SPRACHE.pause();
     LAUFT.pausiert = true;
     LAUFT.gepausiert = true;
+    wachhundAus();
     zeichneAnsagen();
   }
-  /** Setzt fort, was pausiert ist (der Klick auf ▶ der pausierten Zeile). */
+  /** Setzt fort, was pausiert ist (der Klick auf ▶ der pausierten Zeile); das Zeitlimit des Wachhunds beginnt neu. */
   function fortsetzen() {
     if (!LAUFT || !LAUFT.pausiert) return;
     SPRACHE.resume();
     LAUFT.pausiert = false;
-    zeichneAnsagen();
-  }
-  /** Stoppt alles: die laufende oder pausierte Ansage und die Warteschlange der automatisch gelesenen. */
-  function stoppen() {
-    abbrechen();
+    wachhundStellen();
     zeichneAnsagen();
   }
   /**
-   * Spricht eine Ansage. `sofort` (der Klick) bricht ab, was gerade laeuft, und zeigt diese Ansage sofort als laufend; sonst
-   * reiht der Browser sie hinten an, und sie gilt erst mit ihrem Beginn (onstart) als laufend. Jede Ansage zaehlt von hier
-   * bis zu ihrem Ende in `wartend` (s. endeLauf); eine abgebrochene meldet ihr Ende nach und zaehlt dann nicht mehr.
-   * Eine lange Ansage geht in Teilen (sprechTeile, je etwa 10 s beim gemessenen Tempo, teilZeichen) in die Warteschlange des
-   * Browsers; pause, resume und cancel wirken dort auf alle Teile. Sie beginnt mit dem ersten Teil, der beginnt, und endet mit dem letzten Teil, der endet (`offen`).
+   * Stoppt alles in diesem Tab: die laufende oder pausierte Ansage und die Warteschlange; die Sperre geht frei (weiter).
+   * Der Spiegel der anderen Tabs (FREMD) wird geleert: wer noch spricht, meldet sich nach dem Stopp neu, und ein Tab, der
+   * ohne Abmeldung verschwunden ist, haelt so den Stopp nicht fest.
+   */
+  function stoppenHier() {
+    FREMD = Object.create(null);
+    abbrechen();
+    zeichneAnsagen();
+    weiter();
+  }
+  /** Der Stopp des Nutzers: hier und ueber den Kanal in jedem anderen Tab, auch dem, der gerade spricht (#42). */
+  function stoppen() {
+    stoppenHier();
+    if (KANAL) KANAL.postMessage({ art: "stopp" });
+  }
+  /**
+   * Spricht eine Ansage. `sofort` (der Klick) bricht ab, was gerade laeuft, hier und in den anderen Tabs, und zeigt diese
+   * Ansage sofort als laufend; sonst steht sie hinten in der Seiten-Warteschlange und gilt erst mit ihrem Beginn (onstart)
+   * als laufend. Eine lange Ansage geht in Teilen (sprechTeile, je etwa 10 s beim gemessenen Tempo, teilZeichen); in der
+   * Sprachausgabe steht immer nur ein Teil, der naechste folgt auf sein Ende (#42). So wirken pause, resume und cancel genau
+   * auf ihn, und die Saetze zweier Ansagen koennen sich nicht verschraenken.
    */
   function sprich(a, sofort) {
     if (!SPRACHE || !a) return;
+    // Der Stopp an die anderen Tabs geht vor dem eigenen Zustand hinaus, sonst raeumte er ihn dort gleich wieder (stoppenHier).
+    if (sofort && KANAL) KANAL.postMessage({ art: "stopp" });
+    einreihen(a, sofort, false);
+    weiter();
+  }
+  /**
+   * Stellt eine Ansage als Lauf hinten in die Seiten-Warteschlange (s. sprich); true, wenn sie dort steht. `neu`: eine neue
+   * Ansage (beanspruche); ihr Ende schreibt das Gesprochen-Merkmal fort.
+   */
+  function einreihen(a, sofort, neu) {
+    if (!SPRACHE || !a) return false;
     var text = ansageSprechtext(a), teile = sprechTeile(text, teilZeichen(zeichenJeSekunde()));
     if (sofort) abbrechen();
-    var lauf = { zeit: a.zeit, pausiert: false, gepausiert: false, zeichen: Array.from(text).length, start: null, nr: abbruchNr, gezaehlt: false, offen: teile.length, fehler: false };
-    wartend++;
+    var lauf = { zeit: a.zeit, pausiert: false, gepausiert: false, zeichen: Array.from(text).length, start: null, nr: abbruchNr, teile: teile, offen: teile.length, fehler: false, sprache: spracheVon(a.text), neu: !!neu };
+    SCHLANGE.push(lauf);
     if (sofort) {
       LAUFT = lauf;
       zeichneAnsagen();
     } else zeichneStopp();
-    var sprache = spracheVon(a.text), stimme = stimmeFuer(SPRACHE.getVoices(), EINST.stimme, sprache);
-    teile.forEach(function (teil) {
-      var u = new G.SpeechSynthesisUtterance(teil), fertig = false;
-      if (stimme) { u.voice = stimme; u.lang = stimme.lang; } else u.lang = sprache === "en" ? "en-US" : "de-DE";
-      u.onstart = function () {
-        // Der Beginn einer abgebrochenen Ansage kann nach dem Abbruch eintreffen; ihre Nummer ist dann nicht mehr die aktuelle.
-        if (lauf.nr !== abbruchNr || lauf.start !== null) return;
-        lauf.start = jetztMs(); LAUFT = lauf; zeichneAnsagen();
-      };
-      // Jeder Teil endet hoechstens einmal; ein Fehler in einem Teil verhindert nur die Messung. Ein Ende waehrend oder nach
-      // einem Abbruch misst nicht: Chrome meldet die Enden der abgebrochenen Teile noch im Aufruf von cancel.
-      var ende = function (regulaer) {
-        if (fertig) return;
-        fertig = true;
-        if (!regulaer) lauf.fehler = true;
-        if (--lauf.offen > 0) return;
-        if (!lauf.fehler && lauf.nr === abbruchNr && LAUFT === lauf && !lauf.gepausiert) kalibriere(lauf);
-        endeLauf(lauf);
-      };
-      u.onend = function () { ende(true); };
-      u.onerror = function () { ende(false); };
-      SPRACHE.speak(u);
-    });
+    return true;
   }
   /**
-   * Das Ende einer Ansage (onend oder onerror). Sie zaehlt aus `wartend`, hoechstens einmal und nur in der Warteschlange ihrer
-   * Generation: ein Ende nach einem Abbruch veraendert nichts. War sie die laufende, endet der Lauf mit ihr; ob noch etwas
-   * wartet, entscheidet der Zaehler, nicht ein Takt. So verschwindet der Stopp nicht zwischen zwei Ansagen. Endet eine
-   * pausierte Ansage, hebt das Ende die Pause auf, sonst spraeche die naechste Ansage nie.
+   * Gibt den naechsten Teil des Laufs an die Sprachausgabe. Sein Ende (onend, onerror oder der Wachhund) zaehlt hoechstens
+   * einmal, ein Fehler verhindert nur die Messung. Ein Ende nach einem Abbruch (andere Nummer) bewirkt nichts mehr: Chrome
+   * meldet die Enden der abgebrochenen Teile noch im Aufruf von cancel. Der Lauf endet mit seinem letzten Teil (`offen`).
+   */
+  function sprichTeil(lauf) {
+    var teil = lauf.teile[lauf.teile.length - lauf.offen], fertig = false;
+    var u = new G.SpeechSynthesisUtterance(teil), stimme = stimmeFuer(SPRACHE.getVoices(), EINST.stimme, lauf.sprache);
+    if (stimme) { u.voice = stimme; u.lang = stimme.lang; } else u.lang = lauf.sprache === "en" ? "en-US" : "de-DE";
+    u.onstart = function () {
+      // Der Beginn einer abgebrochenen Ansage kann nach dem Abbruch eintreffen; ihre Nummer ist dann nicht mehr die aktuelle.
+      if (lauf.nr !== abbruchNr || lauf.start !== null) return;
+      lauf.start = jetztMs(); LAUFT = lauf; zeichneAnsagen();
+    };
+    var ende = function (regulaer) {
+      if (fertig) return;
+      fertig = true;
+      if (AKTIV && AKTIV.u === u) { AKTIV = null; wachhundAus(); }
+      if (lauf.nr !== abbruchNr) return;
+      if (!regulaer) lauf.fehler = true;
+      if (--lauf.offen > 0) { weiter(); return; }
+      if (!lauf.fehler && LAUFT === lauf && !lauf.gepausiert) kalibriere(lauf);
+      if (lauf.neu) merkeGesprochen(lauf.zeit);
+      SCHLANGE.splice(SCHLANGE.indexOf(lauf), 1);
+      endeLauf(lauf);
+      weiter();
+    };
+    u.onend = function () { ende(true); };
+    u.onerror = function () { ende(false); };
+    AKTIV = {
+      u: u, lauf: lauf, ms: wachhundMs(teil),
+      // Der Browser meldet das Ende nicht: die Aeusserung aufgeben, ohne dass ihr cancel noch ein Ende meldet, und weiter.
+      abgelaufen: function () {
+        u.onstart = u.onend = u.onerror = null;
+        SPRACHE.cancel();
+        ende(false);
+      },
+    };
+    try {
+      SPRACHE.speak(u);
+    } catch (e) {
+      ende(false); // wie onerror: der Teil ist vorbei, der naechste folgt
+    }
+    wachhundStellen();
+  }
+  /** Das Zeitlimit eines Teils: seine Zeichen beim langsamsten gueltigen Tempo (ZPS_GRENZEN), mindestens WACHHUND_MIN_MS. */
+  function wachhundMs(teil) {
+    return Math.max(WACHHUND_MIN_MS, Math.ceil(Array.from(teil).length * 1000 / ZPS_GRENZEN[0]));
+  }
+  /** Stellt den Wachhund fuer den Teil in der Sprachausgabe neu, ausser die Ansage ist angehalten (eine Pause darf dauern). */
+  function wachhundStellen() {
+    wachhundAus();
+    var a = AKTIV;
+    if (!a || (LAUFT && LAUFT.pausiert)) return;
+    WACHHUND = setTimeout(function () { WACHHUND = null; if (AKTIV === a) a.abgelaufen(); }, a.ms);
+  }
+  function wachhundAus() {
+    if (WACHHUND !== null) clearTimeout(WACHHUND);
+    WACHHUND = null;
+  }
+  /**
+   * Das Ende einer Ansage (ihr letzter Teil endete, regulaer oder nicht). War sie die laufende, endet der Lauf mit ihr; ob
+   * noch etwas wartet, sagt die Warteschlange, nicht ein Takt. So verschwindet der Stopp nicht zwischen zwei Ansagen. Endet
+   * eine pausierte Ansage, hebt das Ende die Pause auf, sonst spraeche die naechste Ansage nie.
    */
   function endeLauf(lauf) {
-    var zaehlt = !lauf.gezaehlt && lauf.nr === abbruchNr;
-    if (!zaehlt && LAUFT !== lauf) return;
-    if (zaehlt) { lauf.gezaehlt = true; wartend--; }
     if (LAUFT === lauf && lauf.pausiert && SPRACHE.paused) SPRACHE.resume();
     if (LAUFT === lauf) LAUFT = null;
     zeichneAnsagen();
+  }
+  /** Mit Web Locks spricht nur der Halter von live-plan-sprache; verweigert der Browser den Lock, gilt der Rueckfall. */
+  function mitSperre() {
+    return !sperreKaputt && !!(G.navigator && G.navigator.locks);
+  }
+  /**
+   * Gibt der Sprachausgabe den naechsten Teil, wenn keiner darin steht. Mit Locks fordert ein Tab ohne Sperre sie an,
+   * sobald er etwas zu sprechen hat; mit Sperre nimmt er die neuen Ansagen (nimmNeue) und gibt sie frei, wenn nichts mehr
+   * wartet. Ohne Locks (Rueckfall) spricht jeder Tab selbst.
+   */
+  function weiter() {
+    if (mitSperre()) {
+      if (!HAELT) {
+        if (SCHLANGE.length || NEUE.some(function (n) { return n.meins; })) anfordern();
+        return;
+      }
+      nimmNeue();
+    }
+    if (AKTIV) return;
+    if (SCHLANGE.length) sprichTeil(SCHLANGE[0]);
+    else freigeben();
+  }
+  /** Fordert die Sperre an; mit ihr spricht dieser Tab, bis seine Warteschlange leer ist (weiter, freigeben). */
+  function anfordern() {
+    if (ANGEFORDERT) return;
+    ANGEFORDERT = true;
+    G.navigator.locks.request(SPERRE_SPRACHE, function () {
+      var gehalten = new Promise(function (r) { loesen = r; });
+      HAELT = true;
+      try {
+        weiter();
+      } catch (e) {
+        melde("live-plan: Sprechen unter der Sperre", e); // die Sperre bleibt; das naechste Ende oder Ereignis macht weiter
+      }
+      return gehalten;
+    }).catch(function (e) {
+      // Nur ein Verweigern des Browsers ist der Rueckfall (#42, F5); jeder andere Fehler laesst die Sperre gelten, die naechste
+      // Ansage fordert sie neu an. Sonst spraeche dieser Tab ohne Sperre neben dem Halter.
+      if (!e || (e.name !== "SecurityError" && e.name !== "NotSupportedError")) {
+        HAELT = ANGEFORDERT = false;
+        loesen = null;
+        melde("live-plan: Lock " + SPERRE_SPRACHE, e);
+        return;
+      }
+      // Verweigert (etwa in einem Dokument mit opakem Ursprung, vgl. #20): Rueckfall, die Ansagen dieses Tabs spricht er selbst.
+      sperreKaputt = true;
+      HAELT = ANGEFORDERT = false;
+      var meine = NEUE.filter(function (n) { return n.meins; });
+      NEUE = [];
+      meine.forEach(function (n) { beanspruche(n.ansage); });
+      weiter();
+    });
+  }
+  function freigeben() {
+    if (!HAELT) return;
+    HAELT = ANGEFORDERT = false;
+    var l = loesen;
+    loesen = null;
+    if (l) l();
+  }
+  /** Ein Fehler, der nichts anhalten soll, auf der Konsole, wenn es eine gibt. */
+  function melde(was, e) {
+    if (G.console && G.console.error) G.console.error(was, e);
+  }
+  /**
+   * Das Gesprochen-Merkmal: die Zeit der neuesten Ansage, die zu Ende gesprochen (oder verworfen) ist, oder null. Mit Locks
+   * steht es erst nach dem Ende, damit ein Tab, der die Sperre nach dem Schliessen des Halters bekommt, dessen ungesprochenen
+   * Rest nachliest (#42, F2); ohne Locks steht es wie bisher schon beim Einreihen.
+   */
+  function gesprochenBisLesen() {
+    var g = lies(SCHLUESSEL_GESPROCHEN), bis = g === null ? NaN : Number(g);
+    return Number.isFinite(bis) ? bis : null;
+  }
+  function merkeGesprochen(zeit) {
+    var bis = gesprochenBisLesen();
+    if (bis === null || zeit > bis) merke(SCHLUESSEL_GESPROCHEN, String(zeit));
+  }
+  /** Reiht eine neue Ansage ein, wenn das Gesprochen-Merkmal sie noch nicht fuehrt: genau einmal. */
+  function beanspruche(a) {
+    var bis = gesprochenBisLesen();
+    if (bis !== null && a.zeit <= bis) return;
+    if (!mitSperre()) merke(SCHLUESSEL_GESPROCHEN, String(a.zeit));
+    einreihen(a, false, true);
+  }
+  /** Unter der Sperre: jede gemerkte neue Ansage, die das Gesprochen-Merkmal noch nicht fuehrt, die aelteste zuerst. */
+  function nimmNeue() {
+    var neue = NEUE;
+    NEUE = [];
+    if (!EINST.vorlesen) return;
+    neue.sort(function (x, y) { return x.ansage.zeit - y.ansage.zeit; }).forEach(function (n) { beanspruche(n.ansage); });
   }
   /** Laedt die Ansagen und verteilt sie; der Leiter-Tab gibt sie ueber den Kanal an die anderen Tabs weiter. */
   function ladeAnsagen() {
@@ -3292,17 +3471,28 @@
     if (ersteDa) zeichneEinstellungen();
     neu.forEach(function (a) { sprichNeue(a); });
   }
-  /** Spricht eine neue Ansage, wenn dieser Tab dran ist (sollSprechen), und merkt sich danach, dass sie gesprochen ist. */
+  /**
+   * Eine neue Ansage. Ohne Locks (Rueckfall) spricht sie der Tab, der dran ist (sollSprechen), und schreibt das
+   * Gesprochen-Merkmal sofort. Mit Locks merkt sich jeder freigeschaltete Tab jede neue Ansage bei Vorlesen an, auch wenn
+   * er nicht dran ist (#42, F1: der Halter kann ein anderer sein als der Sprecher), und wer dran ist, fordert die Sperre an.
+   * Ein Tab ohne Klick merkt sich nichts: eine Ansage, die damals niemand sprechen konnte, kommt nicht spaeter nach. Der Halter nimmt unter der Sperre alle
+   * gemerkten, die das Merkmal noch nicht fuehrt (nimmNeue): wechselt der Sprecher, waehrend ein anderer Tab noch spricht,
+   * bleibt so keine liegen, und keine kommt doppelt (#42).
+   */
   function sprichNeue(a) {
-    var gesprochen = lies(SCHLUESSEL_GESPROCHEN);
-    var bis = gesprochen === null ? NaN : Number(gesprochen);
-    var darf = sollSprechen({
-      vorlesen: EINST.vorlesen, frei: ansageFrei, sprecher: lies(SCHLUESSEL_SPRECHER), tabId: TAB, istLeiter: istLeiter,
-      gesprochenBis: Number.isFinite(bis) ? bis : null, zeit: a.zeit,
-    });
-    if (!darf) return;
-    merke(SCHLUESSEL_GESPROCHEN, String(a.zeit));
-    sprich(a, false);
+    if (!SPRACHE) return;
+    var sprecher = lies(SCHLUESSEL_SPRECHER), bis = gesprochenBisLesen();
+    var darf = sollSprechen({ vorlesen: EINST.vorlesen, frei: ansageFrei, sprecher: sprecher, tabId: TAB, istLeiter: istLeiter, gesprochenBis: bis, zeit: a.zeit });
+    if (!mitSperre()) {
+      if (!darf) return;
+      beanspruche(a);
+      weiter();
+      return;
+    }
+    NEUE = NEUE.filter(function (n) { return bis === null || n.ansage.zeit > bis; });
+    if (!darf && !(EINST.vorlesen && ansageFrei && (bis === null || a.zeit > bis))) return;
+    NEUE.push({ ansage: a, meins: darf });
+    weiter();
   }
   function ladeEinstellungen() {
     return fetch("/api/einstellungen", { cache: "no-store" }).then(function (r) {
@@ -3344,6 +3534,22 @@
     if (!m || typeof m !== "object") return;
     if (m.art === "ansagen" && Array.isArray(m.ansagen)) verarbeiteAnsagen(filtern(m.ansagen));
     else if (m.art === "einstellungen") uebernehmeEinstellungen(m.einst);
+    // Stopp und Pause aus einem anderen Tab (#42); Pause und Fortsetzen gelten nur der genannten Ansage.
+    else if (m.art === "stopp") stoppenHier();
+    // Der Halter schliesst (pagehide): wer freigeschaltet ist, fordert die Sperre an und liest den ungesprochenen Rest (#42, F2).
+    else if (m.art === "uebernehmen") {
+      if (!ansageFrei || !EINST.vorlesen) return;
+      NEUE.forEach(function (n) { n.meins = true; });
+      weiter();
+    }
+    else if (m.art === "pause" && LAUFT && LAUFT.zeit === m.zeit) pausieren();
+    else if (m.art === "fortsetzen" && LAUFT && LAUFT.zeit === m.zeit) fortsetzen();
+    else if (m.art === "zustand" && typeof m.tab === "string" && m.tab !== TAB) {
+      var l = m.laeuft && typeof m.laeuft.zeit === "number" ? { zeit: m.laeuft.zeit, pausiert: m.laeuft.pausiert === true } : null;
+      if (l || m.wartet) FREMD[m.tab] = { laeuft: l };
+      else delete FREMD[m.tab];
+      zeichneAnsagen();
+    }
   }
   /**
    * Markiert Ansagen als gelesen (#28): sofort hier, dann POST /api/ansagen/gelesen. Die anderen Ansichten erfahren es
@@ -3406,11 +3612,12 @@
     else if (t.hasAttribute("data-ansage-text")) textUmschalten(t);
     else if (t.hasAttribute("data-ansage-gelesen")) gelesenMarkieren(String(t.getAttribute("data-ansage-gelesen") || "").split(/\s+/).filter(Boolean));
     else {
-      // Die laufende Ansage haelt an oder setzt fort; jede andere Zeile spielt sofort.
-      var zeit = Number(t.getAttribute("data-ansage"));
+      // Die laufende Ansage haelt an oder setzt fort, auch die eines anderen Tabs (ueber den Kanal); jede andere Zeile spielt sofort.
+      var zeit = Number(t.getAttribute("data-ansage")), fremd = LAUFT ? null : anzeigeLauf();
       if (LAUFT && LAUFT.zeit === zeit) {
         if (LAUFT.pausiert) fortsetzen(); else pausieren();
-      } else sprich(ANSAGEN.find(function (a) { return a.zeit === zeit; }), true);
+      } else if (fremd && fremd.zeit === zeit && KANAL) KANAL.postMessage({ art: fremd.pausiert ? "fortsetzen" : "pause", zeit: zeit });
+      else sprich(ANSAGEN.find(function (a) { return a.zeit === zeit; }), true);
     }
     return true;
   }
@@ -3451,8 +3658,17 @@
     doc.addEventListener("click", ansageFreigeben, true);
     doc.addEventListener("keydown", ansageFreigeben, true);
     doc.addEventListener("visibilitychange", function () { if (doc.visibilityState === "visible") sprecherSetzen(); });
-    // Schliesst der Sprecher, faellt das Sprechen an den Leiter-Tab (ohne Schluessel).
-    G.addEventListener("pagehide", function () { if (lies(SCHLUESSEL_SPRECHER) === TAB) vergiss(SCHLUESSEL_SPRECHER); });
+    // Schliesst der Sprecher, faellt das Sprechen an den Leiter-Tab (ohne Schluessel); die anderen Tabs vergessen seinen Zustand.
+    G.addEventListener("pagehide", function () {
+      if (lies(SCHLUESSEL_SPRECHER) === TAB) vergiss(SCHLUESSEL_SPRECHER);
+      if (KANAL) KANAL.postMessage({ art: "zustand", tab: TAB, laeuft: null, wartet: false });
+      if (KANAL && (HAELT || SCHLANGE.length)) KANAL.postMessage({ art: "uebernehmen" });
+    });
+    // Rueckfall ohne Locks (#42): nennt der Sprecher-Schluessel einen anderen Tab, bricht dieser Tab ab, was er spricht.
+    G.addEventListener("storage", function (e) {
+      if (!e || e.key !== SCHLUESSEL_SPRECHER || mitSperre() || !e.newValue || e.newValue === TAB) return;
+      if (LAUFT || SCHLANGE.length) stoppenHier();
+    });
     doc.addEventListener("keydown", function (e) {
       if (e.key !== "Escape" || !einstAuf) return;
       einstAuf = false;
@@ -3482,7 +3698,7 @@
       // S5: eine Sitzung aus dem Register traegt die Marke live (beendet grau), der volle Repo-Pfad steht im title.
       var marke = e.live ? ' <span class="lv-marke' + (e.beendet ? " aus" : "") + '">' + (e.beendet ? "beendet" : "live") + "</span>" : "";
       return '<tr><td title="' + esc(e.pfad || "") + '"><b>' + esc(e.repo) + '</b></td><td class="mono"><a href="' + esc(href) + '">' + esc(e.slug) + "</a>" + marke + "</td><td>" + esc(e.titel) +
-        "</td>" + fragenZelle(e.offeneFragen, href) + ansageZelle(letzte[e.repo + "\u0000" + e.slug], LAUFT, zps) + '<td class="mono klein">' + zeitAngabe(e.geaendert) + "</td></tr>";
+        "</td>" + fragenZelle(e.offeneFragen, href) + ansageZelle(letzte[e.repo + "\u0000" + e.slug], anzeigeLauf(), zps) + '<td class="mono klein">' + zeitAngabe(e.geaendert) + "</td></tr>";
     }).join("");
     doc.title = "Sitzungen · live-plan";
     // Das Menue bleibt beim Neuzeichnen der Liste derselbe Knoten (offene Stimmenwahl, Fokus).
