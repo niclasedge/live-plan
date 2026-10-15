@@ -180,9 +180,13 @@ ist das der Übersicht. Eine neue Ansage zeichnet nur die Leiste neu, nicht den 
 ohne Leiste und ohne Ansagen.
 Mehrere Tabs teilen sich die Verbindung: ein Tab hält `GET /api/ereignisse`, die anderen bekommen Änderungen über einen
 BroadcastChannel. Vorgelesen wird nur im Sprecher-Tab, also dem, den der Nutzer zuletzt bedient hat (ohne Sprecher im
-Leiter-Tab), und jede Ansage genau einmal. Ohne Web Locks (etwa über eine LAN-IP, Tailscale, `.local` oder ohne sicheren
+Leiter-Tab), und jede Ansage genau einmal. Ansagen kommen strikt nacheinander, nie zwei Stimmen zugleich (#42): Sprechen
+darf nur der Tab mit dem Web Lock `live-plan-sprache`, und er hält ihn, bis seine Warteschlange leer ist. Unter dem Lock
+liest und schreibt er das Gesprochen-Merkmal (`live-plan.gesprochen`) und nimmt jede neue Ansage, die es noch nicht führt;
+wechselt der Sprecher, während ein anderer Tab noch spricht, liest der die neuen Ansagen in ihrer Reihenfolge mit weiter,
+und keine geht verloren. Ohne Web Locks (etwa über eine LAN-IP, Tailscale, `.local` oder ohne sicheren
 Kontext) lauscht jeder Tab selbst; gesprochen wird dann nur im zuletzt geklickten Tab, und schließt der, schweigt es bis
-zum nächsten Klick oder Tabwechsel. Dort hält jeder Sitzungstab zwei Dauerverbindungen; ab etwa drei Sitzungstabs stockt
+zum nächsten Klick oder Tabwechsel. Wird dort ein anderer Tab Sprecher, bricht der bisherige ab, was er spricht. Dort hält jeder Sitzungstab zwei Dauerverbindungen; ab etwa drei Sitzungstabs stockt
 der Browser (HTTP/1.1, 6 Verbindungen je Host). Über `localhost` (`live-plan open`) zeigte sich das in unseren Läufen
 nicht. Siehe #20.
 
@@ -193,14 +197,16 @@ dieses Browsers; die Vorgabe sind 14. Jede regulär zu Ende gesprochene Ansage m
 (0,7 alt, 0,3 neu; Messwerte außerhalb von 4 bis 40 zählen nicht). Der Wert liegt im `localStorage` dieses Browsers
 (`live-plan.zeichen-je-sekunde`), nicht in einer Datei. ▶ spielt eine Zeile sofort ab; läuft sie, zeigt sie ⏸, und ein
 Klick hält an; pausiert zeigt sie ▶, und ein Klick setzt fort. ⏹ Stopp erscheint neben ⚙, solange etwas spricht,
-pausiert ist oder in der Warteschlange wartet; er bricht die Ansage ab und leert die Warteschlange. Die Steuerung gilt
-nur im Tab, der gerade spricht: nur dort stehen ⏸ und ⏹, die anderen Tabs zeigen nur ▶; ein Klick dort startet in jenem
-Tab eine eigene Ausgabe. In der Leiste führt der Repo-Name zur Sitzung; die eigene ist mit `aria-current` markiert.
+pausiert ist oder in der Warteschlange wartet; er bricht die Ansage ab und leert die Warteschlange. Mit Web Locks gilt die
+Steuerung in jedem Tab: ⏸, ▶ und ⏹ gehen über den BroadcastChannel an den Tab, der spricht, und ▶ einer anderen Zeile
+stoppt ihn, bevor die Zeile spielt. Ohne Web Locks wirkt sie nur im eigenen Tab. In der Leiste führt der Repo-Name zur Sitzung; die eigene ist mit `aria-current` markiert.
 Eine lange Ansage spricht der Browser in Teilen von etwa 10 s beim gemessenen Tempo, mindestens 80 und höchstens
 250 Zeichen (bei der Vorgabe 14 Zeichen je Sekunde 140; ganze Sätze, ein längerer Satz endet am Komma oder an einer
-Wortgrenze), denn Chrome bricht mit Netzstimmen eine einzelne Äußerung nach etwa 15 s ab. Alle
-Teile stehen gleich in der Warteschlange; ⏸, ▶ und ⏹ gelten für die ganze Ansage, und als beendet gilt sie erst mit
-dem letzten Teil. Abgebrochene Ansagen (⏹ oder ▶ einer anderen Zeile) gehen nicht in das gemessene Tempo ein.
+Wortgrenze), denn Chrome bricht mit Netzstimmen eine einzelne Äußerung nach etwa 15 s ab. In der
+Sprachausgabe des Browsers steht immer nur ein Teil; der nächste Teil und die nächste Ansage folgen erst auf sein Ende. Meldet
+der Browser das Ende nicht, gibt ein Wachhund den Teil nach seinen Zeichen beim langsamsten gültigen Tempo (4 je Sekunde,
+mindestens 10 s) auf und macht weiter; eine Pause hält ihn an. ⏸, ▶ und ⏹ gelten für die ganze Ansage, und als beendet
+gilt sie erst mit dem letzten Teil. Abgebrochene Ansagen (⏹ oder ▶ einer anderen Zeile) gehen nicht in das gemessene Tempo ein.
 
 ![Leiste mit laufender Ansage (⏸) und Stopp neben ⚙](docs/ansagen-steuerung.png)
 
