@@ -407,10 +407,14 @@
     var el = wurzel.querySelector('[data-testid="sitzung-host"]');
     var html = hostTeil(hostAuf);
     if (!API) {
-      // Liste aller Sitzungen: der Block sitzt unter dem Kopf, ohne dass die Liste neu geladen wird.
+      // Liste aller Sitzungen: der Block sitzt hinter der Inbox, wie in zeichneListe (Kopf, Inbox, Rechner, Tabelle),
+      // ohne dass die Liste neu geladen wird; gleich in welcher Reihenfolge Liste und Rechner ankommen.
       if (el && html) el.outerHTML = html;
       else if (el) el.remove();
-      else if (html) { var kopf = wurzel.querySelector(".lp-kopf"); if (kopf) kopf.insertAdjacentHTML("afterend", html); }
+      else if (html) {
+        var vor = wurzel.querySelector('[data-testid="ansagen-inbox"]') || wurzel.querySelector(".lp-kopf");
+        if (vor) vor.insertAdjacentHTML("afterend", html);
+      }
       return;
     }
     if (el && html) { if (!modal && !diffAuf && !fmAuf) el.outerHTML = html; }
@@ -2437,13 +2441,13 @@
    */
   function ansageInbox(z) {
     var offen = (Array.isArray(z.ansagen) ? z.ansagen : []).filter(function (a) { return a && !a.gelesen; });
-    var gruppen = [], je = {};
+    var gruppen = [], je = Object.create(null); // ohne Prototyp: ein Repo namens constructor ist ein gewoehnlicher Schluessel
     offen.forEach(function (a) {
       var k = String(a.repo || "");
       if (!je[k]) gruppen.push(je[k] = { repo: k, ansagen: [] });
       je[k].ansagen.push(a);
     });
-    var kopf = '<div class="an-leiste-kopf"><h2>Inbox</h2><span class="an-zahl">' + offen.length + " ungelesen</span>" +
+    var kopf = '<div class="an-leiste-kopf"><h2 tabindex="-1">Inbox</h2><span class="an-zahl">' + offen.length + " ungelesen</span>" +
       (offen.length ? alleKnopf(offen, "Alle Ansagen der Inbox als gelesen markieren") : "") +
       (z.fehler ? '<span class="an-fehler">' + esc(z.fehler) + "</span>" : "") + "</div>";
     var inhalt = gruppen.length ? gruppen.map(function (g) {
@@ -2460,7 +2464,7 @@
    * einstellungenZustand().
    */
   function ansageLeiste(z) {
-    return '<section class="an-leiste" data-testid="ansagen-leiste"><div class="an-leiste-kopf"><h2>Ansagen</h2>' + einstellungenMenue(z.menue) + "</div>" +
+    return '<section class="an-leiste" data-testid="ansagen-leiste"><div class="an-leiste-kopf"><h2 tabindex="-1">Ansagen</h2>' + einstellungenMenue(z.menue) + "</div>" +
       '<div class="an-leiste-liste" data-ansage-liste>' + ansageZeilen(z) + "</div></section>";
   }
 
@@ -3294,14 +3298,25 @@
    * Markiert Ansagen als gelesen (#28): sofort hier, dann POST /api/ansagen/gelesen. Die anderen Ansichten erfahren es
    * ueber den Strom (gelesen.json aendert sich). Scheitert das Speichern, gilt wieder der Stand des Servers, mit Meldung.
    * Vorgelesen wird dabei nichts: eine gelesene Ansage ist keine neue (verarbeiteAnsagen vergleicht die Zeit).
+   * Der Fokus faellt nicht auf body: er geht auf den Knopf gelesen, der an die Stelle des geklickten rueckt (nach dem
+   * letzten der davor), ohne Knopf auf den Kopf der Inbox bzw. der Leiste; nach 'alle als gelesen' auf den ersten.
    */
   function gelesenMarkieren(kennungen) {
     if (!kennungen.length) return;
-    var menge = {};
+    var menge = Object.create(null); // ohne Prototyp: die Kennung constructor gilt nicht schon als markiert
     kennungen.forEach(function (k) { menge[k] = true; });
+    var stelle = 0;
+    if (kennungen.length === 1) {
+      Array.prototype.forEach.call(wurzel.querySelectorAll(".an-gelesen-knopf"), function (k, i) {
+        if (k.getAttribute("data-ansage-gelesen") === kennungen[0]) stelle = i;
+      });
+    }
     ANSAGEN = ANSAGEN.map(function (a) { return menge[a.kennung] ? Object.assign({}, a, { gelesen: true }) : a; });
     gelesenFehler = "";
     zeichneAnsagen();
+    var rest = wurzel.querySelectorAll(".an-gelesen-knopf");
+    var ziel = rest.length ? rest[Math.min(stelle, rest.length - 1)] : wurzel.querySelector(".an-inbox h2") || wurzel.querySelector('[data-testid="ansagen-leiste"] h2');
+    if (ziel) ziel.focus();
     return fetch("/api/ansagen/gelesen", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ kennungen: kennungen }) }).then(function (r) {
       return r.json().catch(function () { return {}; }).then(function (b) {
         if (!r.ok) throw new Error((b && b.fehler) || "HTTP " + r.status);

@@ -137,13 +137,17 @@ Antwort `{ "gelesen": n }` mit der Zahl der bekannten; 404, wenn keine bekannt i
 groß, 415 ohne JSON, 403 mit fremdem `Origin`. Geschrieben wird unter der Sperre `gelesen.json.sperre` (dieselben
 Regeln wie bei `ansagen.jsonl`), atomar über eine neue Datei und `rename`, nie durch einen Symlink. Die Datei hält nur
 Kennungen von Ansagen, die `GET /api/ansagen` noch liefert: jedes Markieren und jedes Kürzen von `ansagen.jsonl`
-wirft die übrigen hinaus. Der Server wartet höchstens 2 s auf die Sperre, sonst antwortet er mit 500.
+wirft die übrigen hinaus. Der Server wartet höchstens 2 s auf die Sperre, sonst antwortet er mit 500; das Kürzen
+wartet höchstens 1,5 s und lässt das Aufräumen sonst bis zum nächsten Mal aus, damit `live-plan sage` nicht hängt.
 
 Die Übersicht beginnt mit der **Inbox**: alle ungelesenen Ansagen, gruppiert je Repo (die Gruppe mit der neuesten
 zuerst). Je Zeile stehen ▶, Uhrzeit, Wortzahl und Dauer, etwa `21:14 (183 Wörter) (≈ 1:20 min)` (Singular „1 Wort“),
 der Repo-Name als Verweis auf die Sitzung, der aufklappbare Text und der Knopf **gelesen**; danach verschwindet die
 Zeile. **alle als gelesen** steht im Kopf der Inbox und je Repo-Gruppe. Ein Markieren erreicht alle offenen Ansichten
 über den Ereignisstrom; scheitert das Speichern, zeigt die Seite wieder den Stand des Servers und eine Meldung.
+Nach **gelesen** steht der Fokus auf dem Knopf, der an die Stelle des geklickten rückt (nach dem letzten auf dem
+davor), ohne Knopf auf der Überschrift der Inbox bzw. der Leiste. Kopf, Inbox, Rechner und Tabelle stehen immer in
+dieser Reihenfolge, gleich ob die Liste oder der Rechner zuerst ankommt.
 
 ![Übersicht: Inbox mit sechs ungelesenen Ansagen in drei Repo-Gruppen, Wortzahl neben der Uhrzeit](docs/ansagen-inbox.png)
 

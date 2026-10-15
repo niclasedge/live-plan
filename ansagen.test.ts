@@ -392,6 +392,26 @@ test("Gelesen: ohne Sperre kein Schreiben, sondern ein Fehler; ein Symlink wird 
   }
 });
 
+test("Gelesen: eine besetzte Sperre der Gelesen-Datei haelt das Kuerzen hoechstens kurz auf, auch mit der Standard-Wartezeit (Review K1)", () => {
+  const tmp = mkdtempSync(path.join(os.tmpdir(), "live-plan-gelesen-"));
+  try {
+    const ansagen = ansagenDatei(tmp), gelesen = gelesenDatei(tmp);
+    for (let i = 1; i <= 70; i++) schreibeAnsage(ansagen, A(i), 20);
+    // Eine frische, fremde Sperre: ohne kurze Grenze wartete das Kuerzen, bis sie nach 10 s als verwaist gilt,
+    // und hielte so lange die Sperre von ansagen.jsonl.
+    writeFileSync(`${gelesen}.sperre`, "");
+    const start = Date.now();
+    schreibeAnsage(ansagen, A(71), 20);
+    const dauer = Date.now() - start;
+    assert.ok(dauer < 3000, `Kuerzen dauerte ${dauer} ms`);
+    assert.ok(dauer >= 900, `wartet kurz auf die Sperre (${dauer} ms)`);
+    assert.equal(leseAnsagen(ansagen).at(-1)!.zeit, 71);
+    assert.ok(!existsSync(`${ansagen}.sperre`), "die Sperre von ansagen.jsonl ist wieder frei");
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
 test("Einstellungen: Vorgabe bei Fehlendem und Kaputtem, Aenderung nur mit passenden Feldern, YAML", () => {
   assert.deepEqual(EINSTELLUNGEN_VORGABE, { vorlesen: false, stimme: null });
   for (const roh of [null, undefined, "kaputt", [1], {}, { vorlesen: "ja", stimme: 3 }]) assert.deepEqual(einstellungenAus(roh), EINSTELLUNGEN_VORGABE, JSON.stringify(roh));

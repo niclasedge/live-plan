@@ -294,6 +294,8 @@ export function leseAnsagen(datei: string, n = ANSAGEN_HOECHSTENS): Ansage[] {
  */
 const SPERRE_VERWAIST_MS = 10_000;
 const SPERRE_WARTEN_MS = 12_000;
+/** Wie lange das Kuerzen auf die Sperre der Gelesen-Marken wartet, bevor es das Aufraeumen auslaesst. */
+const AUFRAEUMEN_WARTEN_MS = 1_500;
 
 const schlafe = (ms: number) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 
@@ -376,7 +378,9 @@ export function schreibeAnsage(datei: string, a: NeueAnsage, n = ANSAGEN_HOECHST
       return; // ungekuerzt; das naechste Anhaengen versucht es wieder
     }
     try {
-      raeumeGelesen(gelesenDatei(path.dirname(datei)), datei, wartenMs);
+      // Kurz: das Aufraeumen haelt die Sperre von ansagen.jsonl; eine besetzte Sperre der Marken (auch eine noch nicht
+      // verwaiste) darf `live-plan sage` nicht bis zu SPERRE_WARTEN_MS aufhalten. Misslingt es, raeumt das naechste Mal.
+      raeumeGelesen(gelesenDatei(path.dirname(datei)), datei, Math.min(wartenMs, AUFRAEUMEN_WARTEN_MS));
     } catch {
       /* die Marken bleiben bis zum naechsten Markieren oder Kuerzen; die Ansage ist gespeichert */
     }
