@@ -88,24 +88,32 @@ Tests: `node --test server.test.ts` (startet `bun server.ts`).
 
 ## Ansagen
 
-Die Übersicht (`http://localhost:4410/`) liest am Ende eines Agenten-Zugs eine kurze Zusammenfassung vor,
+Die Übersicht (`http://localhost:4410/`) liest am Ende eines Agenten-Zugs dessen Antwort vor,
 über alle Sitzungen hinweg, mit der Sprachausgabe des Browsers (Web Speech API, `speechSynthesis`), vorneweg
 das Repo: „live-plan: Der Umbau ist fertig …“.
 
 - **Automatisch:** Die Mod gibt am Ende jedes beantworteten Zugs der Hauptsitzung (nicht der Subagenten) die
   letzte Antwort an `live-plan sage --auto`. Das Skript entfernt Codeblöcke, Tabellen, Überschriften, Bilder,
-  URLs, HTML, Emoji und Markdown-Zeichen (ein Link wird zu seinem Text) und nimmt die ersten drei Sätze, höchstens
-  300 Zeichen. Eine Antwort unter vier Wörtern („Captain, shipshape.“) wird nicht angesagt.
+  URLs, HTML, Emoji und Markdown-Zeichen (ein Link wird zu seinem Text) und nimmt den ganzen übrigen Text, höchstens
+  8000 Zeichen (bei 14 Zeichen je Sekunde gut neun Minuten); ein längerer endet am letzten ganzen Satz davor, und
+  besteht er fast nur aus einem riesigen Satz, an einer Wortgrenze mit „…“. Eine
+  Antwort unter vier Wörtern („Captain, shipshape.“) wird nicht angesagt.
 - **Selbst formuliert:** `live-plan sage "<2-3 Sätze>"` sagt einen eigenen Text an (gesäubert, bis sechs Sätze und
   600 Zeichen; Sitzung aus `CLAUDE_SESSION_ID`, Repo aus der Git-Wurzel). Er ersetzt die automatische Ansage
   desselben Zugs: `--auto` übergeht eine Sitzung, die seit dem Beginn des Zugs selbst angesagt hat.
 
 Die Ansagen stehen als eine JSON-Zeile je Ansage (`zeit`, `id`, `repo`, `text`, `quelle` `auto` oder `sage`) in
-`LIVE_PLAN_CACHE/ansagen.jsonl`. Angehängt wird mit `O_APPEND`; bei mehr als 250 Zeilen schreibt der nächste Schreiber die
-letzten 200 neu. Anhängen und Kürzen laufen unter der Sperre `ansagen.jsonl.sperre` (O_EXCL, höchstens 2 s Warten,
-eine Sperre älter als 10 s gilt als verwaist), damit kein Kürzen eine gleichzeitig angehängte Ansage verliert; ohne
-Sperre wird trotzdem angehängt, nur nicht gekürzt. Eine kaputte Zeile oder eine fehlende Datei kostet nur diese
-Ansagen. Der Server liest die Datei nur: `GET /api/ansagen` liefert die letzten 200, neueste zuerst,
+`LIVE_PLAN_CACHE/ansagen.jsonl`. Angehängt wird mit `O_APPEND`; bei mehr als 250 Zeilen oder mehr als 1,25 MiB
+(1 MiB plus 256 KiB Abstand) schreibt der nächste Schreiber die letzten 200 neu, höchstens aber 768 KiB davon: bei
+langen Ansagen fallen vorne weitere weg. Der Abstand verhindert, dass ab 1 MiB jeder Anhang die ganze Datei neu
+schreibt. Anhängen und Kürzen laufen unter der Sperre `ansagen.jsonl.sperre` (O_EXCL, eine Sperre älter als 10 s gilt
+als verwaist), denn ein Anhang neben einem Kürzen ginge mit dem Ersetzen der Datei verloren. Ein Schreiber wartet bis
+zu 12 s auf die Sperre, nimmt also eine verwaiste sicher noch; bekommt er sie nicht, hängt er nichts an, und
+`live-plan sage` meldet `Ansage nicht gespeichert: …` mit Exit-Code 1. Scheitert so die automatische Ansage am
+Ende eines Zugs, zeigt die Mod diese Meldung als Toast in der Sitzung (ohne Meldung den Exit-Code). Eine kaputte Zeile oder eine fehlende Datei
+kostet nur diese Ansagen; ein Text über 8000 Zeichen wird auch beim Lesen gekappt wie beim Schreiben, nicht verworfen.
+Der Server liest
+die Datei nur: `GET /api/ansagen` liefert die letzten 200, neueste zuerst,
 `GET /api/ereignisse` meldet als Ereignisstrom jede Änderung an Ansagen und Einstellungen. Ansagen schreiben gibt es
 über HTTP nicht.
 
@@ -122,7 +130,9 @@ dahin steht bei Vorlesen an ein Hinweis neben ⚙ und neue Ansagen werden nur ge
 im LAN erreichbar ist, liest dort jeder die Ansagen mit und kann Vorlesen und Stimme umstellen.
 Auf jeder Sitzungsseite gilt dasselbe: Vorlesen und Stimme wirken dort genauso, und neue Ansagen aller Sitzungen werden
 vorgelesen. Oben unter dem Kopf steht die Leiste **Ansagen** mit den letzten fünf Ansagen aus allen Sitzungen, neueste
-zuerst. ▶ liest eine davon sofort vor; die Zeilen der geöffneten Sitzung sind hervorgehoben. Das Menü ⚙ in der Leiste
+zuerst. ▶ liest eine davon sofort vor; die Zeilen der geöffneten Sitzung sind hervorgehoben. Der Text einer Zeile steht
+ganz darin, eingeklappt auf zwei Zeilen; ein Klick oder Enter klappt ihn auf und wieder zu, und ein Neuzeichnen der
+Leiste behält das. Das Menü ⚙ in der Leiste
 ist das der Übersicht. Eine neue Ansage zeichnet nur die Leiste neu, nicht den Plan. Das Handout (`?handout=1`) bleibt
 ohne Leiste und ohne Ansagen.
 Mehrere Tabs teilen sich die Verbindung: ein Tab hält `GET /api/ereignisse`, die anderen bekommen Änderungen über einen
@@ -134,7 +144,8 @@ der Browser (HTTP/1.1, 6 Verbindungen je Host). Über `localhost` (`live-plan op
 nicht. Siehe #20.
 
 Die Steuerung der Ansagen (Übersicht und Leiste der Sitzungsseite): hinter der Uhrzeit steht die geschätzte Dauer in
-Klammern, etwa `(≈ 5 s)`. Sie ergibt sich aus der Länge des gesprochenen Textes geteilt durch die Zeichen je Sekunde
+Klammern, etwa `(≈ 5 s)`. Sie ergibt sich aus der Länge des gesprochenen Textes (Repo und ganzer Text, nicht die
+eingeklappte Anzeige) geteilt durch die Zeichen je Sekunde
 dieses Browsers; die Vorgabe sind 14. Jede regulär zu Ende gesprochene Ansage mischt ihr gemessenes Tempo gleitend hinein
 (0,7 alt, 0,3 neu; Messwerte außerhalb von 4 bis 40 zählen nicht). Der Wert liegt im `localStorage` dieses Browsers
 (`live-plan.zeichen-je-sekunde`), nicht in einer Datei. ▶ spielt eine Zeile sofort ab; läuft sie, zeigt sie ⏸, und ein
@@ -142,8 +153,15 @@ Klick hält an; pausiert zeigt sie ▶, und ein Klick setzt fort. ⏹ Stopp ersc
 pausiert ist oder in der Warteschlange wartet; er bricht die Ansage ab und leert die Warteschlange. Die Steuerung gilt
 nur im Tab, der gerade spricht: nur dort stehen ⏸ und ⏹, die anderen Tabs zeigen nur ▶; ein Klick dort startet in jenem
 Tab eine eigene Ausgabe. In der Leiste führt der Repo-Name zur Sitzung; die eigene ist mit `aria-current` markiert.
+Eine lange Ansage spricht der Browser in Teilen von etwa 10 s beim gemessenen Tempo, mindestens 80 und höchstens
+250 Zeichen (bei der Vorgabe 14 Zeichen je Sekunde 140; ganze Sätze, ein längerer Satz endet am Komma oder an einer
+Wortgrenze), denn Chrome bricht mit Netzstimmen eine einzelne Äußerung nach etwa 15 s ab. Alle
+Teile stehen gleich in der Warteschlange; ⏸, ▶ und ⏹ gelten für die ganze Ansage, und als beendet gilt sie erst mit
+dem letzten Teil. Abgebrochene Ansagen (⏹ oder ▶ einer anderen Zeile) gehen nicht in das gemessene Tempo ein.
 
 ![Leiste mit laufender Ansage (⏸) und Stopp neben ⚙](docs/ansagen-steuerung.png)
+
+![Leiste mit aufgeklapptem ganzem Text einer langen Ansage (≈ 55 s), die übrigen eingeklappt](docs/ansagen-volltext.png)
 
 Tests: `node --test ansagen.test.ts liste.test.ts server.test.ts` (brauchen bun), Mod: `claude plugin test mod`.
 

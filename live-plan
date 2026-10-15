@@ -21,7 +21,8 @@
 //                              CLAUDE_SESSION_ID
 //   live-plan sage "TEXT"      Ansage fuer die Uebersicht (vorgelesen im Browser), nach CACHE/ansagen.jsonl; Sitzung
 //                              aus CLAUDE_SESSION_ID. --auto --id ID --seit MS [--repo REPO]: die Antwort von stdin
-//                              gekuerzt (die Mod am Ende eines Zugs), nichts, wenn die Sitzung seit MS selbst ansagte
+//                              als ganzer Sprechtext, bis 8000 Zeichen (die Mod am Ende eines Zugs), nichts, wenn die
+//                              Sitzung seit MS selbst ansagte
 //   live-plan stop             Server auf dem Port beenden
 //
 // REPO ist der Ordnername der Git-Wurzel des aktuellen Ordners. Port LIVE_PLAN_PORT (4410),
@@ -418,8 +419,8 @@ const SAGE_WERTE = ["--id", "--repo", "--seit"];
 /**
  * Eine Ansage fuer die Uebersicht (ansagen.ts). Ohne --auto der Text der Argumente, die Sitzung aus --id oder
  * CLAUDE_SESSION_ID (sonst keine), REPO aus --repo oder der Git-Wurzel, sonst der Ordnername. Mit --auto (die Mod
- * am Ende eines Zugs) die Antwort von stdin, gekuerzt; still nichts, wenn sie trivial ist oder die Sitzung seit
- * --seit (ms) schon selbst angesagt hat.
+ * am Ende eines Zugs) die Antwort von stdin als ganzer Sprechtext (ansageText); still nichts, wenn sie trivial ist
+ * oder die Sitzung seit --seit (ms) schon selbst angesagt hat.
  */
 async function sage(rest: string[]): Promise<void> {
   const wert = (name: string) => {
@@ -431,18 +432,26 @@ async function sage(rest: string[]): Promise<void> {
   if (id !== null && !NAME.test(id)) abbruch(`ungueltige Sitzung ${JSON.stringify(id)}, erlaubt a-z A-Z 0-9 . _ -`);
   const repo = wert("--repo")?.trim() || repoName();
   const datei = ansagenDatei(CACHE);
+  // Ohne Sperre speichert schreibeAnsage nichts; die Meldung geht nach stderr, der Exit-Code ist 1.
+  const speichere = (a: Parameters<typeof schreibeAnsage>[1]) => {
+    try {
+      schreibeAnsage(datei, a);
+    } catch (e) {
+      abbruch((e as Error).message);
+    }
+  };
   if (auto) {
     const seit = Number.parseInt(wert("--seit") ?? "", 10);
     if (!id || !Number.isFinite(seit)) abbruch("sage --auto braucht --id und --seit");
     const text = ansageText(await Bun.stdin.text(), "auto");
     if (!text || schonAngesagt(leseAnsagen(datei), id, seit)) return;
-    schreibeAnsage(datei, { v: 1, zeit: Date.now(), id, repo, text, quelle: "auto" });
+    speichere({ v: 1, zeit: Date.now(), id, repo, text, quelle: "auto" });
     return;
   }
   const worte = rest.filter((a, i) => !SAGE_WERTE.includes(a) && !SAGE_WERTE.includes(rest[i - 1] ?? ""));
   const text = ansageText(worte.join(" "), "sage");
   if (!text) abbruch('sage braucht einen Text: live-plan sage "<2-3 Saetze>"');
-  schreibeAnsage(datei, { v: 1, zeit: Date.now(), id, repo, text, quelle: "sage" });
+  speichere({ v: 1, zeit: Date.now(), id, repo, text, quelle: "sage" });
   console.log(`angesagt: ${repo}: ${text}`);
 }
 

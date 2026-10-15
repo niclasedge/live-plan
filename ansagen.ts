@@ -1,4 +1,4 @@
-// live-plan: Ansagen, kurze gesprochene Zusammenfassungen am Ende eines Agenten-Zugs, ueber alle Sitzungen.
+// live-plan: Ansagen, gesprochene Zusammenfassungen am Ende eines Agenten-Zugs, ueber alle Sitzungen.
 //
 // Geschrieben werden sie nur auf diesem Rechner: von `live-plan sage` (ein Agent mit eigenem Text) und von
 // `live-plan sage --auto`, das die Mod live-plan-sitzung am Ende jedes Zugs der Hauptsitzung mit der letzten
@@ -24,7 +24,7 @@ export interface Ansage {
   repo: string;
   /** Der Sprechtext, ohne Markdown, Links und Code. */
   text: string;
-  /** `sage`: vom Agenten selbst formuliert; `auto`: aus der letzten Antwort gekuerzt. */
+  /** `sage`: vom Agenten selbst formuliert; `auto`: der Sprechtext der letzten Antwort. */
   quelle: Quelle;
 }
 
@@ -33,8 +33,18 @@ export const ANSAGEN_HOECHSTENS = 200;
 /** Erst bei so vielen Zeilen ueber der Grenze schreibt ein Schreiber die Datei gekuerzt neu, nicht bei jeder Ansage. */
 const KUERZEN_PUFFER = 50;
 /** Aus einer groesseren Datei liest der Server nur das Ende. */
-const LESEN_HOECHSTENS = 1024 * 1024;
-const TEXT_HOECHSTENS = 1000;
+export const LESEN_HOECHSTENS = 1024 * 1024;
+/**
+ * Erst so viele Bytes ueber LESEN_HOECHSTENS schreibt ein Schreiber die Datei gekuerzt neu, dann auf drei Viertel von
+ * LESEN_HOECHSTENS; ohne den Abstand schriebe bei langen Ansagen jeder Anhang die ganze Datei neu.
+ */
+const KUERZEN_BYTES_PUFFER = 256 * 1024;
+/**
+ * Laengster Text einer Ansage, bei 14 Zeichen je Sekunde gut neun Minuten Sprechzeit. Laengere kappt das Schreiben
+ * und das Lesen nach dem letzten ganzen Satz, bei einem riesigen Satz an einer Wortgrenze mit … (kappeText);
+ * verworfen wird keiner.
+ */
+export const TEXT_HOECHSTENS = 8000;
 const REPO_HOECHSTENS = 200;
 const ID = /^[A-Za-z0-9._-]+$/;
 
@@ -151,6 +161,16 @@ export function kurzAnsage(text: string, n = 3, zeichen = 300): string {
   return aus;
 }
 
+/**
+ * Ein Sprechtext von hoechstens `zeichen`: ganze Saetze, solange sie passen. Reichen die nicht bis zur Haelfte
+ * (ein riesiger Satz), endet er an einer Wortgrenze mit `…`.
+ */
+export function kappeText(text: string, zeichen: number): string {
+  if (text.length <= zeichen) return text;
+  const ganz = kurzAnsage(text, Infinity, zeichen);
+  return ganz.length > zeichen / 2 ? ganz : kappe(text, zeichen);
+}
+
 function kappe(s: string, zeichen: number): string {
   if (s.length <= zeichen) return s;
   const schnitt = s.slice(0, zeichen - 1);
@@ -164,19 +184,24 @@ export function istTrivial(text: string): boolean {
 }
 
 /**
- * Der Sprechtext einer Ansage, null wenn es keine gibt. `auto` (die letzte Antwort): die ersten drei Saetze bis
- * 300 Zeichen, eine triviale Antwort nicht. `sage` (vom Agenten selbst): bis sechs Saetze und 600 Zeichen.
+ * Der Sprechtext einer Ansage, null wenn es keine gibt. `auto` (die letzte Antwort): der ganze Sprechtext, bis
+ * TEXT_HOECHSTENS gekappt (kappeText: nach dem letzten ganzen Satz, sonst an einer Wortgrenze mit …), eine triviale
+ * Antwort nicht. `sage` (vom Agenten selbst): bis sechs
+ * Saetze und 600 Zeichen.
  */
 export function ansageText(roh: string, quelle: Quelle): string | null {
   const sauber = sprechText(roh);
-  const text = quelle === "auto" ? kurzAnsage(sauber, 3, 300) : kurzAnsage(sauber, 6, 600);
+  const text = quelle === "auto" ? kappeText(sauber, TEXT_HOECHSTENS) : kurzAnsage(sauber, 6, 600);
   if (!text || (quelle === "auto" && istTrivial(text))) return null;
   return text;
 }
 
 // --- Speicher -----------------------------------------------------------------------------------
 
-/** Eine Zeile der Datei als Ansage, null wenn sie nicht passt; der Text wird beim Lesen noch einmal gesaeubert. */
+/**
+ * Eine Zeile der Datei als Ansage, null wenn sie nicht passt; der Text wird beim Lesen noch einmal gesaeubert und
+ * ein zu langer gekappt, nicht verworfen.
+ */
 export function ansageAus(zeile: unknown): Ansage | null {
   if (!zeile || typeof zeile !== "object") return null;
   const a = zeile as Record<string, unknown>;
@@ -184,8 +209,8 @@ export function ansageAus(zeile: unknown): Ansage | null {
   if (a.quelle !== "auto" && a.quelle !== "sage") return null;
   if (typeof a.repo !== "string" || a.repo.length > REPO_HOECHSTENS) return null;
   if (a.id !== null && (typeof a.id !== "string" || !ID.test(a.id))) return null;
-  if (typeof a.text !== "string" || a.text.length > TEXT_HOECHSTENS) return null;
-  const text = sprechText(a.text);
+  if (typeof a.text !== "string") return null;
+  const text = kappeText(sprechText(a.text), TEXT_HOECHSTENS);
   if (!text) return null;
   return { v: 1, zeit: a.zeit, id: a.id, repo: a.repo.replace(/[\u0000-\u001f\u007f]/g, "").trim(), text, quelle: a.quelle };
 }
@@ -240,19 +265,22 @@ export function leseAnsagen(datei: string, n = ANSAGEN_HOECHSTENS): Ansage[] {
   return inhalt === null ? [] : ansagenAus(inhalt, n);
 }
 
-/** So lange wartet ein Schreiber hoechstens auf die Sperre; eine aeltere Sperre gilt als verwaist. */
-const SPERRE_WARTEN_MS = 2000;
+/**
+ * Eine Sperre, aelter als SPERRE_VERWAIST_MS, gilt als verwaist. Ein Schreiber wartet laenger als das (SPERRE_WARTEN_MS),
+ * damit er eine verwaiste Sperre sicher noch nimmt; ohne Sperre bleibt nur der Fehler.
+ */
 const SPERRE_VERWAIST_MS = 10_000;
+const SPERRE_WARTEN_MS = 12_000;
 
 const schlafe = (ms: number) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 
 /**
- * Die Sperre `DATEI.sperre` (O_EXCL), wartend bis SPERRE_WARTEN_MS; eine verwaiste nimmt sie weg. Gibt die
+ * Die Sperre `DATEI.sperre` (O_EXCL), wartend bis `wartenMs`; eine verwaiste nimmt sie weg. Gibt die
  * Freigabe zurueck, null ohne Sperre.
  */
-function sperre(datei: string): (() => void) | null {
+function sperre(datei: string, wartenMs: number): (() => void) | null {
   const pfad = `${datei}.sperre`;
-  const bis = Date.now() + SPERRE_WARTEN_MS;
+  const bis = Date.now() + wartenMs;
   for (;;) {
     try {
       closeSync(openSync(pfad, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o644));
@@ -272,29 +300,40 @@ function sperre(datei: string): (() => void) | null {
 
 /**
  * Haengt eine Ansage an (O_APPEND, eine Zeile in einem write, ohne Symlink). Hat die Datei danach mehr als
- * `n + KUERZEN_PUFFER` Zeilen, ersetzt sie eine Fassung mit den letzten `n` (neue Datei, dann rename).
- * Anhaengen und Kuerzen laufen unter der Sperre, damit kein Kuerzen eine gleichzeitig angehaengte Ansage
- * verliert. Ohne Sperre (sie bleibt laenger besetzt) haengt sie trotzdem an, kuerzt dann aber nicht.
+ * `n + KUERZEN_PUFFER` Zeilen oder mehr als LESEN_HOECHSTENS + KUERZEN_BYTES_PUFFER Bytes, ersetzt sie eine Fassung
+ * mit den letzten `n` aus ihrem lesbaren Ende, vorne weiter gekuerzt auf drei Viertel von LESEN_HOECHSTENS (neue
+ * Datei, dann rename); lange Ansagen halten so weniger als `n`.
+ * Anhaengen und Kuerzen laufen unter der Sperre: ein Anhang neben einem Kuerzen ginge mit dem rename verloren.
+ * Bekommt sie die Sperre nicht binnen `wartenMs`, haengt sie nichts an und wirft einen Fehler.
  */
-export function schreibeAnsage(datei: string, a: Ansage, n = ANSAGEN_HOECHSTENS): void {
+export function schreibeAnsage(datei: string, a: Ansage, n = ANSAGEN_HOECHSTENS, wartenMs = SPERRE_WARTEN_MS): void {
   mkdirSync(path.dirname(datei), { recursive: true });
-  const frei = sperre(datei);
+  const frei = sperre(datei, wartenMs);
+  if (!frei) throw new Error(`Ansage nicht gespeichert: die Sperre ${datei}.sperre ist seit ${wartenMs} ms besetzt`);
   try {
+    let groesse = 0;
     const fd = openSync(datei, constants.O_WRONLY | constants.O_APPEND | constants.O_CREAT | constants.O_NOFOLLOW, 0o644);
     try {
       if (!fstatSync(fd).isFile()) throw new Error(`${datei} ist keine regulaere Datei`);
       writeSync(fd, `${JSON.stringify(a)}\n`);
+      groesse = fstatSync(fd).size;
     } finally {
       closeSync(fd);
     }
-    if (!frei) return;
     const inhalt = liesEnde(datei);
-    if (inhalt === null || inhalt.split("\n").filter((z) => z.trim()).length <= n + KUERZEN_PUFFER) return;
+    if (inhalt === null) return;
+    // Ueber LESEN_HOECHSTENS saehe das Zaehlen nur das Ende, und die Datei wuechse ohne Grenze.
+    const zuGross = groesse > LESEN_HOECHSTENS + KUERZEN_BYTES_PUFFER;
+    if (!zuGross && inhalt.split("\n").filter((z) => z.trim()).length <= n + KUERZEN_PUFFER) return;
+    const zeilen = ansagenAus(inhalt, n).map((x) => `${JSON.stringify(x)}\n`);
+    let bytes = zeilen.reduce((s, z) => s + Buffer.byteLength(z), 0);
+    let ab = 0;
+    while (bytes > (LESEN_HOECHSTENS * 3) / 4 && ab < zeilen.length - 1) bytes -= Buffer.byteLength(zeilen[ab++]);
     const neu = `${datei}.${process.pid}.neu`;
     try {
       const tmp = openSync(neu, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o644);
       try {
-        writeSync(tmp, ansagenAus(inhalt, n).map((x) => `${JSON.stringify(x)}\n`).join(""));
+        writeSync(tmp, zeilen.slice(ab).join(""));
       } finally {
         closeSync(tmp);
       }
@@ -303,7 +342,7 @@ export function schreibeAnsage(datei: string, a: Ansage, n = ANSAGEN_HOECHSTENS)
       rmSync(neu, { force: true });
     }
   } finally {
-    frei?.();
+    frei();
   }
 }
 
