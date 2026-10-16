@@ -1,0 +1,6 @@
+# Lokale CI statt GitHub Actions: `just ci` als Gate vor dem Push.
+no_ci: true
+gates:
+  - name: local-ci
+    after: lint
+    command: "just ci"
